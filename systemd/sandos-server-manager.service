@@ -1,0 +1,19 @@
+[Unit]
+Description=Sand-OS Server Manager (streamed-app orchestrator)
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=control
+Environment=SM_LAN_IP=10.0.0.164
+Environment=SM_PORT=8170
+WorkingDirectory=/home/control/Sand OS Remote/Sand-OS-Server-Manager/server
+# Executable path is quoted because the repo path contains spaces.
+ExecStart="/home/control/Sand OS Remote/Sand-OS-Server-Manager/server/.venv/bin/uvicorn" app.main:app --host 0.0.0.0 --port 8170
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
