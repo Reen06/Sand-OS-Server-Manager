@@ -1,0 +1,15 @@
+{
+  "name": "FreeCAD",
+  "short_name": "FreeCAD",
+  "description": "FreeCAD — streamed CAD/CAM",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    { "src": "freecad.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any" },
+    { "src": "freecad.svg", "type": "image/svg+xml", "sizes": "512x512", "purpose": "maskable" }
+  ]
+}

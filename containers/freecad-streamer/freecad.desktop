@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=FreeCAD
+GenericName=CAD/CAM Modeler
+Comment=Full FreeCAD, streamed
+Exec=/usr/local/bin/freecad-kiosk.sh %F
+Icon=/opt/freecad/usr/share/icons/hicolor/scalable/apps/org.freecad.FreeCAD.svg
+Terminal=false
+Categories=Graphics;Science;Engineering;
+X-KDE-autostart-after=panel
+X-GNOME-Autostart-enabled=true

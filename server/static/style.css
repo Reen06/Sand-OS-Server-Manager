@@ -1,0 +1,55 @@
+:root {
+  --bg: #0f1216; --panel: #171c22; --panel2: #1e252d; --border: #2a323c;
+  --fg: #e8edf2; --fg-muted: #8a96a3; --blue: #3b82f6; --green: #22c55e;
+  --amber: #f59e0b; --red: #ef4444;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+.topbar {
+  display: flex; align-items: center; padding: 14px 22px;
+  border-bottom: 1px solid var(--border); background: var(--panel);
+}
+.brand { font-weight: 700; letter-spacing: .2px; }
+.brand span { color: var(--fg-muted); font-weight: 500; }
+.wrap { max-width: 980px; margin: 0 auto; padding: 28px 22px; }
+.title { margin: 0 0 4px; font-size: 1.6rem; }
+.sub { margin: 0 0 22px; color: var(--fg-muted); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+.loading { color: var(--fg-muted); }
+
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  padding: 18px; display: flex; flex-direction: column; gap: 10px;
+}
+.card__icon {
+  width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center;
+  background: rgba(59,130,246,.15); color: var(--blue); font-size: 22px;
+}
+.card__name { font-weight: 600; font-size: 1.1rem; }
+.card__desc { color: var(--fg-muted); font-size: .9rem; min-height: 2.4em; }
+
+.btn {
+  appearance: none; border: 1px solid var(--border); border-radius: 9px;
+  padding: 9px 12px; font: inherit; font-weight: 600; cursor: pointer;
+  background: var(--panel2); color: var(--fg); transition: filter .12s;
+}
+.btn:hover { filter: brightness(1.15); }
+.btn:disabled { opacity: .6; cursor: default; }
+.btn--primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+.btn--stop { background: transparent; color: var(--red); border-color: rgba(239,68,68,.5); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
+  font-size: .78rem; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+  background: var(--panel2); color: var(--fg-muted);
+}
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.chip--active { color: var(--green); }
+.chip--idle { color: var(--amber); }
+.chip--stopped { color: var(--fg-muted); }
+.chip--starting { color: var(--blue); }
+.chip--starting .dot { animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }

@@ -1,0 +1,11 @@
+# python
+__pycache__/
+*.py[cod]
+server/.venv/
+
+# logs & build artifacts
+*.log
+containers/freecad-streamer/build*.log
+
+# os/editor
+.DS_Store
