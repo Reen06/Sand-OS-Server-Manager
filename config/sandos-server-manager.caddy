@@ -1,0 +1,26 @@
+# Sand-OS Server Manager — Hub SSO route.
+#
+# Serves the apps screen at  https://<hub>/apps  on the SAME host as the Hub
+# dashboard, so the browser sends the `hub_session` cookie to the Server Manager,
+# which validates it against the Hub's /api/auth/me (SM_HUB_URL).
+#
+# These lines go INSIDE the Hub's `https://…` site block (the one ending with
+# `handle { reverse_proxy localhost:8088 }`), placed BEFORE that catch-all —
+# e.g. in /etc/sandhub/Caddyfile or a per-site import. Then reload Caddy.
+#
+#   redir /apps /apps/
+#   handle_path /apps/* {
+#       reverse_proxy 10.0.0.164:8170
+#   }
+#
+# Notes:
+# - handle_path strips the /apps prefix; the app uses relative URLs, so it works
+#   both here and standalone.
+# - This gates the apps SCREEN + launch/stop via Hub SSO. Proxying each FreeCAD
+#   *stream* under the Hub (HTTPS + per-session TURN, installable PWA) is the next
+#   sub-step.
+
+redir /apps /apps/
+handle_path /apps/* {
+	reverse_proxy 10.0.0.164:8170
+}

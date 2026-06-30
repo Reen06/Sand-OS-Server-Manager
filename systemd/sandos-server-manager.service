@@ -9,6 +9,9 @@ Type=simple
 User=control
 Environment=SM_LAN_IP=10.0.0.164
 Environment=SM_PORT=8170
+# Optional overrides (set SM_HUB_URL here to turn on Hub SSO):
+#   /etc/sandos-server-manager.env   e.g.  SM_HUB_URL=https://10.0.0.177
+EnvironmentFile=-/etc/sandos-server-manager.env
 WorkingDirectory=/home/control/Sand OS Remote/Sand-OS-Server-Manager/server
 # Executable path is quoted because the repo path contains spaces.
 ExecStart="/home/control/Sand OS Remote/Sand-OS-Server-Manager/server/.venv/bin/uvicorn" app.main:app --host 0.0.0.0 --port 8170

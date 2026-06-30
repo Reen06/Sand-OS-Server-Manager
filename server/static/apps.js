@@ -6,6 +6,15 @@ let busy = new Set(); // app ids currently starting (don't let refresh stomp the
 
 async function api(method, path) {
   const res = await fetch(path, { method, credentials: "same-origin" });
+  if (res.status === 401) {
+    // Hub session missing/expired → bounce to the dashboard login, return here after.
+    const detail = (await res.json().catch(() => ({}))).detail || {};
+    if (detail.login_url) {
+      const next = encodeURIComponent(window.location.href);
+      window.location.href = detail.login_url + (detail.login_url.includes("?") ? "&" : "?") + "next=" + next;
+    }
+    throw new Error("login required");
+  }
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
   return res.json();
 }
@@ -34,9 +43,9 @@ async function waitReady(id) {
   // Poll until the instance's web server is up, then return its URL. FreeCAD's
   // first boot is ~40-60s, so be patient.
   for (let i = 0; i < 80; i++) {
-    const { status } = await api("GET", `/api/apps/${id}/status`);
+    const { status } = await api("GET", `api/apps/${id}/status`);
     if (status === "idle" || status === "active") {
-      const { apps } = await api("GET", "/api/apps");
+      const { apps } = await api("GET", "api/apps");
       return (apps.find((a) => a.id === id) || {}).url;
     }
     if (status === "stopped") throw new Error("instance stopped before it was ready");
@@ -54,7 +63,7 @@ async function onOpen(app) {
   busy.add(app.id);
   await refresh();
   try {
-    if (app.status === "stopped") await api("POST", `/api/apps/${app.id}/launch`);
+    if (app.status === "stopped") await api("POST", `api/apps/${app.id}/launch`);
     const url = await waitReady(app.id);    // ← only opens once it's actually serving
     busy.delete(app.id);
     if (url) window.open(url, "_blank");
@@ -70,13 +79,13 @@ async function onStop(app) {
   busy.delete(app.id);
   const c = grid.querySelector(`.card[data-id="${app.id}"]`);
   c.querySelector(".act-stop").disabled = true;
-  try { await api("POST", `/api/apps/${app.id}/stop`); } catch (e) { alert(e.message); }
+  try { await api("POST", `api/apps/${app.id}/stop`); } catch (e) { alert(e.message); }
   await refresh();
 }
 
 async function refresh() {
   try {
-    const { apps } = await api("GET", "/api/apps");
+    const { apps } = await api("GET", "api/apps");
     grid.innerHTML = "";
     apps.forEach((a) => grid.appendChild(card(a)));
   } catch (e) {

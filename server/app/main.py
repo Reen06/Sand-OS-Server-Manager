@@ -9,11 +9,11 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import registry
+from . import config, hub_auth, registry
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -25,7 +25,15 @@ def _startup() -> None:
     registry.reconcile_from_docker()
 
 
-def _user(request: Request) -> str:
+def _require_user(request: Request) -> str:
+    """The authenticated user. Hub-SSO mode: the Hub username (else 401 → login).
+    Dev mode (no SM_HUB_URL): an anonymous per-browser cookie."""
+    if hub_auth.enabled():
+        user = hub_auth.verify_session(request.cookies.get(config.HUB_SESSION_COOKIE, ""))
+        if not user:
+            raise HTTPException(401, detail={"error": "login required",
+                                             "login_url": config.HUB_LOGIN_URL})
+        return user
     return request.cookies.get("sm_user") or "me"
 
 
@@ -40,12 +48,12 @@ async def ensure_user_cookie(request: Request, call_next):
 
 @app.get("/api/apps")
 def list_apps(request: Request):
-    return {"apps": registry.list_for_user(_user(request))}
+    return {"apps": registry.list_for_user(_require_user(request))}
 
 
 @app.post("/api/apps/{app_id}/launch")
 def launch(app_id: str, request: Request):
-    user = _user(request)
+    user = _require_user(request)
     try:
         inst = registry.launch(app_id, user)
     except KeyError:
@@ -57,13 +65,13 @@ def launch(app_id: str, request: Request):
 
 @app.post("/api/apps/{app_id}/stop")
 def stop(app_id: str, request: Request):
-    registry.stop(app_id, _user(request))
+    registry.stop(app_id, _require_user(request))
     return {"ok": True, "status": "stopped"}
 
 
 @app.get("/api/apps/{app_id}/status")
 def status(app_id: str, request: Request):
-    return {"status": registry.status(app_id, _user(request))}
+    return {"status": registry.status(app_id, _require_user(request))}
 
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
