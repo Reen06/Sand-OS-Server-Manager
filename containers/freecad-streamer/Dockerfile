@@ -41,6 +41,16 @@ ENV SELKIES_ENABLE_RESIZE=true
 COPY freecad-pwa-manifest.json /opt/gst-web/manifest.json
 RUN cp /opt/freecad/usr/share/icons/hicolor/scalable/apps/org.freecad.FreeCAD.svg /opt/gst-web/freecad.svg
 
+# Make the web client PROXY-FRIENDLY: it builds the signalling WebSocket and the
+# TURN-creds fetch from ABSOLUTE paths (/{appName}/signalling/, /turn), which
+# break when served under a Hub subpath (e.g. /apps/stream/freecad/). Rewrite them
+# to be relative to the current path — works both at root and behind the proxy.
+RUN sed -i \
+      -e 's#"/" + app.appName + "/signalling/"#window.location.pathname + "webrtc/signalling/"#g' \
+      -e 's#fetch("/turn")#fetch("turn")#g' \
+      -e 's#fetch("/publish/" + app.appName)#fetch("publish/" + app.appName)#g' \
+      /opt/gst-web/app.js
+
 # Kiosk launcher: stream FreeCAD ONLY (no KDE panel/desktop). Used by the
 # autostart entry below.
 COPY freecad-kiosk.sh /usr/local/bin/freecad-kiosk.sh
