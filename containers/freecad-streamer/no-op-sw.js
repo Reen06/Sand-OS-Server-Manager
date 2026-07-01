@@ -16,8 +16,8 @@ self.addEventListener("activate", (event) => {
       await Promise.all(keys.map((k) => caches.delete(k)));
     } catch (e) { /* ignore */ }
     try { await self.registration.unregister(); } catch (e) { /* ignore */ }
-    const clients = await self.clients.matchAll({ type: "window" });
-    clients.forEach((c) => { try { c.navigate(c.url); } catch (e) {} });
+    // NO navigate/reload here — that caused a reload loop. Pages just keep
+    // running; with no fetch handler every request goes straight to the network.
   })());
 });
 // Intentionally no "fetch" handler → every request goes straight to the network.
