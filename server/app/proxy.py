@@ -70,8 +70,16 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
     out = {k: v for k, v in r.headers.items()
            if k.lower() not in _HOP and k.lower() not in _STRIP_RESP}
     out["Cache-Control"] = "no-store, no-cache, must-revalidate"
-    return Response(content=r.content, status_code=r.status_code, headers=out,
+    resp = Response(content=r.content, status_code=r.status_code, headers=out,
                     media_type=r.headers.get("content-type"))
+    # ONE-TIME on the entry page: wipe any stale service worker + caches the
+    # browser latched onto (they served an old client that broke the proxy) and
+    # reload. Cookie-gated so it fires exactly once — no loop. A "storage" clear
+    # does not remove cookies, so the marker survives.
+    if path in ("", "index.html") and "sm_swcleared" not in request.cookies:
+        resp.headers["Clear-Site-Data"] = '"cache", "storage", "executionContexts"'
+        resp.set_cookie("sm_swcleared", "1", max_age=31536000, path="/", samesite="lax")
+    return resp
 
 
 async def ws(app_id: str, path: str, client_ws: WebSocket, user: str) -> None:
