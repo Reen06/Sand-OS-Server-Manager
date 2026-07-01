@@ -49,13 +49,16 @@ RUN sed -i \
       -e 's#"/" + app.appName + "/signalling/"#window.location.pathname + "webrtc/signalling/"#g' \
       -e 's#fetch("/turn")#fetch("turn")#g' \
       -e 's#fetch("/publish/" + app.appName)#fetch("publish/" + app.appName)#g' \
-      -e "s#navigator.serviceWorker.register('./sw.js?ts=1723709107');#navigator.serviceWorker.getRegistrations().then(function(rs){rs.forEach(function(r){r.unregister()})});#g" \
       /opt/gst-web/app.js
+# NOTE: the client's own `navigator.serviceWorker.register('./sw.js?ts=…')` is now
+# LEFT INTACT — it registers our passthrough SW below (so FreeCAD is installable).
+# (Previously this was rewritten to a getRegistrations().unregister() loop to kill
+# the old caching SW; that also wiped the dashboard's SW on the same origin.)
 
-# Neuter the PWA service worker: it cached the app shell, so the browser kept
-# serving a STALE client behind the proxy (never connected). Replace it with a
-# self-unregistering no-op that clears old caches/SWs and never intercepts.
-COPY no-op-sw.js /opt/gst-web/sw.js
+# Replace the Selkies caching service worker with a PASSTHROUGH one: no caching
+# (so no stale-client shell) but a real fetch handler → the streamed app is
+# installable as a PWA without breaking the WebRTC stream.
+COPY freecad-sw.js /opt/gst-web/sw.js
 
 # Kiosk launcher: stream FreeCAD ONLY (no KDE panel/desktop). Used by the
 # autostart entry below.
