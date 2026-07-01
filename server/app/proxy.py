@@ -9,6 +9,8 @@ does NOT flow through here — it goes browser↔TURN directly.
 from __future__ import annotations
 import asyncio
 import base64
+import logging
+import os
 
 import httpx
 import websockets
@@ -18,9 +20,21 @@ from starlette.websockets import WebSocketDisconnect
 
 from . import config, docker_backend, registry
 
+log = logging.getLogger("sm.proxy")
+if not log.handlers:
+    _h = logging.FileHandler(os.path.join(os.path.dirname(__file__), "..", "proxy.log"))
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    log.addHandler(_h)
+    log.setLevel(logging.INFO)
+
 _HOP = {"host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
         "te", "trailers", "transfer-encoding", "upgrade", "content-length",
         "content-encoding", "cookie", "authorization"}
+# Never let the browser cache the streamed client — stale copies (with old paths)
+# broke the proxy. Drop conditional-request headers so the instance always sends
+# fresh 200s, strip its caching headers, and force no-store.
+_NO_FORWARD_REQ = {"if-none-match", "if-modified-since", "if-range"}
+_STRIP_RESP = {"etag", "last-modified", "cache-control", "expires", "age"}
 
 
 def _auth() -> str:
@@ -38,9 +52,11 @@ def _instance_port(app_id: str, user: str) -> int | None:
 async def http(app_id: str, path: str, request: Request, user: str) -> Response:
     port = _instance_port(app_id, user)
     if port is None:
+        log.warning("HTTP %s /%s user=%s → no running instance", request.method, path, user)
         return Response("app not running", status_code=502)
     target = f"http://127.0.0.1:{port}/{path}"
-    fwd = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
+    fwd = {k: v for k, v in request.headers.items()
+           if k.lower() not in _HOP and k.lower() not in _NO_FORWARD_REQ}
     fwd["Authorization"] = _auth()
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
@@ -48,8 +64,12 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
                                      params=dict(request.query_params),
                                      headers=fwd, content=await request.body())
     except Exception as e:  # noqa: BLE001
+        log.exception("HTTP %s /%s → upstream error", request.method, path)
         return Response(f"upstream error: {e}", status_code=502)
-    out = {k: v for k, v in r.headers.items() if k.lower() not in _HOP}
+    log.info("HTTP %s /%s user=%s → %s", request.method, path, user, r.status_code)
+    out = {k: v for k, v in r.headers.items()
+           if k.lower() not in _HOP and k.lower() not in _STRIP_RESP}
+    out["Cache-Control"] = "no-store, no-cache, must-revalidate"
     return Response(content=r.content, status_code=r.status_code, headers=out,
                     media_type=r.headers.get("content-type"))
 
@@ -57,12 +77,14 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
 async def ws(app_id: str, path: str, client_ws: WebSocket, user: str) -> None:
     port = _instance_port(app_id, user)
     if port is None:
+        log.warning("WS /%s user=%s → no running instance", path, user)
         await client_ws.close(code=1011)
         return
     qs = client_ws.url.query
     target = f"ws://127.0.0.1:{port}/{path}" + (f"?{qs}" if qs else "")
     subprotocols = client_ws.scope.get("subprotocols") or []
     await client_ws.accept(subprotocol=subprotocols[0] if subprotocols else None)
+    log.info("WS open /%s user=%s → %s", path, user, target)
 
     # `websockets` renamed extra_headers → additional_headers across versions.
     conn_kw = {"subprotocols": subprotocols or None, "max_size": None}
@@ -71,8 +93,10 @@ async def ws(app_id: str, path: str, client_ws: WebSocket, user: str) -> None:
     except TypeError:
         upstream = await websockets.connect(target, extra_headers=[("Authorization", _auth())], **conn_kw)
     except Exception:
+        log.exception("WS /%s → upstream connect failed", path)
         await client_ws.close(code=1011)
         return
+    log.info("WS /%s → upstream connected", path)
 
     async def c2u() -> None:
         try:
