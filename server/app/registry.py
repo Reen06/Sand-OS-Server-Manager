@@ -13,7 +13,7 @@ APPS: dict[str, AppDef] = {
     "freecad": AppDef(
         id="freecad",
         label="FreeCAD",
-        icon="box",
+        icon="cpu",
         color="blue",
         desc="Full FreeCAD 1.1.1, streamed — your own GPU instance.",
         image=config.FREECAD_IMAGE,
