@@ -29,7 +29,7 @@ if not log.handlers:
 
 _HOP = {"host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
         "te", "trailers", "transfer-encoding", "upgrade", "content-length",
-        "content-encoding", "cookie", "authorization"}
+        "content-encoding", "authorization"}
 # Never let the browser cache the streamed client — stale copies (with old paths)
 # broke the proxy. Drop conditional-request headers so the instance always sends
 # fresh 200s, strip its caching headers, and force no-store.
@@ -49,15 +49,54 @@ def _instance_port(app_id: str, user: str) -> int | None:
     return None
 
 
+def _upstream_path(app_id: str, path: str) -> str:
+    """Path to request from the instance, per the app's subpath mode:
+      - forward: prepend the external prefix ({EXTERNAL_BASE}/stream/{app}) that
+        Caddy+the SM route stripped — the app knows its baseURL and strips it
+        (Filebrowser).
+      - root (default for streamed / Nextcloud): serve at container root. Streamed
+        Selkies clients use path-relative URLs; Nextcloud rewrites its own links
+        via OVERWRITEWEBROOT."""
+    app = registry.APPS.get(app_id)
+    if app and not app.streamed and app.proxy_subpath == "forward":
+        return f"{config.EXTERNAL_BASE}/stream/{app_id}/{path}".lstrip("/")
+    return path
+
+
+def _fwd_headers(app, request: Request, user: str) -> dict:
+    """Build upstream request headers: drop hop/conditional headers, inject the
+    Selkies basic-auth for streamed apps only, and set a TRUSTED SSO header
+    (stripping any client-supplied copy) for apps that use header SSO."""
+    fwd = {k: v for k, v in request.headers.items()
+           if k.lower() not in _HOP and k.lower() not in _NO_FORWARD_REQ}
+    streamed = app.streamed if app else True
+    if streamed:
+        fwd["Authorization"] = _auth()          # instance basic-auth (Selkies only)
+        fwd.pop("cookie", None)                  # streamed apps use injected auth,
+                                                 # not cookies — don't leak the Hub's
+    # Web apps (Nextcloud) keep the browser Cookie header — their session lives in
+    # it; stripping it caused an auth→login redirect loop.
+    if app and app.sso_header:
+        fwd.pop(app.sso_header.lower(), None)    # never trust a client-sent copy
+        fwd[app.sso_header] = user               # inject the authenticated identity
+    fwd["X-Forwarded-Proto"] = "https"           # we terminate TLS at the Hub
+    host = request.headers.get("host", "")
+    fwd["X-Forwarded-Host"] = host
+    # Web apps generate absolute URLs from the Host (Nextcloud redirects); forward
+    # the real browser Host (Caddy passes it through via header_up) so those URLs
+    # land back on the same origin. Streamed apps are localhost-only — Host is moot.
+    if app and not app.streamed and host:
+        fwd["Host"] = host
+    return fwd
+
+
 async def http(app_id: str, path: str, request: Request, user: str) -> Response:
     port = _instance_port(app_id, user)
     if port is None:
         log.warning("HTTP %s /%s user=%s → no running instance", request.method, path, user)
         return Response("app not running", status_code=502)
-    target = f"http://127.0.0.1:{port}/{path}"
-    fwd = {k: v for k, v in request.headers.items()
-           if k.lower() not in _HOP and k.lower() not in _NO_FORWARD_REQ}
-    fwd["Authorization"] = _auth()
+    target = f"http://127.0.0.1:{port}/{_upstream_path(app_id, path)}"
+    fwd = _fwd_headers(registry.APPS.get(app_id), request, user)
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
             r = await client.request(request.method, target,
@@ -67,16 +106,26 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
         log.exception("HTTP %s /%s → upstream error", request.method, path)
         return Response(f"upstream error: {e}", status_code=502)
     log.info("HTTP %s /%s user=%s → %s", request.method, path, user, r.status_code)
+    app = registry.APPS.get(app_id)
+    streamed = app.streamed if app else True
     out = {k: v for k, v in r.headers.items()
-           if k.lower() not in _HOP and k.lower() not in _STRIP_RESP}
-    out["Cache-Control"] = "no-store, no-cache, must-revalidate"
+           if k.lower() not in _HOP and k.lower() != "set-cookie"
+           and (not streamed or k.lower() not in _STRIP_RESP)}
+    # Streamed (Selkies) clients must never be cached — a stale copy with old
+    # paths broke the proxy. Web apps keep their own caching headers untouched.
+    if streamed:
+        out["Cache-Control"] = "no-store, no-cache, must-revalidate"
     resp = Response(content=r.content, status_code=r.status_code, headers=out,
                     media_type=r.headers.get("content-type"))
-    # ONE-TIME on the entry page: wipe any stale service worker + caches the
-    # browser latched onto (they served an old client that broke the proxy) and
-    # reload. Cookie-gated so it fires exactly once — no loop. A "storage" clear
-    # does not remove cookies, so the marker survives.
-    if path in ("", "index.html") and "sm_swcleared" not in request.cookies:
+    # Forward EACH Set-Cookie separately — Nextcloud sets several session cookies
+    # and a plain dict keeps only the last, which breaks the session (redirect loop).
+    for cookie in r.headers.get_list("set-cookie"):
+        resp.raw_headers.append((b"set-cookie", cookie.encode("latin-1")))
+    # ONE-TIME on a streamed app's entry page: wipe any stale service worker +
+    # caches the browser latched onto (they served an old client that broke the
+    # proxy). Cookie-gated so it fires exactly once — no loop. Skipped for web
+    # apps, where Clear-Site-Data would wipe their legitimate storage/logins.
+    if streamed and path in ("", "index.html") and "sm_swcleared" not in request.cookies:
         resp.headers["Clear-Site-Data"] = '"cache", "storage", "executionContexts"'
         resp.set_cookie("sm_swcleared", "1", max_age=31536000, path="/", samesite="lax")
     return resp
@@ -89,17 +138,30 @@ async def ws(app_id: str, path: str, client_ws: WebSocket, user: str) -> None:
         await client_ws.close(code=1011)
         return
     qs = client_ws.url.query
-    target = f"ws://127.0.0.1:{port}/{path}" + (f"?{qs}" if qs else "")
+    target = f"ws://127.0.0.1:{port}/{_upstream_path(app_id, path)}" + (f"?{qs}" if qs else "")
     subprotocols = client_ws.scope.get("subprotocols") or []
     await client_ws.accept(subprotocol=subprotocols[0] if subprotocols else None)
     log.info("WS open /%s user=%s → %s", path, user, target)
 
+    # Upstream headers: Selkies basic-auth for streamed apps; trusted SSO header
+    # for header-SSO apps (same rules as HTTP).
+    app = registry.APPS.get(app_id)
+    streamed = app.streamed if app else True
+    hdrs = []
+    if streamed:
+        hdrs.append(("Authorization", _auth()))
+    else:
+        cookie = client_ws.headers.get("cookie")   # web-app session lives here
+        if cookie:
+            hdrs.append(("Cookie", cookie))
+    if app and app.sso_header:
+        hdrs.append((app.sso_header, user))
     # `websockets` renamed extra_headers → additional_headers across versions.
     conn_kw = {"subprotocols": subprotocols or None, "max_size": None}
     try:
-        upstream = await websockets.connect(target, additional_headers=[("Authorization", _auth())], **conn_kw)
+        upstream = await websockets.connect(target, additional_headers=hdrs, **conn_kw)
     except TypeError:
-        upstream = await websockets.connect(target, extra_headers=[("Authorization", _auth())], **conn_kw)
+        upstream = await websockets.connect(target, extra_headers=hdrs, **conn_kw)
     except Exception:
         log.exception("WS /%s → upstream connect failed", path)
         await client_ws.close(code=1011)

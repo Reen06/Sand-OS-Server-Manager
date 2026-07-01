@@ -90,8 +90,12 @@ async def stream_ws(app_id: str, path: str, websocket: WebSocket):
     await proxy.ws(app_id, path, websocket, user)
 
 
+# Includes WebDAV/CalDAV verbs — Nextcloud's Files/Photos/sync/calendar use them
+# (PROPFIND/REPORT/etc.); without these the proxy 405s and Photos "can't fetch files".
 @app.api_route("/stream/{app_id}/{path:path}",
-               methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+               methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
+                        "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE",
+                        "LOCK", "UNLOCK", "REPORT", "SEARCH", "MKCALENDAR"])
 async def stream_http(app_id: str, path: str, request: Request):
     user = _require_user(request)
     return await proxy.http(app_id, path, request, user)

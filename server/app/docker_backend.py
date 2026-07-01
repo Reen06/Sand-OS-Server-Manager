@@ -2,20 +2,33 @@
 docker CLI (no extra SDK dependency). Mirrors the proven run-lan.sh parameters,
 but with per-instance ports so concurrent instances don't collide."""
 from __future__ import annotations
+import json
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from .models import AppDef, Instance
 from . import config
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Don't follow redirects during readiness — a 3xx means the server is up.
+    (Nextcloud 302-redirects to https; following it into TLS on the plain port
+    would spuriously read as 'not ready'.)"""
+    def redirect_request(self, *a, **k):
+        return None
+
+
+_ready_opener = urllib.request.build_opener(_NoRedirect)
+
+
 def web_ready(port: int) -> bool:
-    """True once the instance's web server answers (any HTTP status, incl. 401)."""
+    """True once the instance's web server answers ANY HTTP status (200/302/401…)."""
     try:
-        urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2)
+        _ready_opener.open(f"http://127.0.0.1:{port}/", timeout=2)
         return True
     except urllib.error.HTTPError:
-        return True  # e.g. 401 auth challenge — the server is up
+        return True  # 3xx redirect, 401 auth challenge, etc. — the server is up
     except Exception:
         return False
 
@@ -44,14 +57,29 @@ def list_sm_containers() -> list[str]:
 
 
 def published_web_port(name: str) -> int | None:
-    """The host port mapped to the container's web port (8080), or None."""
-    r = _docker(["inspect", "-f",
-                 '{{with index .NetworkSettings.Ports "8080/tcp"}}{{(index . 0).HostPort}}{{end}}',
-                 name], timeout=10)
+    """The SM-assigned localhost web port for a container, independent of its
+    internal port (8080 for Selkies/Filebrowser, 80 for Nextcloud). Finds the
+    127.0.0.1 binding whose host port is in the SM web range. Returns None for
+    sidecars (DB/cache) — they publish nothing — so reconcile skips them."""
+    r = _docker(["inspect", "-f", "{{json .NetworkSettings.Ports}}", name], timeout=10)
     try:
-        return int(r.stdout.strip())
-    except (ValueError, AttributeError):
+        ports = json.loads(r.stdout or "null")
+    except (ValueError, TypeError):
         return None
+    if not ports:
+        return None
+    lo = config.WEB_PORT_BASE
+    hi = config.WEB_PORT_BASE + config.SLOT_COUNT
+    for binds in ports.values():
+        for b in (binds or []):
+            if b.get("HostIp") in ("127.0.0.1", "::1"):
+                try:
+                    hp = int(b["HostPort"])
+                except (ValueError, KeyError, TypeError):
+                    continue
+                if lo <= hp < hi:
+                    return hp
+    return None
 
 
 def active_connections(web_port: int) -> int:
@@ -66,32 +94,121 @@ def active_connections(web_port: int) -> int:
         return 0
 
 
+def network_name(name: str) -> str:
+    """Private network for an app's stack (primary + sidecars)."""
+    return f"{name}-net"
+
+
+def _ensure_network(net: str) -> None:
+    if _docker(["network", "inspect", net], timeout=10).returncode != 0:
+        _docker(["network", "create", net], timeout=15)
+
+
+def _mount_args(app_id: str, user: str, mounts) -> list[str]:
+    from . import registry
+    out: list[str] = []
+    for m in mounts:
+        vol = registry.resolve_volume(app_id, user, m)
+        out += ["-v", f"{vol}:{m.path}" + (":ro" if m.ro else "")]
+    return out
+
+
+def _spawn_service(inst: Instance, app: AppDef, svc, net: str) -> subprocess.CompletedProcess:
+    """Start one sidecar on the app's network — internal only, no host ports."""
+    name = f"{inst.name}-{svc.name}"
+    _docker(["rm", "-f", name], timeout=30)  # clear any stale copy
+    args = ["run", "--name", name, "-d", "--rm", "-e", "TZ=UTC",
+            "--network", net, "--network-alias", svc.name]
+    for k, v in svc.env.items():
+        args += ["-e", f"{k}={v}"]
+    args += _mount_args(app.id, inst.user, svc.mounts)
+    args.append(svc.image)
+    args += svc.cmd
+    return _docker(args, timeout=90)
+
+
+def _wait_service(inst: Instance, svc, timeout: int = 90) -> bool:
+    """Poll a service's readiness probe (docker exec) until it passes."""
+    if not svc.ready_cmd:
+        return True
+    name = f"{inst.name}-{svc.name}"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _docker(["exec", name, *svc.ready_cmd], timeout=15).returncode == 0:
+            return True
+        time.sleep(2)
+    return False
+
+
+def teardown(name: str, app: AppDef) -> None:
+    """Remove the primary, all sidecars, and the private network (if any)."""
+    _docker(["rm", "-f", name], timeout=30)
+    for svc in app.services:
+        _docker(["rm", "-f", f"{name}-{svc.name}"], timeout=30)
+    if app.services:
+        _docker(["network", "rm", network_name(name)], timeout=15)
+
+
 def spawn(inst: Instance, app: AppDef) -> subprocess.CompletedProcess:
-    """Start a streamed instance. Returns the docker run CompletedProcess."""
-    args = ["run", "--name", inst.name, "-d", "--rm"]
+    """Start an instance from its App Definition. Streamed apps (Selkies GPU
+    desktop) get TURN/relay + encoder env; web apps just get their one localhost
+    port. Apps with sidecars (DB/cache) get a private network + those services
+    started and waited-on first. The primary binds web to 127.0.0.1 so the ONLY
+    way in is the session-gated SM proxy. Returns the primary's run process."""
+    # deferred import avoids a circular import (registry → docker_backend)
+    from . import registry
+
+    net = None
+    if app.services:
+        net = network_name(inst.name)
+        _ensure_network(net)
+        for svc in app.services:
+            res = _spawn_service(inst, app, svc, net)
+            if res.returncode != 0:
+                return res  # surface the sidecar failure
+        for svc in app.services:
+            if not _wait_service(inst, svc):
+                return subprocess.CompletedProcess(
+                    args=[], returncode=1, stdout="",
+                    stderr=f"service '{svc.name}' not ready in time")
+
+    args = ["run", "--name", inst.name, "-d", "--rm", "-e", "TZ=UTC"]
+    if net:
+        args += ["--network", net]
     if app.gpu:
         args += ["--device", "nvidia.com/gpu=all", "-e", "NVIDIA_DRIVER_CAPABILITIES=all"]
-    args += [
-        # Web/signalling on localhost only — reachable solely via the SM proxy
-        # (session-gated). TURN stays on the LAN below so WebRTC media can flow.
-        "-p", f"127.0.0.1:{inst.web_port}:8080",
-        "-p", f"{inst.turn_port}:{inst.turn_port}/tcp",
-        "-p", f"{inst.turn_port}:{inst.turn_port}/udp",
-        "-p", f"{inst.relay_min}-{inst.relay_max}:{inst.relay_min}-{inst.relay_max}/udp",
-        "--tmpfs", "/dev/shm:rw",
-        "-e", "TZ=UTC",
-        "-e", "DISPLAY_SIZEW=1920", "-e", "DISPLAY_SIZEH=1080", "-e", "DISPLAY_REFRESH=60",
-        "-e", f"SELKIES_ENABLE_RESIZE={'true' if app.resize else 'false'}",
-        "-e", f"SELKIES_ENCODER={app.encoder}",
-        "-e", "SELKIES_VIDEO_BITRATE=16000", "-e", "SELKIES_FRAMERATE=60",
-        # internal TURN, pinned to this host's LAN IP + this instance's ports
-        "-e", f"SELKIES_TURN_HOST={config.LAN_IP}", "-e", f"TURN_EXTERNAL_IP={config.LAN_IP}",
-        "-e", f"SELKIES_TURN_PORT={inst.turn_port}", "-e", "SELKIES_TURN_PROTOCOL=tcp",
-        "-e", f"TURN_MIN_PORT={inst.relay_min}", "-e", f"TURN_MAX_PORT={inst.relay_max}",
-        "-e", f"SELKIES_BASIC_AUTH_USER={config.INSTANCE_USER}",
-        "-e", f"PASSWD={config.INSTANCE_PASSWD}",
-        "-e", f"SELKIES_BASIC_AUTH_PASSWORD={config.INSTANCE_PASSWD}",
-        "-v", f"{inst.volume}:/mnt/freecad-projects",
-        app.image,
-    ]
-    return _docker(args, timeout=90)
+
+    # Web/UI port — localhost only (reachable solely via the SM proxy).
+    args += ["-p", f"127.0.0.1:{inst.web_port}:{app.internal_port}"]
+
+    if app.streamed:
+        # WebRTC media path: TURN + a small UDP relay range on the LAN so the
+        # browser can reach it directly (it bypasses the proxy).
+        args += [
+            "-p", f"{inst.turn_port}:{inst.turn_port}/tcp",
+            "-p", f"{inst.turn_port}:{inst.turn_port}/udp",
+            "-p", f"{inst.relay_min}-{inst.relay_max}:{inst.relay_min}-{inst.relay_max}/udp",
+            "--tmpfs", "/dev/shm:rw",
+            "-e", "DISPLAY_SIZEW=1920", "-e", "DISPLAY_SIZEH=1080", "-e", "DISPLAY_REFRESH=60",
+            "-e", f"SELKIES_ENABLE_RESIZE={'true' if app.resize else 'false'}",
+            "-e", f"SELKIES_ENCODER={app.encoder}",
+            "-e", "SELKIES_VIDEO_BITRATE=16000", "-e", "SELKIES_FRAMERATE=60",
+            # internal TURN, pinned to this host's LAN IP + this instance's ports
+            "-e", f"SELKIES_TURN_HOST={config.LAN_IP}", "-e", f"TURN_EXTERNAL_IP={config.LAN_IP}",
+            "-e", f"SELKIES_TURN_PORT={inst.turn_port}", "-e", "SELKIES_TURN_PROTOCOL=tcp",
+            "-e", f"TURN_MIN_PORT={inst.relay_min}", "-e", f"TURN_MAX_PORT={inst.relay_max}",
+            "-e", f"SELKIES_BASIC_AUTH_USER={config.INSTANCE_USER}",
+            "-e", f"PASSWD={config.INSTANCE_PASSWD}",
+            "-e", f"SELKIES_BASIC_AUTH_PASSWORD={config.INSTANCE_PASSWD}",
+        ]
+
+    # Data volumes — the NAS layer. Per-user volumes are private; shared volumes
+    # are one library many apps/users mount (optionally read-only).
+    args += _mount_args(app.id, inst.user, app.mounts)
+
+    # App-specific extra env (declared on the App Definition).
+    for k, v in app.env.items():
+        args += ["-e", f"{k}={v}"]
+
+    args.append(app.image)
+    return _docker(args, timeout=120)
