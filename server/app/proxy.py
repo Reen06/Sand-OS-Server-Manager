@@ -129,9 +129,17 @@ async def ws(app_id: str, path: str, client_ws: WebSocket, user: str) -> None:
         except Exception:  # noqa: BLE001
             pass
 
+    # As soon as EITHER side ends (usually the client closing the viewer), tear
+    # down the other + the upstream — otherwise the instance keeps the old
+    # session and reconnecting with the same peer id hangs.
+    c_task = asyncio.create_task(c2u())
+    u_task = asyncio.create_task(u2c())
     try:
-        await asyncio.gather(c2u(), u2c())
+        _, pending = await asyncio.wait({c_task, u_task}, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
     finally:
+        log.info("WS /%s closing (freeing instance session)", path)
         await upstream.close()
         try:
             await client_ws.close()
