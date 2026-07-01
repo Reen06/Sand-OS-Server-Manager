@@ -9,11 +9,11 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, hub_auth, registry
+from . import config, hub_auth, proxy, registry
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -72,6 +72,29 @@ def stop(app_id: str, request: Request):
 @app.get("/api/apps/{app_id}/status")
 def status(app_id: str, request: Request):
     return {"status": registry.status(app_id, _require_user(request))}
+
+
+# ── Session-gated reverse proxy to the user's instance (the secure viewer) ─────
+def _ws_user(ws: WebSocket) -> str | None:
+    if hub_auth.enabled():
+        return hub_auth.verify_session(ws.cookies.get(config.HUB_SESSION_COOKIE, ""))
+    return ws.cookies.get("sm_user") or "me"
+
+
+@app.websocket("/stream/{app_id}/{path:path}")
+async def stream_ws(app_id: str, path: str, websocket: WebSocket):
+    user = _ws_user(websocket)
+    if not user:
+        await websocket.close(code=1008)  # policy violation (unauthenticated)
+        return
+    await proxy.ws(app_id, path, websocket, user)
+
+
+@app.api_route("/stream/{app_id}/{path:path}",
+               methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+async def stream_http(app_id: str, path: str, request: Request):
+    user = _require_user(request)
+    return await proxy.http(app_id, path, request, user)
 
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")

@@ -72,7 +72,9 @@ def spawn(inst: Instance, app: AppDef) -> subprocess.CompletedProcess:
     if app.gpu:
         args += ["--device", "nvidia.com/gpu=all", "-e", "NVIDIA_DRIVER_CAPABILITIES=all"]
     args += [
-        "-p", f"{inst.web_port}:8080",
+        # Web/signalling on localhost only — reachable solely via the SM proxy
+        # (session-gated). TURN stays on the LAN below so WebRTC media can flow.
+        "-p", f"127.0.0.1:{inst.web_port}:8080",
         "-p", f"{inst.turn_port}:{inst.turn_port}/tcp",
         "-p", f"{inst.turn_port}:{inst.turn_port}/udp",
         "-p", f"{inst.relay_min}-{inst.relay_max}:{inst.relay_min}-{inst.relay_max}/udp",

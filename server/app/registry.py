@@ -69,6 +69,10 @@ def _instance_for(app_id: str, user: str) -> Instance:
     return inst
 
 
+def get_instance(app_id: str, user: str) -> Instance | None:
+    return _instances.get((app_id, user))
+
+
 def url_for(inst: Instance) -> str:
     return f"http://{config.LAN_IP}:{inst.web_port}"
 
