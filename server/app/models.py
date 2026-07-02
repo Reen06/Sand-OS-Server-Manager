@@ -41,6 +41,10 @@ class Mount:
     path: str
     scope: str = "per-user"      # per-user | shared
     ro: bool = False
+    # local  = a Docker volume on the node (fast, node-local, not shared).
+    # nfs    = the fleet NAS over NFSv4 — the SAME bytes on every node, no
+    #          duplication; per-user → users/{user}, shared → shared/{name}.
+    storage: str = "local"
 
 
 @dataclass

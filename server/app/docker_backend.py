@@ -104,11 +104,49 @@ def _ensure_network(net: str) -> None:
         _docker(["network", "create", net], timeout=15)
 
 
+def _safe(s: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-") or "x"
+
+
+def _nfs_target(user: str, m) -> tuple[str, str]:
+    """(export subpath, docker volume name) for an NFS mount. per-user → the
+    user's NAS home (same files across ALL their apps); shared → shared/{name};
+    root → the whole export (Nextcloud mounts this + scopes per user itself)."""
+    if m.scope == "root":
+        return "", "sm-nfs-root"
+    if m.scope == "shared":
+        return f"{config.NAS_SHARED_SUBPATH}/{_safe(m.name)}", f"sm-nfs-shared-{_safe(m.name)}"
+    return f"{config.NAS_USERS_SUBPATH}/{_safe(user)}", f"sm-nfs-users-{_safe(user)}"
+
+
+def _nfs_volume_create(vol: str, device: str) -> None:
+    if _docker(["volume", "inspect", vol], timeout=10).returncode != 0:
+        _docker(["volume", "create", "--driver", "local", "--opt", "type=nfs",
+                 "--opt", f"o=addr={config.NAS_HOST},rw,nfsvers=4",
+                 "--opt", f"device={device}", vol], timeout=15)
+
+
+def _ensure_nfs(user: str, m) -> str:
+    """Ensure the NAS dir exists + an NFS-backed docker volume for it; return the
+    volume name. The dir is created via a throwaway mount of the NFS root, so this
+    works from ANY node (the app node need not be the NAS)."""
+    subpath, vol = _nfs_target(user, m)
+    _nfs_volume_create("sm-nfs-root", ":/")                 # NFSv4 pseudo-root
+    _docker(["run", "--rm", "-v", "sm-nfs-root:/r", "alpine",
+             "mkdir", "-p", f"/r/{subpath}"], timeout=45)   # create the dir on the NAS
+    _nfs_volume_create(vol, f":/{subpath}")
+    return vol
+
+
 def _mount_args(app_id: str, user: str, mounts) -> list[str]:
     from . import registry
     out: list[str] = []
     for m in mounts:
-        vol = registry.resolve_volume(app_id, user, m)
+        if getattr(m, "storage", "local") == "nfs" and config.NAS_ENABLED:
+            vol = _ensure_nfs(user, m)                      # fleet NAS over NFSv4
+        else:
+            vol = registry.resolve_volume(app_id, user, m)  # node-local docker volume
         out += ["-v", f"{vol}:{m.path}" + (":ro" if m.ro else "")]
     return out
 

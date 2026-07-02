@@ -31,4 +31,24 @@ occ saml:config:get 1 >/dev/null 2>&1 || occ saml:config:create >/dev/null 2>&1
 occ saml:config:set 1 --general-uid_mapping=SM_SSO_USER
 
 echo "[sm] user_saml environment-variable SSO ensured (uid=SM_SSO_USER)"
+
+# ── Fleet NAS as External Storage ─────────────────────────────────────────────
+# Expose each user's NAS home (/nas/users/$user) as "My Files" and the shared
+# folders (/nas/shared) as "Shared", both with per-access change detection so
+# files that apps (FreeCAD…) write directly over NFS show up in Nextcloud.
+# Idempotent: only create a mount if that mount point doesn't already exist.
+occ app:enable files_external
+_have_mount() { occ files_external:list 2>/dev/null | grep -q " $1 "; }
+
+if ! _have_mount "/My Files"; then
+  ID=$(occ files_external:create "My Files" local null::null -c datadir='/nas/users/$user' 2>/dev/null | grep -oE '[0-9]+' | tail -1)
+  [ -n "$ID" ] && occ files_external:option "$ID" filesystem_check_changes 1
+  echo "[sm] external storage 'My Files' -> /nas/users/\$user (id $ID)"
+fi
+if ! _have_mount "/Shared"; then
+  SID=$(occ files_external:create "Shared" local null::null -c datadir=/nas/shared 2>/dev/null | grep -oE '[0-9]+' | tail -1)
+  [ -n "$SID" ] && occ files_external:option "$SID" filesystem_check_changes 1
+  echo "[sm] external storage 'Shared' -> /nas/shared (id $SID)"
+fi
+
 exit 0

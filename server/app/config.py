@@ -39,6 +39,18 @@ LAN_IP = os.environ.get("SM_LAN_IP") or _detect_lan_ip()
 _gpu_env = os.environ.get("SM_GPU")
 HAS_GPU = (_gpu_env.lower() in ("1", "true", "yes")) if _gpu_env else _detect_gpu()
 
+# ── Fleet NAS (network storage) ────────────────────────────────────────────────
+# The NAS node's reachable address — the NFSv4 server that holds every user's
+# files. All fleet nodes point here so an app mounts the SAME user files no
+# matter which node it runs on (no duplication). Defaults to THIS node (single-
+# box / self-NAS); on other app nodes set SM_NAS_HOST to the NAS's IP (or its
+# WireGuard IP for an off-LAN NAS — NFSv4 is single-port and tunnels cleanly).
+NAS_HOST = os.environ.get("SM_NAS_HOST", LAN_IP)
+NAS_ENABLED = os.environ.get("SM_NAS_ENABLED", "true").lower() in ("1", "true", "yes")
+# Sub-paths under the NFS export root (server exports .../sandos-nas as the v4 root).
+NAS_USERS_SUBPATH = os.environ.get("SM_NAS_USERS_SUBPATH", "users")     # users/{username}
+NAS_SHARED_SUBPATH = os.environ.get("SM_NAS_SHARED_SUBPATH", "shared")  # shared/{name}
+
 # Human-friendly node name the Hub shows in the fleet list (defaults to hostname).
 NODE_NAME = os.environ.get("SM_NODE_NAME") or socket.gethostname()
 

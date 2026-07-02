@@ -23,9 +23,14 @@ APPS: dict[str, AppDef] = {
         gpu=True,
         encoder="nvh264enc",
         keepalive_seconds=600,
-        # Private project storage. 'projects' resolves to sm-freecad-{user}-projects
-        # (unchanged from before, so existing data is preserved).
-        mounts=[Mount(name="projects", path="/mnt/freecad-projects", scope="per-user")],
+        # The user's NAS home over NFS — the SAME files they see in Nextcloud,
+        # network-mounted here (no duplication) so saves persist on the NAS even
+        # when FreeCAD runs on a different box. Also bound at /mnt/freecad-projects
+        # for the legacy path.
+        mounts=[
+            Mount(name="home", path="/home/ubuntu/NAS", scope="per-user", storage="nfs"),
+            Mount(name="home", path="/mnt/freecad-projects", scope="per-user", storage="nfs"),
+        ],
     ),
     "filebrowser": AppDef(
         id="filebrowser",
@@ -41,9 +46,11 @@ APPS: dict[str, AppDef] = {
         # The NAS made visible: a private home (per-user) + a library every app
         # and user shares. 'media' resolves to sm-shared-media (also mounted by a
         # future Jellyfin) — proving shared-across-apps data.
+        # Same NAS home as FreeCAD/Nextcloud (users/{user}) + the shared library,
+        # over NFS — one set of files across every app, no duplication.
         mounts=[
-            Mount(name="home", path="/srv/home", scope="per-user"),
-            Mount(name="media", path="/srv/media", scope="shared"),
+            Mount(name="home", path="/srv/home", scope="per-user", storage="nfs"),
+            Mount(name="media", path="/srv/media", scope="shared", storage="nfs"),
         ],
         # The wrapper image's entrypoint provisions noauth (the Hub session is the
         # real gate) and binds 0.0.0.0:8080 serving /srv. We only inject the
@@ -66,8 +73,14 @@ APPS: dict[str, AppDef] = {
         # header (user_saml environment-variable backend) → no second login.
         proxy_subpath="root",
         sso_header="Remote-User",
-        # One shared data volume holds the whole install (code+config+user data).
-        mounts=[Mount(name="nextcloud-data", path="/var/www/html", scope="shared")],
+        # One shared data volume holds the whole install (code+config+user data);
+        # the fleet NAS is mounted at /nas so Nextcloud can expose each user's home
+        # (users/$user) + shared folders as External Storage — the SAME files apps
+        # read/write over NFS.
+        mounts=[
+            Mount(name="nextcloud-data", path="/var/www/html", scope="shared"),
+            Mount(name="nas", path="/nas", scope="root", storage="nfs"),
+        ],
         env={
             "MYSQL_HOST": "db",
             "MYSQL_DATABASE": config.NC_DB_NAME,
