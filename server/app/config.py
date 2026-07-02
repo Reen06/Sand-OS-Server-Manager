@@ -1,10 +1,49 @@
 """Server Manager configuration (env-overridable)."""
 import os
+import shutil
+import socket
+import subprocess
+
+
+def _detect_lan_ip() -> str:
+    """This host's primary LAN IP (the egress interface), so a fleet of SM nodes
+    each report their OWN address without hardcoding. No packets are sent."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("10.255.255.255", 1))
+        return s.getsockname()[0]
+    except Exception:  # noqa: BLE001
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+def _detect_gpu() -> bool:
+    """Whether this node can run GPU/streamed apps (NVIDIA present)."""
+    if shutil.which("nvidia-smi"):
+        try:
+            return subprocess.run(["nvidia-smi", "-L"], capture_output=True,
+                                  timeout=5).returncode == 0
+        except Exception:  # noqa: BLE001
+            return False
+    return os.path.exists("/proc/driver/nvidia")
+
 
 # This host's LAN IP — used to point each instance's internal TURN at a reachable
-# address so other LAN devices can connect. (Behind the Hub TLS proxy later this
-# becomes the Hub hostname.)
-LAN_IP = os.environ.get("SM_LAN_IP", "10.0.0.164")
+# address so other LAN devices can connect. Auto-detected per node (fleet-ready);
+# override with SM_LAN_IP.
+LAN_IP = os.environ.get("SM_LAN_IP") or _detect_lan_ip()
+
+# Whether this node advertises GPU capability (streamed apps like FreeCAD). Auto-
+# detected; override with SM_GPU=true/false.
+_gpu_env = os.environ.get("SM_GPU")
+HAS_GPU = (_gpu_env.lower() in ("1", "true", "yes")) if _gpu_env else _detect_gpu()
+
+# Human-friendly node name the Hub shows in the fleet list (defaults to hostname).
+NODE_NAME = os.environ.get("SM_NODE_NAME") or socket.gethostname()
+
+# Server Manager version (bumped as the fleet protocol evolves).
+SM_VERSION = "0.2.0"
 
 # Where the Server Manager UI/API itself listens.
 SM_HOST = os.environ.get("SM_HOST", "0.0.0.0")

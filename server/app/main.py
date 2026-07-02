@@ -46,6 +46,28 @@ async def ensure_user_cookie(request: Request, call_next):
     return response
 
 
+@app.get("/api/sm/info")
+def sm_info():
+    """Node identity + capabilities (UNAUTHENTICATED — no user data). The Hub
+    probes this during LAN discovery / add-by-IP to find Server Manager nodes and
+    learn what each can run (GPU nodes for streamed apps, the app catalogue, free
+    slots), so it can offer per-app placement."""
+    return {
+        "sm": True,
+        "version": config.SM_VERSION,
+        "node_name": config.NODE_NAME,
+        "lan_ip": config.LAN_IP,
+        "port": config.SM_PORT,
+        "gpu": config.HAS_GPU,
+        "slots_total": config.SLOT_COUNT,
+        "apps": [
+            {"id": a.id, "label": a.label, "kind": a.kind, "mode": a.mode,
+             "gpu": a.gpu, "icon": a.icon, "color": a.color, "desc": a.desc}
+            for a in registry.APPS.values()
+        ],
+    }
+
+
 @app.get("/api/apps")
 def list_apps(request: Request):
     return {"apps": registry.list_for_user(_require_user(request))}
