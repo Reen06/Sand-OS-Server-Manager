@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, hub_auth, proxy, registry
+from . import config, hub_auth, metrics, proxy, registry
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -80,6 +80,7 @@ def sm_info():
         "port": config.SM_PORT,
         "gpu": config.HAS_GPU,
         "slots_total": config.SLOT_COUNT,
+        "metrics": metrics.collect(),
         "apps": [
             {"id": a.id, "label": a.label, "kind": a.kind, "mode": a.mode,
              "gpu": a.gpu, "icon": a.icon, "color": a.color, "desc": a.desc}
