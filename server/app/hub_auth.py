@@ -22,8 +22,12 @@ def enabled() -> bool:
     return bool(config.HUB_URL)
 
 
-def verify_session(token: str) -> str | None:
-    """Return the Hub username for a valid hub_session token, else None."""
+def verify_identity(token: str) -> dict | None:
+    """Return the Hub identity {username, role, grants} for a valid session, else None.
+
+    `role` is admin | viewer | scoped; `grants` is the scoped account's resolved
+    permission keys (e.g. "app.freecad"). Both come straight from the Hub's
+    /api/auth/me — the Hub remains the identity + permission authority."""
     if not config.HUB_URL or not token:
         return None
     req = urllib.request.Request(
@@ -35,8 +39,21 @@ def verify_session(token: str) -> str | None:
         ctx = _INSECURE_CTX
     try:
         with urllib.request.urlopen(req, timeout=4, context=ctx) as r:
-            return (json.loads(r.read().decode()) or {}).get("username")
+            data = json.loads(r.read().decode()) or {}
     except urllib.error.HTTPError:
         return None  # 401 Not authenticated
     except Exception:
         return None  # Hub unreachable, etc.
+    if not data.get("username"):
+        return None
+    return {
+        "username": data["username"],
+        "role": data.get("role") or "viewer",
+        "grants": data.get("grants") or [],
+    }
+
+
+def verify_session(token: str) -> str | None:
+    """Back-compat: return just the Hub username for a valid session, else None."""
+    ident = verify_identity(token)
+    return ident["username"] if ident else None

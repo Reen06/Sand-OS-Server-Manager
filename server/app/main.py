@@ -25,16 +25,36 @@ def _startup() -> None:
     registry.reconcile_from_docker()
 
 
-def _require_user(request: Request) -> str:
-    """The authenticated user. Hub-SSO mode: the Hub username (else 401 → login).
-    Dev mode (no SM_HUB_URL): an anonymous per-browser cookie."""
+def _require_identity(request: Request) -> dict:
+    """The authenticated identity {username, role, grants}. Hub-SSO mode: from the
+    Hub (else 401 → login). Dev mode (no SM_HUB_URL): an anonymous full-access
+    per-browser cookie user."""
     if hub_auth.enabled():
-        user = hub_auth.verify_session(request.cookies.get(config.HUB_SESSION_COOKIE, ""))
-        if not user:
+        ident = hub_auth.verify_identity(request.cookies.get(config.HUB_SESSION_COOKIE, ""))
+        if not ident:
             raise HTTPException(401, detail={"error": "login required",
                                              "login_url": config.HUB_LOGIN_URL})
-        return user
-    return request.cookies.get("sm_user") or "me"
+        return ident
+    return {"username": request.cookies.get("sm_user") or "me", "role": "admin", "grants": []}
+
+
+def _require_user(request: Request) -> str:
+    return _require_identity(request)["username"]
+
+
+def _app_allowed(identity: dict, app_id: str) -> bool:
+    """Scoped (shared-person) accounts may only touch apps they were granted
+    (`app.<id>` in grants). admin/viewer (and dev-mode) reach every app."""
+    if identity.get("role") == "scoped":
+        return f"app.{app_id}" in (identity.get("grants") or [])
+    return True
+
+
+def _require_app(request: Request, app_id: str) -> dict:
+    ident = _require_identity(request)
+    if not _app_allowed(ident, app_id):
+        raise HTTPException(403, detail={"error": "you do not have access to this app"})
+    return ident
 
 
 @app.middleware("http")
@@ -70,12 +90,17 @@ def sm_info():
 
 @app.get("/api/apps")
 def list_apps(request: Request):
-    return {"apps": registry.list_for_user(_require_user(request))}
+    ident = _require_identity(request)
+    apps = registry.list_for_user(ident["username"])
+    # Scoped accounts only see the apps their profiles grant.
+    if ident.get("role") == "scoped":
+        apps = [a for a in apps if _app_allowed(ident, a.get("id"))]
+    return {"apps": apps}
 
 
 @app.post("/api/apps/{app_id}/launch")
 def launch(app_id: str, request: Request):
-    user = _require_user(request)
+    user = _require_app(request, app_id)["username"]
     try:
         inst = registry.launch(app_id, user)
     except KeyError:
@@ -87,29 +112,29 @@ def launch(app_id: str, request: Request):
 
 @app.post("/api/apps/{app_id}/stop")
 def stop(app_id: str, request: Request):
-    registry.stop(app_id, _require_user(request))
+    registry.stop(app_id, _require_app(request, app_id)["username"])
     return {"ok": True, "status": "stopped"}
 
 
 @app.get("/api/apps/{app_id}/status")
 def status(app_id: str, request: Request):
-    return {"status": registry.status(app_id, _require_user(request))}
+    return {"status": registry.status(app_id, _require_app(request, app_id)["username"])}
 
 
 # ── Session-gated reverse proxy to the user's instance (the secure viewer) ─────
-def _ws_user(ws: WebSocket) -> str | None:
+def _ws_identity(ws: WebSocket) -> dict | None:
     if hub_auth.enabled():
-        return hub_auth.verify_session(ws.cookies.get(config.HUB_SESSION_COOKIE, ""))
-    return ws.cookies.get("sm_user") or "me"
+        return hub_auth.verify_identity(ws.cookies.get(config.HUB_SESSION_COOKIE, ""))
+    return {"username": ws.cookies.get("sm_user") or "me", "role": "admin", "grants": []}
 
 
 @app.websocket("/stream/{app_id}/{path:path}")
 async def stream_ws(app_id: str, path: str, websocket: WebSocket):
-    user = _ws_user(websocket)
-    if not user:
-        await websocket.close(code=1008)  # policy violation (unauthenticated)
+    ident = _ws_identity(websocket)
+    if not ident or not _app_allowed(ident, app_id):
+        await websocket.close(code=1008)  # unauthenticated or not granted this app
         return
-    await proxy.ws(app_id, path, websocket, user)
+    await proxy.ws(app_id, path, websocket, ident["username"])
 
 
 # Includes WebDAV/CalDAV verbs — Nextcloud's Files/Photos/sync/calendar use them
@@ -119,7 +144,7 @@ async def stream_ws(app_id: str, path: str, websocket: WebSocket):
                         "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE",
                         "LOCK", "UNLOCK", "REPORT", "SEARCH", "MKCALENDAR"])
 async def stream_http(app_id: str, path: str, request: Request):
-    user = _require_user(request)
+    user = _require_app(request, app_id)["username"]
     return await proxy.http(app_id, path, request, user)
 
 
