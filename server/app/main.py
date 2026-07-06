@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, hub_auth, metrics, nas, proxy, registry
+from . import config, glances_svc, hub_auth, metrics, nas, proxy, registry
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -23,6 +23,12 @@ app = FastAPI(title="Sand-OS Server Manager")
 @app.on_event("startup")
 def _startup() -> None:
     registry.reconcile_from_docker()
+    glances_svc.start()   # local Glances REST server for the Fleet monitor panel
+
+
+@app.on_event("shutdown")
+def _shutdown() -> None:
+    glances_svc.stop()
 
 
 def _require_identity(request: Request) -> dict:
@@ -141,6 +147,19 @@ def sm_processes(request: Request):
     page reaches this through /api/fleet/nodes/<id>/processes (admin-gated)."""
     _require_identity(request)
     return {"processes": metrics.top_processes()}
+
+
+@app.get("/api/sm/monitor")
+def sm_monitor(request: Request):
+    """Rich live monitor (Glances): per-core CPU, memory, load, network + a full
+    process list. Authenticated; the Hub's Fleet page proxies it (admin-gated).
+    Falls back to the lightweight process list if Glances isn't ready yet."""
+    _require_identity(request)
+    snap = glances_svc.monitor()
+    if snap is None:
+        return {"ready": False, "processes": metrics.top_processes()}
+    snap["ready"] = True
+    return snap
 
 
 @app.get("/api/apps")
