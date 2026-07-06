@@ -124,6 +124,15 @@ INSTANCE_PASSWD = os.environ.get("SM_INSTANCE_PASSWD", "freecad")
 # returned username as the identity (per-user instances key off it). Empty =
 # standalone dev mode (an anonymous 'sm_user' cookie).
 HUB_URL = os.environ.get("SM_HUB_URL", "").rstrip("/")
+# Where the SM reaches the Hub for the *internal* per-request session check
+# (/api/auth/me). Defaults to HUB_URL — the public HTTPS address — which works for
+# every node, including an off-LAN node reaching the Hub over its WireGuard tunnel.
+# A fully-trusted co-located node MAY point this at a plain-HTTP LAN address to
+# skip the TLS handshake on cache-miss auth calls — but note the hub_session token
+# then travels the LAN in cleartext, so only set it on a network you trust and
+# where the Hub actually exposes that HTTP port. Per-node: set SM_HUB_INTERNAL_URL
+# only on the nodes where you want it; leave unset everywhere else (secure default).
+HUB_INTERNAL_URL = os.environ.get("SM_HUB_INTERNAL_URL", "").rstrip("/") or HUB_URL
 HUB_SESSION_COOKIE = os.environ.get("SM_HUB_SESSION_COOKIE", "hub_session")
 # Verify the Hub's TLS cert. Off by default for LAN-internal calls to the Hub's
 # Caddy 'internal' CA; set true once the SM trusts the Hub CA / uses the real cert.

@@ -27,6 +27,21 @@ if not log.handlers:
     log.addHandler(_h)
     log.setLevel(logging.INFO)
 
+# One pooled client, reused across requests. Building an httpx.AsyncClient per
+# request rebuilds an SSL context each time and forgoes upstream keep-alive —
+# needless per-asset overhead. Lazily created inside the running event loop.
+_client: "httpx.AsyncClient | None" = None
+
+
+def _get_client() -> "httpx.AsyncClient":
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(
+            timeout=30.0, follow_redirects=False,
+            limits=httpx.Limits(max_keepalive_connections=32, max_connections=128),
+        )
+    return _client
+
 _HOP = {"host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
         "te", "trailers", "transfer-encoding", "upgrade", "content-length",
         "content-encoding", "authorization"}
@@ -98,10 +113,9 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
     target = f"http://127.0.0.1:{port}/{_upstream_path(app_id, path)}"
     fwd = _fwd_headers(registry.APPS.get(app_id), request, user)
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
-            r = await client.request(request.method, target,
-                                     params=dict(request.query_params),
-                                     headers=fwd, content=await request.body())
+        r = await _get_client().request(request.method, target,
+                                        params=dict(request.query_params),
+                                        headers=fwd, content=await request.body())
     except Exception as e:  # noqa: BLE001
         log.exception("HTTP %s /%s → upstream error", request.method, path)
         return Response(f"upstream error: {e}", status_code=502)
