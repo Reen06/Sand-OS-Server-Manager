@@ -111,6 +111,15 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
     out = {k: v for k, v in r.headers.items()
            if k.lower() not in _HOP and k.lower() != "set-cookie"
            and (not streamed or k.lower() not in _STRIP_RESP)}
+    # user_saml under OVERWRITEWEBROOT mis-generates its own route URLs: the app
+    # segment `apps/user_saml` comes out as the corrupt `index.php_saml`, so the
+    # first (unauthenticated) load 302s into a 404 even though the SSO session was
+    # just established. Nextcloud serves the correct `apps/user_saml/...` path, so
+    # repair the redirect target it emits. Scoped to the exact corrupt token, which
+    # never appears in a legitimate URL.
+    for k in list(out):
+        if k.lower() == "location" and "index.php_saml" in out[k]:
+            out[k] = out[k].replace("index.php_saml", "apps/user_saml")
     # Streamed (Selkies) clients must never be cached — a stale copy with old
     # paths broke the proxy. Web apps keep their own caching headers untouched.
     if streamed:
