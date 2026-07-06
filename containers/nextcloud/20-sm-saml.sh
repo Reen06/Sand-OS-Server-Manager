@@ -32,6 +32,11 @@ occ saml:config:set 1 --general-uid_mapping=SM_SSO_USER
 
 echo "[sm] user_saml environment-variable SSO ensured (uid=SM_SSO_USER)"
 
+# Run background jobs on a schedule (a host cron calls cron.php every 5 min)
+# rather than piggy-backing on page loads (ajax) — reliable, and no per-page job
+# overhead. Same jobs, just scheduled. Idempotent; persists in the DB.
+occ background:cron
+
 # ── Fleet NAS as External Storage ─────────────────────────────────────────────
 # Expose each user's NAS home (/nas/users/$user) as "My Files" with per-access
 # change detection so files that apps (FreeCAD…) write directly over NFS show up
