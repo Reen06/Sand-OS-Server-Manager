@@ -88,3 +88,29 @@ def collect() -> dict:
         "gpu": _gpu(),
         "uptime": _uptime(),
     }
+
+
+def top_processes(limit: int = 60) -> list[dict]:
+    """Running processes with CPU% + memory, via `ps` (no psutil). `cpu` is ps's
+    lifetime-average %CPU; `mem` is %RAM and `rss` is resident bytes (both live).
+    Sorted by CPU; the Hub UI can re-sort/filter."""
+    try:
+        r = subprocess.run(
+            ["ps", "-eo", "pid,%cpu,%mem,rss,comm", "--sort=-%cpu", "--no-headers"],
+            capture_output=True, text=True, timeout=5)
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for line in r.stdout.splitlines():
+        parts = line.split(None, 4)
+        if len(parts) < 5:
+            continue
+        pid, cpu, mem, rss, comm = parts
+        try:
+            out.append({"pid": int(pid), "cpu": float(cpu), "mem": float(mem),
+                        "rss": int(rss) * 1024, "name": comm})
+        except ValueError:
+            continue
+        if len(out) >= limit:
+            break
+    return out

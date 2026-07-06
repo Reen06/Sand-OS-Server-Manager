@@ -135,6 +135,14 @@ def sm_info():
     }
 
 
+@app.get("/api/sm/processes")
+def sm_processes(request: Request):
+    """Running processes on this node (CPU/RAM). Authenticated — the Hub's Fleet
+    page reaches this through /api/fleet/nodes/<id>/processes (admin-gated)."""
+    _require_identity(request)
+    return {"processes": metrics.top_processes()}
+
+
 @app.get("/api/apps")
 def list_apps(request: Request):
     ident = _require_identity(request)
