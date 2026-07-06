@@ -50,6 +50,16 @@ NAS_ENABLED = os.environ.get("SM_NAS_ENABLED", "true").lower() in ("1", "true", 
 # Sub-paths under the NFS export root (server exports .../sandos-nas as the v4 root).
 NAS_USERS_SUBPATH = os.environ.get("SM_NAS_USERS_SUBPATH", "users")     # users/{username}
 NAS_SHARED_SUBPATH = os.environ.get("SM_NAS_SHARED_SUBPATH", "shared")  # shared/{name}
+# LOCAL path of the export root on the NAS host — the SM runs there (control-owned
+# tree) so the shared-folder manager creates/removes folders directly. Matches
+# NAS_ROOT in containers/nfs-server/run-nas.sh. anon uid/gid = the all_squash owner
+# every app maps to, so a new shared folder is owned consistently across apps.
+NAS_ROOT = os.environ.get("SM_NAS_ROOT", "/home/control/sandos-nas")
+NAS_UID = int(os.environ.get("SM_NAS_UID", "1000"))
+NAS_GID = int(os.environ.get("SM_NAS_GID", "1000"))
+# The shared Nextcloud instance's container name — the manager drives its External
+# Storage (per-folder mounts + applicable-users) via `occ`.
+NC_CONTAINER = os.environ.get("SM_NC_CONTAINER", "sm-nextcloud")
 
 # Human-friendly node name the Hub shows in the fleet list (defaults to hostname).
 NODE_NAME = os.environ.get("SM_NODE_NAME") or socket.gethostname()

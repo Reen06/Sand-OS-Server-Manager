@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, hub_auth, metrics, proxy, registry
+from . import config, hub_auth, metrics, nas, proxy, registry
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -55,6 +55,52 @@ def _require_app(request: Request, app_id: str) -> dict:
     if not _app_allowed(ident, app_id):
         raise HTTPException(403, detail={"error": "you do not have access to this app"})
     return ident
+
+
+def _require_admin(request: Request) -> dict:
+    """Fleet/NAS administration is owner-only (dev-mode is admin)."""
+    ident = _require_identity(request)
+    if ident.get("role") != "admin":
+        raise HTTPException(403, detail={"error": "admin only"})
+    return ident
+
+
+# ── Fleet NAS: shared-folder management (admin-only) ──────────────────────────
+@app.get("/api/nas/shared")
+def nas_shared_list(request: Request):
+    _require_admin(request)
+    return {"enabled": config.NAS_ENABLED, "node": config.NODE_NAME,
+            "folders": nas.list_shared(), "users": nas.list_users()}
+
+
+@app.post("/api/nas/shared")
+async def nas_shared_create(request: Request):
+    _require_admin(request)
+    body = await request.json()
+    try:
+        return nas.create_shared(body.get("name", ""), body.get("members") or [])
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.patch("/api/nas/shared/{name}")
+async def nas_shared_update(name: str, request: Request):
+    _require_admin(request)
+    body = await request.json()
+    try:
+        return nas.set_members(name, body.get("members") or [])
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.delete("/api/nas/shared/{name}")
+def nas_shared_delete(name: str, request: Request):
+    _require_admin(request)
+    delete_files = request.query_params.get("delete_files") in ("1", "true", "yes")
+    try:
+        return nas.delete_shared(name, delete_files)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
 
 @app.middleware("http")
