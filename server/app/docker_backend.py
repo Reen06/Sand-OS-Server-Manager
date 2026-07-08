@@ -56,6 +56,75 @@ def list_sm_containers() -> list[str]:
     return [n for n in r.stdout.split() if n.startswith("sm-")]
 
 
+# ── per-container resource stats (Fleet page's per-app breakdown) ─────────────
+_MEM_UNITS = {  # docker's human units -> MB multiplier, longest suffix first
+    "tib": 1024 * 1024, "tb": 1024 * 1024,
+    "gib": 1024, "gb": 1024,
+    "mib": 1, "mb": 1,
+    "kib": 1 / 1024, "kb": 1 / 1024,
+    "b": 1 / (1024 * 1024),
+}
+
+
+def _parse_percent(s: str | None) -> float | None:
+    if not s:
+        return None
+    try:
+        return float(s.strip().rstrip("%"))
+    except ValueError:
+        return None
+
+
+def _parse_mem_value_mb(token: str) -> float | None:
+    token = token.strip()
+    for suffix in sorted(_MEM_UNITS, key=len, reverse=True):
+        if token.lower().endswith(suffix):
+            try:
+                return float(token[:-len(suffix)].strip()) * _MEM_UNITS[suffix]
+            except ValueError:
+                return None
+    return None
+
+
+def _parse_mem_usage(s: str | None) -> tuple[float | None, float | None]:
+    if not s or "/" not in s:
+        return None, None
+    used_s, limit_s = s.split("/", 1)
+    return _parse_mem_value_mb(used_s), _parse_mem_value_mb(limit_s)
+
+
+def stats(names: list[str]) -> dict[str, dict]:
+    """`docker stats` snapshot for the given (running) container names ->
+    {name: {cpu_percent, mem_used_mb, mem_limit_mb, mem_percent}}. Skipped
+    entirely (returns {}) if `names` is empty — `docker stats` with no name
+    args would otherwise snapshot EVERY container on the host."""
+    if not names:
+        return {}
+    r = _docker(["stats", "--no-stream", "--format", "{{json .}}", *names], timeout=15)
+    if r.returncode != 0:
+        return {}
+    out: dict[str, dict] = {}
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        name = d.get("Name") or d.get("Container")
+        if not name:
+            continue
+        mem_used, mem_limit = _parse_mem_usage(d.get("MemUsage"))
+        out[name] = {
+            "cpu_percent": _parse_percent(d.get("CPUPerc")),
+            "mem_used_mb": mem_used,
+            "mem_limit_mb": mem_limit,
+            "mem_percent": _parse_percent(d.get("MemPerc")),
+        }
+    return out
+
+
 def published_web_port(name: str) -> int | None:
     """The SM-assigned localhost web port for a container, independent of its
     internal port (8080 for Selkies/Filebrowser, 80 for Nextcloud). Finds the

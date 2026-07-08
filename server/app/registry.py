@@ -5,6 +5,7 @@ launch/stop/status against the Docker backend. State is in-memory and
 reconciled from Docker on startup (single-node MVP)."""
 from __future__ import annotations
 import re
+import threading
 from .models import AppDef, Instance, Mount, Service
 from . import config, docker_backend
 
@@ -76,6 +77,21 @@ APPS: dict[str, AppDef] = {
         # node_modules VOLUMEs keep the host tree from shadowing container installs.
         binds=[("/home/control/webcadcam", "/app")],
     ),
+    "rayoptics": AppDef(
+        id="rayoptics",
+        label="Ray Optics",
+        icon="cpu",          # whitelisted; closest sim/compute glyph the Hub ships
+        color="cyan",
+        desc="2D geometric optics simulator — draw rays, lenses and mirrors.",
+        image=config.RAYOPTICS_IMAGE,
+        kind="web",
+        mode="shared",       # one static site for everyone; saving is per-user via /api/files
+        internal_port=80,
+        gpu=False,
+        # A plain static build (nginx) served at container root — no baseURL
+        # awareness, so the proxy strips to root like Nextcloud/WebCAD.
+        proxy_subpath="root",
+    ),
     "nextcloud": AppDef(
         id="nextcloud",
         label="Nextcloud",
@@ -146,6 +162,25 @@ def resolve_volume(app_id: str, user: str, m: Mount) -> str:
 # slot -> (app_id, user)  ;  (app_id, user) -> Instance
 _slots: dict[int, tuple[str, str]] = {}
 _instances: dict[tuple[str, str], Instance] = {}
+
+# Per-instance launch locks. FastAPI runs sync endpoints in a threadpool, so two
+# overlapping launch requests for the SAME (app_id, user) — e.g. a mobile
+# double-tap, or the same account open in both a PWA and a browser tab — can
+# both see "not running yet" and both invoke `docker run --name X` at once.
+# That races Docker's port-publish/iptables setup and fails with a networking
+# error on one of them. Serializing launch() per key turns the second call into
+# a wait-then-reuse instead of a duplicate `docker run`.
+_launch_locks: dict[tuple[str, str], threading.Lock] = {}
+_launch_locks_meta = threading.Lock()
+
+
+def _lock_for(key: tuple[str, str]) -> threading.Lock:
+    with _launch_locks_meta:
+        lock = _launch_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _launch_locks[key] = lock
+        return lock
 
 
 def _safe(s: str) -> str:
@@ -223,14 +258,15 @@ def launch(app_id: str, user: str) -> Instance:
     if app_id not in APPS:
         raise KeyError(app_id)
     app = APPS[app_id]
-    inst = _instance_for(app_id, user)
-    if not docker_backend.running(inst.name):
-        res = docker_backend.spawn(inst, app)
-        if res.returncode != 0:
-            if app.services:
-                docker_backend.teardown(inst.name, app)  # clean a partial stack
-            raise RuntimeError(res.stderr.strip() or "docker run failed")
-    return inst
+    with _lock_for((app_id, _eff(app_id, user))):
+        inst = _instance_for(app_id, user)
+        if not docker_backend.running(inst.name):
+            res = docker_backend.spawn(inst, app)
+            if res.returncode != 0:
+                if app.services:
+                    docker_backend.teardown(inst.name, app)  # clean a partial stack
+                raise RuntimeError(res.stderr.strip() or "docker run failed")
+        return inst
 
 
 def stop(app_id: str, user: str) -> None:
@@ -240,6 +276,17 @@ def stop(app_id: str, user: str) -> None:
         docker_backend.teardown(name, app)   # primary + any sidecars + network
     else:
         docker_backend.stop(name)
+
+
+def instances_summary() -> list[dict]:
+    """Every currently-tracked instance across all apps, with its container name
+    and running state — used by /api/sm/apps/stats (Fleet page's per-app
+    breakdown) to join registry state against `docker stats`."""
+    return [
+        {"app_id": app_id, "user": user, "name": inst.name,
+         "running": docker_backend.running(inst.name)}
+        for (app_id, user), inst in _instances.items()
+    ]
 
 
 def list_for_user(user: str) -> list[dict]:

@@ -12,8 +12,9 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
-from . import config, glances_svc, hub_auth, metrics, nas, proxy, pwa, registry
+from . import config, docker_backend, files, glances_svc, hub_auth, metrics, nas, proxy, pwa, registry
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -109,6 +110,98 @@ def nas_shared_delete(name: str, request: Request):
         return JSONResponse({"error": str(e)}, status_code=400)
 
 
+# ── Cloud file picker: save/open into a user's NAS home or an accessible shared
+# folder. Apps with no OS-level file dialog (Ray Optics) use this instead —
+# saving into a shared folder is how a scene "auto appears" to everyone already
+# sharing it (see files.py / nas.py's shared-folder membership) ───────────────
+@app.get("/api/files/roots")
+def files_roots(request: Request):
+    ident = _require_identity(request)
+    return {"roots": files.list_roots(ident["username"])}
+
+
+@app.get("/api/files/list")
+def files_list(request: Request, root: str, path: str = ""):
+    ident = _require_identity(request)
+    try:
+        return {"entries": files.list_dir(root, ident["username"], path)}
+    except (ValueError, FileNotFoundError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.get("/api/files/read")
+async def files_read(request: Request, root: str, path: str):
+    ident = _require_identity(request)
+    try:
+        data = files.read_file(root, ident["username"], path)
+    except FileNotFoundError:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return Response(content=data, media_type="application/octet-stream")
+
+
+@app.put("/api/files/write")
+async def files_write(request: Request, root: str, path: str):
+    ident = _require_identity(request)
+    body = await request.body()
+    try:
+        files.write_file(root, ident["username"], path, body)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True}
+
+
+@app.post("/api/files/mkdir")
+async def files_mkdir(request: Request, root: str, path: str):
+    ident = _require_identity(request)
+    try:
+        files.make_dir(root, ident["username"], path)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True}
+
+
+@app.get("/api/files/exists")
+def files_exists(request: Request, root: str, path: str):
+    """Whether `path` already exists — the picker's Save flow calls this
+    before writing so it can warn on an overwrite instead of silently
+    replacing another file."""
+    ident = _require_identity(request)
+    try:
+        return files.exists(root, ident["username"], path)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+class RenameBody(BaseModel):
+    new_name: str
+
+
+@app.post("/api/files/rename")
+async def files_rename(request: Request, root: str, path: str, body: RenameBody):
+    ident = _require_identity(request)
+    try:
+        files.rename(root, ident["username"], path, body.new_name)
+    except FileNotFoundError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True}
+
+
+@app.delete("/api/files/delete")
+def files_delete(request: Request, root: str, path: str):
+    ident = _require_identity(request)
+    try:
+        files.delete(root, ident["username"], path)
+    except FileNotFoundError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True}
+
+
 @app.middleware("http")
 async def ensure_user_cookie(request: Request, call_next):
     response = await call_next(request)
@@ -160,6 +253,29 @@ def sm_monitor(request: Request):
         return {"ready": False, "processes": metrics.top_processes()}
     snap["ready"] = True
     return snap
+
+
+@app.get("/api/sm/apps/stats")
+def sm_apps_stats(request: Request):
+    """Per-app instance breakdown with live CPU/RAM (docker stats), for the
+    Hub's Fleet page. Not gated per-app (unlike /api/apps) — this is node
+    administration/monitoring, visible to anyone who can see the Fleet page."""
+    _require_identity(request)
+    instances = registry.instances_summary()
+    running_names = [i["name"] for i in instances if i["running"]]
+    live = docker_backend.stats(running_names)
+    by_app: dict[str, list[dict]] = {}
+    for i in instances:
+        if not i["running"]:
+            continue
+        entry = {"user": None if i["user"] == registry._SHARED else i["user"],
+                  **(live.get(i["name"]) or {})}
+        by_app.setdefault(i["app_id"], []).append(entry)
+    return {"apps": [
+        {"id": a.id, "label": a.label, "instance_count": len(by_app.get(a.id, [])),
+         "instances": by_app.get(a.id, [])}
+        for a in registry.APPS.values()
+    ]}
 
 
 @app.get("/api/apps")
