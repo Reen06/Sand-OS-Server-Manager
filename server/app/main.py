@@ -10,10 +10,10 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import config, glances_svc, hub_auth, metrics, nas, proxy, registry
+from . import config, glances_svc, hub_auth, metrics, nas, proxy, pwa, registry
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -209,6 +209,29 @@ async def stream_ws(app_id: str, path: str, websocket: WebSocket):
         await websocket.close(code=1008)  # unauthenticated or not granted this app
         return
     await proxy.ws(app_id, path, websocket, ident["username"])
+
+
+# ── Per-app PWA assets (UNAUTHENTICATED) ──────────────────────────────────────
+# Registered BEFORE the catch-all /stream route so these exact paths match first.
+# Served without auth on purpose: Chrome fetches a page's manifest/icons without
+# credentials, and these carry only the already-public id/label/icon/color. They
+# make "Open in window" install the app as its OWN scoped PWA (its own icon).
+@app.get("/stream/{app_id}/sm-app.webmanifest")
+def sm_app_manifest(app_id: str):
+    app_def = registry.APPS.get(app_id)
+    if not app_def:
+        return JSONResponse({"error": "unknown app"}, status_code=404)
+    return JSONResponse(pwa.manifest(app_def, config.EXTERNAL_BASE),
+                        media_type="application/manifest+json")
+
+
+@app.get("/stream/{app_id}/sm-icon.svg")
+def sm_app_icon(app_id: str):
+    app_def = registry.APPS.get(app_id)
+    if not app_def:
+        return Response("not found", status_code=404)
+    return Response(pwa.icon_svg(app_def), media_type="image/svg+xml",
+                    headers={"Cache-Control": "public, max-age=3600"})
 
 
 # Includes WebDAV/CalDAV verbs — Nextcloud's Files/Photos/sync/calendar use them

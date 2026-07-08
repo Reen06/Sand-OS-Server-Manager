@@ -11,6 +11,7 @@ import asyncio
 import base64
 import logging
 import os
+import re
 
 import httpx
 import websockets
@@ -18,7 +19,7 @@ from fastapi import Request, WebSocket
 from fastapi.responses import Response
 from starlette.websockets import WebSocketDisconnect
 
-from . import config, docker_backend, registry
+from . import config, docker_backend, pwa, registry
 
 log = logging.getLogger("sm.proxy")
 if not log.handlers:
@@ -105,6 +106,26 @@ def _fwd_headers(app, request: Request, user: str) -> dict:
     return fwd
 
 
+_MANIFEST_LINK_RE = re.compile(rb"<link[^>]+rel=[\"']?manifest[\"']?[^>]*>", re.IGNORECASE)
+
+
+def _inject_pwa(body: bytes, app) -> bytes:
+    """Inject this app's PWA manifest/icon/theme into its entry HTML so the popped-out
+    window installs as its OWN scoped app. Strips the app's own manifest link so ours
+    governs the install. Best-effort: any failure returns the body untouched."""
+    if not app or b"</head>" not in body.lower():
+        return body
+    try:
+        body = _MANIFEST_LINK_RE.sub(b"", body)
+        idx = body.lower().rfind(b"</head>")
+        if idx == -1:
+            return body
+        tags = pwa.head_tags(app, config.EXTERNAL_BASE).encode("utf-8")
+        return body[:idx] + tags + body[idx:]
+    except Exception:  # noqa: BLE001
+        return body
+
+
 async def http(app_id: str, path: str, request: Request, user: str) -> Response:
     port = _instance_port(app_id, user)
     if port is None:
@@ -138,7 +159,10 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
     # paths broke the proxy. Web apps keep their own caching headers untouched.
     if streamed:
         out["Cache-Control"] = "no-store, no-cache, must-revalidate"
-    resp = Response(content=r.content, status_code=r.status_code, headers=out,
+    content = r.content
+    if "text/html" in (r.headers.get("content-type") or "").lower():
+        content = _inject_pwa(content, app)   # make the popped-out app its own PWA
+    resp = Response(content=content, status_code=r.status_code, headers=out,
                     media_type=r.headers.get("content-type"))
     # Forward EACH Set-Cookie separately — Nextcloud sets several session cookies
     # and a plain dict keeps only the last, which breaks the session (redirect loop).
