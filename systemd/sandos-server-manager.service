@@ -9,6 +9,9 @@ Type=simple
 User=control
 Environment=SM_LAN_IP=10.0.0.164
 Environment=SM_PORT=8170
+# WireGuard IP injected as a second TURN candidate so VPN/mobile clients can
+# reach the TURN relay (the LAN IP is unreachable from outside the LAN).
+Environment=SM_TURN_EXTRA_HOST=10.79.114.1
 # Optional overrides (set SM_HUB_URL here to turn on Hub SSO):
 #   /etc/sandos-server-manager.env   e.g.  SM_HUB_URL=https://10.0.0.177
 EnvironmentFile=-/etc/sandos-server-manager.env

@@ -88,6 +88,10 @@ FILEBROWSER_IMAGE = os.environ.get("SM_FILEBROWSER_IMAGE", "sm-filebrowser:lates
 # from a bind-mounted source tree; build from containers/webcad.
 WEBCAD_IMAGE = os.environ.get("SM_WEBCAD_IMAGE", "sm-webcad:dev")
 
+# Ray Optics — 2D geometric optics simulator (a 'web' app). Static build served
+# by nginx; build from containers/rayoptics.
+RAYOPTICS_IMAGE = os.environ.get("SM_RAYOPTICS_IMAGE", "sm-rayoptics:latest")
+
 # Nextcloud — the flagship cloud/NAS app (a 'web' app + MariaDB/Redis stack).
 NEXTCLOUD_IMAGE = os.environ.get("SM_NEXTCLOUD_IMAGE", "sm-nextcloud:latest")
 MARIADB_IMAGE = os.environ.get("SM_MARIADB_IMAGE", "mariadb:11")
@@ -117,6 +121,11 @@ WEB_PORT_BASE = int(os.environ.get("SM_WEB_PORT_BASE", "8100"))   # 8100, 8101, 
 TURN_PORT_BASE = int(os.environ.get("SM_TURN_PORT_BASE", "13478")) # 13478, 13479, ...
 RELAY_BASE = int(os.environ.get("SM_RELAY_BASE", "40000"))         # 8 ports per slot
 RELAY_PER_SLOT = 8
+# Extra TURN host injected alongside the LAN IP in the /turn ICE-server response.
+# Set to the WireGuard IP (e.g. 10.79.114.1) so VPN/mobile clients — who can't
+# reach the LAN IP directly — also get a TURN candidate they can use.
+# The TURN port is published on 0.0.0.0 so it already listens on the WG interface.
+TURN_EXTRA_HOST = os.environ.get("SM_TURN_EXTRA_HOST", "")
 
 # Instance basic-auth (internal; the Hub proxy will own real auth later).
 INSTANCE_USER = os.environ.get("SM_INSTANCE_USER", "user")

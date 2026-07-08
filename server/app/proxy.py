@@ -9,6 +9,7 @@ does NOT flow through here — it goes browser↔TURN directly.
 from __future__ import annotations
 import asyncio
 import base64
+import json
 import logging
 import os
 import re
@@ -108,6 +109,37 @@ def _fwd_headers(app, request: Request, user: str) -> dict:
 
 _MANIFEST_LINK_RE = re.compile(rb"<link[^>]+rel=[\"']?manifest[\"']?[^>]*>", re.IGNORECASE)
 
+_TURN_URL_HOST_RE = re.compile(r"^(turns?:)[^:?/]+")
+
+
+def _inject_extra_turn(content: bytes) -> bytes:
+    """If SM_TURN_EXTRA_HOST is set, clone each iceServer entry in the /turn
+    JSON response with the extra host swapped in. This lets VPN/mobile clients
+    (who can't reach the LAN IP directly) use the WireGuard IP instead, while
+    LAN clients still connect to the primary TURN first.
+
+    The TURN port is published on 0.0.0.0 so it already binds on every host
+    interface including the WireGuard one — no extra port-mapping needed."""
+    extra = config.TURN_EXTRA_HOST
+    if not extra:
+        return content
+    try:
+        data = json.loads(content)
+        servers = data.get("iceServers")
+        if not isinstance(servers, list):
+            return content
+        extras = []
+        for entry in servers:
+            urls = entry.get("urls", [])
+            if isinstance(urls, str):
+                urls = [urls]
+            new_urls = [_TURN_URL_HOST_RE.sub(rf"\g<1>{extra}", u) for u in urls]
+            extras.append({**entry, "urls": new_urls})
+        data["iceServers"] = servers + extras
+        return json.dumps(data).encode()
+    except Exception:  # noqa: BLE001
+        return content
+
 
 def _inject_pwa(body: bytes, app) -> bytes:
     """Inject this app's PWA manifest/icon/theme into its entry HTML so the popped-out
@@ -160,8 +192,11 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
     if streamed:
         out["Cache-Control"] = "no-store, no-cache, must-revalidate"
     content = r.content
-    if "text/html" in (r.headers.get("content-type") or "").lower():
+    ct = (r.headers.get("content-type") or "").lower()
+    if "text/html" in ct:
         content = _inject_pwa(content, app)   # make the popped-out app its own PWA
+    if streamed and path.rstrip("/") == "turn" and "json" in ct:
+        content = _inject_extra_turn(content)
     resp = Response(content=content, status_code=r.status_code, headers=out,
                     media_type=r.headers.get("content-type"))
     # Forward EACH Set-Cookie separately — Nextcloud sets several session cookies
