@@ -85,6 +85,11 @@ class AppDef:
     sso_header: str | None = None
     # keep-alive after disconnect before the instance is stopped; 0 = close right away
     keepalive_seconds: int = 600
+    # Extra host→container bind mounts as (host_path, container_path). Unlike Mounts
+    # (the NAS/volume layer), these bind a real host directory straight in — used for
+    # a DEV app that runs live from a bind-mounted source tree (edit on the host →
+    # rebuild/reload in the container). Empty for every normal app.
+    binds: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def streamed(self) -> bool:

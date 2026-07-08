@@ -244,6 +244,12 @@ def spawn(inst: Instance, app: AppDef) -> subprocess.CompletedProcess:
     # are one library many apps/users mount (optionally read-only).
     args += _mount_args(app.id, inst.user, app.mounts)
 
+    # Dev bind mounts — bind a real host dir straight into the container (a DEV app
+    # that runs live from a bind-mounted source tree). node_modules etc. are shadowed
+    # by the image's own VOLUME declarations so the host tree isn't injected.
+    for host_path, container_path in app.binds:
+        args += ["-v", f"{host_path}:{container_path}"]
+
     # App-specific extra env (declared on the App Definition).
     for k, v in app.env.items():
         args += ["-e", f"{k}={v}"]

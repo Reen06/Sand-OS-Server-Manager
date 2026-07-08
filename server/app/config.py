@@ -84,6 +84,10 @@ FREECAD_IMAGE = os.environ.get("SM_FREECAD_IMAGE", "freecad-streamer:dev")
 # noauth on boot; build from containers/filebrowser.
 FILEBROWSER_IMAGE = os.environ.get("SM_FILEBROWSER_IMAGE", "sm-filebrowser:latest")
 
+# WebCAD/CAM — the browser CAD/CAM app (a 'web' app). Dev image runs the app live
+# from a bind-mounted source tree; build from containers/webcad.
+WEBCAD_IMAGE = os.environ.get("SM_WEBCAD_IMAGE", "sm-webcad:dev")
+
 # Nextcloud — the flagship cloud/NAS app (a 'web' app + MariaDB/Redis stack).
 NEXTCLOUD_IMAGE = os.environ.get("SM_NEXTCLOUD_IMAGE", "sm-nextcloud:latest")
 MARIADB_IMAGE = os.environ.get("SM_MARIADB_IMAGE", "mariadb:11")

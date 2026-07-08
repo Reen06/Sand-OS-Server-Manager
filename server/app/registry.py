@@ -57,6 +57,25 @@ APPS: dict[str, AppDef] = {
         # baseURL so its SPA assets resolve under the proxy subpath.
         env={"FB_BASEURL": f"{config.EXTERNAL_BASE}/stream/filebrowser"},
     ),
+    "webcad": AppDef(
+        id="webcad",
+        label="WebCAD/CAM",
+        icon="cpu",         # whitelisted CAD/compute glyph in the dashboard
+        color="blue",
+        desc="Browser CAD/CAM for the Carvera — model right in your dashboard.",
+        image=config.WEBCAD_IMAGE,
+        kind="web",
+        mode="shared",              # one host; per-connection sessions isolate users
+        internal_port=8137,         # the Node host serves client + WebSocket here
+        gpu=False,
+        # The host serves the client bundle at root and the client uses relative asset
+        # URLs (vite base "./"), so the proxy strips the /apps/stream/webcad prefix.
+        proxy_subpath="root",
+        # DEV: run live from the bind-mounted source tree so edits on the host rebuild
+        # (vite build --watch) and reload (tsx watch) without a redeploy. The image's
+        # node_modules VOLUMEs keep the host tree from shadowing container installs.
+        binds=[("/home/control/webcadcam", "/app")],
+    ),
     "nextcloud": AppDef(
         id="nextcloud",
         label="Nextcloud",
