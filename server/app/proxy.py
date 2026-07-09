@@ -13,11 +13,12 @@ import json
 import logging
 import os
 import re
+from pathlib import Path
 
 import httpx
 import websockets
 from fastapi import Request, WebSocket
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from starlette.websockets import WebSocketDisconnect
 
 from . import config, docker_backend, pwa, registry
@@ -141,6 +142,67 @@ def _inject_extra_turn(content: bytes) -> bytes:
         return content
 
 
+# Vendored theme.park CSS bundles for Filebrowser (github.com/themepark-dev/theme.park,
+# MIT). Served straight from disk — no runtime call to any third-party CDN, so the
+# "true privacy" no-external-calls requirement holds even with theming enabled.
+_FB_THEMES_DIR = Path(__file__).parent / "static" / "fb_themes"
+_FB_THEME_ASSET_RE = re.compile(r"^__sm_theme/([a-z0-9-]+)\.css$")
+_FB_THEMES = [
+    ("", "Default"), ("dark", "Dark"), ("dracula", "Dracula"), ("nord", "Nord"),
+    ("aquamarine", "Aquamarine"), ("space-gray", "Space Gray"), ("organizr", "Organizr"),
+    ("plex", "Plex"), ("hotline", "Hotline"), ("hotpink", "Hot Pink"),
+    ("maroon", "Maroon"), ("overseerr", "Overseerr"),
+]
+
+
+def _fb_theme_asset(path: str) -> Response | None:
+    """Serve a vendored theme CSS bundle directly, bypassing the Filebrowser
+    container entirely — these files don't exist in its image."""
+    m = _FB_THEME_ASSET_RE.match(path)
+    if not m:
+        return None
+    f = _FB_THEMES_DIR / f"{m.group(1)}.css"
+    if not f.is_file():
+        return Response(status_code=404)
+    return FileResponse(f, media_type="text/css",
+                         headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+def _inject_fb_theme_picker(body: bytes) -> bytes:
+    """Inject a small floating theme picker into Filebrowser's entry page. Choice
+    persists client-side (localStorage) and swaps in one of the vendored CSS
+    bundles above — no server-side state, no per-user plumbing needed."""
+    if b"</body>" not in body.lower():
+        return body
+    try:
+        opts = "".join(f'<option value="{v}">{l}</option>' for v, l in _FB_THEMES)
+        snippet = f"""
+<link id="sm-theme-css" rel="stylesheet">
+<div id="sm-theme-picker" style="position:fixed;bottom:14px;right:14px;z-index:99999;font-family:system-ui,sans-serif;">
+<select id="sm-theme-select" title="Theme" style="padding:6px 10px;border-radius:8px;border:1px solid rgba(128,128,128,.4);background:#1e1e1eee;color:#eee;font-size:13px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.4);">
+{opts}
+</select>
+</div>
+<script>(function(){{
+  var KEY = "sm_fb_theme";
+  var sel = document.getElementById("sm-theme-select");
+  var link = document.getElementById("sm-theme-css");
+  function apply(id) {{ link.href = id ? ("__sm_theme/" + id + ".css") : ""; }}
+  var saved = localStorage.getItem(KEY) || "";
+  sel.value = saved;
+  apply(saved);
+  sel.addEventListener("change", function() {{
+    localStorage.setItem(KEY, sel.value);
+    apply(sel.value);
+  }});
+}})();</script>
+""".encode("utf-8")
+        idx = body.lower().rfind(b"</body>")
+        return body[:idx] + snippet + body[idx:]
+    except Exception:  # noqa: BLE001
+        return body
+
+
 def _inject_pwa(body: bytes, app) -> bytes:
     """Inject this app's PWA manifest/icon/theme into its entry HTML so the popped-out
     window installs as its OWN scoped app. Strips the app's own manifest link so ours
@@ -159,6 +221,10 @@ def _inject_pwa(body: bytes, app) -> bytes:
 
 
 async def http(app_id: str, path: str, request: Request, user: str) -> Response:
+    if app_id == "filebrowser":
+        asset = _fb_theme_asset(path)
+        if asset is not None:
+            return asset
     port = _instance_port(app_id, user)
     if port is None:
         log.warning("HTTP %s /%s user=%s → no running instance", request.method, path, user)
@@ -195,6 +261,8 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
     ct = (r.headers.get("content-type") or "").lower()
     if "text/html" in ct:
         content = _inject_pwa(content, app)   # make the popped-out app its own PWA
+        if app_id == "filebrowser":
+            content = _inject_fb_theme_picker(content)
     if streamed and path.rstrip("/") == "turn" and "json" in ct:
         content = _inject_extra_turn(content)
     resp = Response(content=content, status_code=r.status_code, headers=out,
