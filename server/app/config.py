@@ -88,6 +88,14 @@ FILEBROWSER_IMAGE = os.environ.get("SM_FILEBROWSER_IMAGE", "sm-filebrowser:lates
 # from a bind-mounted source tree; build from containers/webcad.
 WEBCAD_IMAGE = os.environ.get("SM_WEBCAD_IMAGE", "sm-webcad:dev")
 
+# HeliX Motion — CNC controller for the Carvera Air (a 'web' app). Dev image runs
+# live from the bind-mounted /home/control/CNC_Controller tree; build from its
+# containers/helix. SCAN_SUBNETS: comma-separated CIDRs the app's machine
+# discovery TCP-sweeps (:2222) — the hub's home LAN + any gateway-node LANs
+# reachable over WireGuard (UDP broadcast can't cross the docker bridge).
+HELIX_IMAGE = os.environ.get("SM_HELIX_IMAGE", "sm-helix:dev")
+HELIX_SCAN_SUBNETS = os.environ.get("SM_HELIX_SCAN_SUBNETS", "")
+
 # Ray Optics — 2D geometric optics simulator (a 'web' app). Static build served
 # by nginx; build from containers/rayoptics.
 RAYOPTICS_IMAGE = os.environ.get("SM_RAYOPTICS_IMAGE", "sm-rayoptics:latest")

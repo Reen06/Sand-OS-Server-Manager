@@ -77,6 +77,26 @@ APPS: dict[str, AppDef] = {
         # node_modules VOLUMEs keep the host tree from shadowing container installs.
         binds=[("/home/control/webcadcam", "/app")],
     ),
+    "helix": AppDef(
+        id="helix",
+        label="HeliX Motion",
+        icon="cpu",         # whitelisted CAD/compute glyph in the dashboard
+        color="green",
+        desc="CNC control for the Carvera Air — jog, run jobs, resume, 3D view.",
+        image=config.HELIX_IMAGE,
+        kind="web",
+        mode="shared",              # one machine, one controller connection
+        internal_port=8556,         # FastAPI serves dashboard + API + WebSocket
+        gpu=False,
+        # The bundle uses relative URLs (vite base "./"), so the proxy strips the
+        # /apps/stream/helix prefix like WebCAD.
+        proxy_subpath="root",
+        # DEV: run live from the bind-mounted source tree (uvicorn --reload +
+        # vite build --watch) — edit on the host, validate in the dashboard.
+        binds=[("/home/control/CNC_Controller", "/app")],
+        # Subnets its Carvera discovery TCP-sweeps (home LAN + gateway-node LANs).
+        env={"HELIX_SCAN_SUBNETS": config.HELIX_SCAN_SUBNETS},
+    ),
     "rayoptics": AppDef(
         id="rayoptics",
         label="Ray Optics",
