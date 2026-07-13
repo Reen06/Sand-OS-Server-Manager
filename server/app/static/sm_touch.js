@@ -1,22 +1,35 @@
 // SM mobile touch layer for streamed (Selkies/WebRTC) apps — injected by the
 // proxy on touch devices. Selkies' own touch handling is "one finger = left
-// drag" only; this replaces it with RDP/VNC-viewer style gestures:
+// drag at the finger" only; this replaces it with TRACKPAD-style control:
 //
-//   1 finger  tap → left click · drag → left drag · long-press → right click
-//   2 fingers pinch → LOCAL view zoom (like a VNC viewer) · drag-while-zoomed
-//             → view pan · vertical drag (unzoomed) → scroll wheel
+//   1 finger  drag → move the cursor (relative, like a laptop trackpad —
+//             the pointer is separate from your finger)
+//             tap → left click at the cursor
+//             tap, then immediately drag → click-and-drag (button held)
+//             long-press (no movement) → right click at the cursor
+//   2 fingers vertical drag → scroll wheel at the cursor
+//             pinch → LOCAL view zoom (like a VNC viewer) · drag while
+//             zoomed → view pan
 //   3 fingers drag → middle-button drag (CAD pan)
 //   toolbar   [1:1] reset view zoom · [⌨] summon the soft keyboard
 //
-// It talks Selkies' own input protocol ("m,x,y,buttonMask,0" over the data
-// channel via window.webrtc.input.send), with coordinates computed from the
-// video's bounding rect so they stay correct while the view is CSS-zoomed.
+// The remote desktop renders its own cursor (Selkies sends "p,1" on touch
+// devices), so you see the pointer glide as you swipe. It talks Selkies' own
+// input protocol ("m,x,y,buttonMask,0" via window.webrtc.input.send), with
+// coordinates computed from the video's bounding rect so they stay correct
+// while the view is CSS-zoomed.
 (function () {
     "use strict";
     if (!("ontouchstart" in window)) return;
 
     var LEFT = 1, MIDDLE = 2, RIGHT = 4, WHEEL_DOWN = 8, WHEEL_UP = 16;
-    var TAP_MS = 450, TAP_SLOP = 12, PINCH_SLOP = 30, WHEEL_STEP = 40;
+    var TAP_MS = 350;        // max touch duration that still counts as a tap
+    var TAPDRAG_MS = 300;    // touch again within this after a tap = drag
+    var LONGPRESS_MS = 550;  // hold still this long = right click
+    var TAP_SLOP = 10;       // px of finger travel before a tap becomes a move
+    var PINCH_SLOP = 30;     // px of distance change before 2-finger = pinch
+    var WHEEL_STEP = 36;     // px of 2-finger travel per wheel click
+    var SPEED = 1.5;         // trackpad cursor speed multiplier
 
     var video = document.getElementById("stream");
     var container = document.getElementById("video_container");
@@ -26,33 +39,52 @@
         return (window.webrtc && window.webrtc.input) || null;
     }
 
+    // ── virtual cursor (client coords, persists between gestures) ──────────
+    var cursor = { x: null, y: null };
+
+    function clampCursor() {
+        var rect = video.getBoundingClientRect();
+        if (cursor.x === null) {           // first use: center of the stream
+            cursor.x = rect.left + rect.width / 2;
+            cursor.y = rect.top + rect.height / 2;
+        }
+        cursor.x = Math.max(rect.left, Math.min(rect.right - 1, cursor.x));
+        cursor.y = Math.max(rect.top, Math.min(rect.bottom - 1, cursor.y));
+    }
+
     // ── server-coordinate mapping (transform-safe: rect reflects CSS zoom) ──
-    function serverXY(clientX, clientY) {
+    function serverXY() {
+        clampCursor();
         var rect = video.getBoundingClientRect();
         var fw = video.videoWidth || rect.width;
         var fh = video.videoHeight || rect.height;
-        var x = Math.round((clientX - rect.left) / rect.width * fw);
-        var y = Math.round((clientY - rect.top) / rect.height * fh);
+        var x = Math.round((cursor.x - rect.left) / rect.width * fw);
+        var y = Math.round((cursor.y - rect.top) / rect.height * fh);
         return [
             Math.max(0, Math.min(fw - 1, x)),
             Math.max(0, Math.min(fh - 1, y)),
         ];
     }
 
-    function sendMove(clientX, clientY, mask) {
+    function send(mask) {
         var inp = input();
         if (!inp) return;
-        var xy = serverXY(clientX, clientY);
+        var xy = serverXY();
         inp.x = xy[0];
         inp.y = xy[1];
         inp.buttonMask = mask;
         inp.send(["m", xy[0], xy[1], mask, 0].join(","));
     }
 
-    function sendWheel(up, clientX, clientY) {
-        // wheel = press+release of the wheel-button mask bit at the pointer
-        sendMove(clientX, clientY, state.mask | (up ? WHEEL_UP : WHEEL_DOWN));
-        sendMove(clientX, clientY, state.mask);
+    function click(button) {
+        send(button);
+        send(0);
+    }
+
+    function sendWheel(up) {
+        // wheel = press+release of the wheel-button mask bit at the cursor
+        send(state.mask | (up ? WHEEL_UP : WHEEL_DOWN));
+        send(state.mask);
     }
 
     // ── local view zoom / pan (the VNC-viewer style zoom) ──────────────────
@@ -82,23 +114,31 @@
 
     // ── gesture state machine ───────────────────────────────────────────────
     var state = {
-        mode: null,        // tap | drag | two | three
-        mask: 0,           // buttons we are currently holding
-        startX: 0, startY: 0, startT: 0,
-        moved: false,
+        mode: null,        // track | tapdrag | two | three
+        mask: 0,           // buttons currently held
+        fx: 0, fy: 0,      // last finger position (for relative deltas)
+        startT: 0,
+        travel: 0,         // total finger travel this touch (tap detection)
         longPress: 0,      // timer id
+        lastTapEnd: 0,     // for tap-then-drag detection
         dist: 0, midX: 0, midY: 0, wheelAcc: 0, pinching: false,
     };
 
     function release() {
         if (state.mask) {
-            sendMove(state.startX, state.startY, 0);
+            send(0);
             state.mask = 0;
         }
         clearTimeout(state.longPress);
         state.mode = null;
         state.pinching = false;
         state.wheelAcc = 0;
+    }
+
+    function moveCursor(dx, dy, mask) {
+        cursor.x += dx * SPEED;
+        cursor.y += dy * SPEED;
+        send(mask);
     }
 
     function touchDist(t) {
@@ -110,60 +150,51 @@
         var t = e.touches;
         clearTimeout(state.longPress);
         if (t.length === 1) {
-            state.mode = "tap";
-            state.moved = false;
-            state.startX = t[0].clientX;
-            state.startY = t[0].clientY;
-            state.startT = Date.now();
-            sendMove(state.startX, state.startY, 0); // hover first: place cursor
-            state.longPress = setTimeout(function () {
-                if (state.mode === "tap" && !state.moved) {
-                    state.mode = "drag";               // consumed as right-click
-                    sendMove(state.startX, state.startY, RIGHT);
-                    setTimeout(function () {
-                        sendMove(state.startX, state.startY, 0);
+            var now = Date.now();
+            state.fx = t[0].clientX;
+            state.fy = t[0].clientY;
+            state.startT = now;
+            state.travel = 0;
+            if (now - state.lastTapEnd < TAPDRAG_MS) {
+                state.mode = "tapdrag";      // tap-then-drag: hold the button
+                state.mask = LEFT;
+                send(LEFT);
+            } else {
+                state.mode = "track";        // plain trackpad move
+                send(0);                     // wake the remote cursor
+                state.longPress = setTimeout(function () {
+                    if (state.mode === "track" && state.travel <= TAP_SLOP) {
+                        click(RIGHT);        // held still: right click
                         state.mode = null;
-                    }, 60);
-                }
-            }, TAP_MS);
+                    }
+                }, LONGPRESS_MS);
+            }
         } else if (t.length === 2) {
-            if (state.mask) sendMove(state.startX, state.startY, 0);
-            state.mask = 0;
-            clearTimeout(state.longPress);
+            release();
             state.mode = "two";
             state.dist = touchDist(t);
             state.midX = (t[0].clientX + t[1].clientX) / 2;
             state.midY = (t[0].clientY + t[1].clientY) / 2;
-            state.pinching = false;
-            state.wheelAcc = 0;
         } else if (t.length >= 3) {
-            if (state.mask) sendMove(state.startX, state.startY, 0);
-            clearTimeout(state.longPress);
+            release();
             state.mode = "three";
-            state.startX = t[0].clientX;
-            state.startY = t[0].clientY;
+            state.fx = t[0].clientX;
+            state.fy = t[0].clientY;
             state.mask = MIDDLE;
-            sendMove(state.startX, state.startY, MIDDLE);
+            send(MIDDLE);
         }
     }
 
     function onMove(e) {
         var t = e.touches;
-        if (state.mode === "tap" && t.length === 1) {
-            var dx = t[0].clientX - state.startX;
-            var dy = t[0].clientY - state.startY;
-            if (Math.hypot(dx, dy) > TAP_SLOP) {
-                state.moved = true;
-                clearTimeout(state.longPress);
-                state.mode = "drag";
-                state.mask = LEFT;
-                sendMove(state.startX, state.startY, LEFT);
-            }
-        }
-        if (state.mode === "drag" && t.length === 1) {
-            state.startX = t[0].clientX;
-            state.startY = t[0].clientY;
-            sendMove(state.startX, state.startY, state.mask);
+        if ((state.mode === "track" || state.mode === "tapdrag") && t.length === 1) {
+            var dx = t[0].clientX - state.fx;
+            var dy = t[0].clientY - state.fy;
+            state.fx = t[0].clientX;
+            state.fy = t[0].clientY;
+            state.travel += Math.hypot(dx, dy);
+            if (state.travel > TAP_SLOP) clearTimeout(state.longPress);
+            moveCursor(dx, dy, state.mask);
         } else if (state.mode === "two" && t.length === 2) {
             var dist = touchDist(t);
             var midX = (t[0].clientX + t[1].clientX) / 2;
@@ -182,29 +213,32 @@
             } else {
                 state.wheelAcc += midY - state.midY;   // scroll wheel
                 while (state.wheelAcc > WHEEL_STEP) {
-                    sendWheel(false, midX, midY);
+                    sendWheel(false);
                     state.wheelAcc -= WHEEL_STEP;
                 }
                 while (state.wheelAcc < -WHEEL_STEP) {
-                    sendWheel(true, midX, midY);
+                    sendWheel(true);
                     state.wheelAcc += WHEEL_STEP;
                 }
             }
             state.midX = midX;
             state.midY = midY;
         } else if (state.mode === "three" && t.length >= 3) {
-            state.startX = t[0].clientX;
-            state.startY = t[0].clientY;
-            sendMove(state.startX, state.startY, state.mask);
+            var mdx = t[0].clientX - state.fx;
+            var mdy = t[0].clientY - state.fy;
+            state.fx = t[0].clientX;
+            state.fy = t[0].clientY;
+            moveCursor(mdx, mdy, state.mask);
         }
     }
 
     function onEnd(e) {
         if (e.touches.length > 0) return; // wait for the last finger
-        if (state.mode === "tap" && !state.moved &&
-                Date.now() - state.startT < TAP_MS) {
-            sendMove(state.startX, state.startY, LEFT);   // tap = click
-            sendMove(state.startX, state.startY, 0);
+        var now = Date.now();
+        if (state.mode === "track" && state.travel <= TAP_SLOP &&
+                now - state.startT < TAP_MS) {
+            click(LEFT);                   // tap = click at the cursor
+            state.lastTapEnd = now;
             clearTimeout(state.longPress);
             state.mode = null;
         } else {
