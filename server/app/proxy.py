@@ -229,6 +229,36 @@ def _inject_touch(body: bytes) -> bytes:
     return body[:idx] + snippet + body[idx:]
 
 
+def _inject_back_link(body: bytes) -> bytes:
+    """A small 'back to dashboard' link on a streamed app's own entry page.
+
+    The Hub's dashboard now sends the user to this page as a real top-level
+    navigation (not an iframe) for streamed apps: the Keyboard Lock API that
+    lets Tab/Escape/Alt/typing reach the remote session is restricted or
+    silently denied inside a nested iframe in some browsers regardless of
+    Permissions-Policy delegation, so the dashboard's old iframe-embedded
+    viewer could never fully match what "Open in window" already got right.
+    Guarded to only show when NOT inside an iframe, so it's harmless if
+    something still embeds this page that way."""
+    if b"</body>" not in body.lower():
+        return body
+    snippet = b"""
+<script>if (window.self === window.top) {
+  var a = document.createElement('a');
+  a.href = '/#/apps';
+  a.textContent = '\\u2190 Dashboard';
+  a.title = 'Back to the SandOS dashboard';
+  a.style.cssText = 'position:fixed;top:10px;left:10px;z-index:2147483000;' +
+    'background:rgba(20,23,28,.75);color:#dde3ec;border:1px solid rgba(255,255,255,.25);' +
+    'border-radius:8px;padding:6px 12px;font:13px system-ui,sans-serif;' +
+    'text-decoration:none;backdrop-filter:blur(4px);';
+  document.body.appendChild(a);
+}</script>
+"""
+    idx = body.lower().rfind(b"</body>")
+    return body[:idx] + snippet + body[idx:]
+
+
 def _inject_pwa(body: bytes, app) -> bytes:
     """Inject this app's PWA manifest/icon/theme into its entry HTML so the popped-out
     window installs as its OWN scoped app. Strips the app's own manifest link so ours
@@ -293,7 +323,8 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
         if app_id == "filebrowser":
             content = _inject_fb_theme_picker(content)
         if streamed:
-            content = _inject_touch(content)  # mobile gestures for the stream
+            content = _inject_touch(content)      # mobile gestures for the stream
+            content = _inject_back_link(content)  # way back when opened top-level
     if streamed and path.rstrip("/") == "turn" and "json" in ct:
         content = _inject_extra_turn(content)
     resp = Response(content=content, status_code=r.status_code, headers=out,
