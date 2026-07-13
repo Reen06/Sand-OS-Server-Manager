@@ -76,6 +76,10 @@ APPS: dict[str, AppDef] = {
         # (vite build --watch) and reload (tsx watch) without a redeploy. The image's
         # node_modules VOLUMEs keep the host tree from shadowing container installs.
         binds=[("/home/control/webcadcam", "/app")],
+        # Persistent pnpm store: the anonymous node_modules volumes die with the
+        # --rm container, so every (re)launch cold-installed for minutes — a warm
+        # store makes that a fast relink (the post-SM-restart "not found" window).
+        mounts=[Mount(name="webcad-pnpm-store", path="/pnpm-store", scope="shared")],
     ),
     "helix": AppDef(
         id="helix",
@@ -94,6 +98,14 @@ APPS: dict[str, AppDef] = {
         # DEV: run live from the bind-mounted source tree (uvicorn --reload +
         # vite build --watch) — edit on the host, validate in the dashboard.
         binds=[("/home/control/CNC_Controller", "/app")],
+        # Named volumes so pip/pnpm installs persist across launches — with the
+        # image's anonymous volumes + --rm, EVERY start was a minutes-long cold
+        # install. First launch still installs; later ones are incremental.
+        mounts=[
+            Mount(name="helix-venv", path="/venv", scope="shared"),
+            Mount(name="helix-node-modules", path="/app/web/node_modules", scope="shared"),
+            Mount(name="helix-pnpm-store", path="/pnpm-store", scope="shared"),
+        ],
         # Subnets its Carvera discovery TCP-sweeps (home LAN + gateway-node LANs).
         env={"HELIX_SCAN_SUBNETS": config.HELIX_SCAN_SUBNETS},
     ),

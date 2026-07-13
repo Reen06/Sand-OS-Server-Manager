@@ -94,7 +94,14 @@ WEBCAD_IMAGE = os.environ.get("SM_WEBCAD_IMAGE", "sm-webcad:dev")
 # discovery TCP-sweeps (:2222) — the hub's home LAN + any gateway-node LANs
 # reachable over WireGuard (UDP broadcast can't cross the docker bridge).
 HELIX_IMAGE = os.environ.get("SM_HELIX_IMAGE", "sm-helix:dev")
-HELIX_SCAN_SUBNETS = os.environ.get("SM_HELIX_SCAN_SUBNETS", "")
+# Default the scan to this host's own /24: the SM host sits on the same LAN as
+# the Carvera, but the app's UDP :3333 discovery can't cross the docker bridge,
+# so the TCP sweep is how the container finds the machine. Env still overrides
+# (e.g. to add gateway-node subnets: "10.0.0.0/24,192.168.50.0/24").
+HELIX_SCAN_SUBNETS = os.environ.get(
+    "SM_HELIX_SCAN_SUBNETS",
+    ".".join(_detect_lan_ip().split(".")[:3]) + ".0/24",
+)
 
 # Ray Optics — 2D geometric optics simulator (a 'web' app). Static build served
 # by nginx; build from containers/rayoptics.
