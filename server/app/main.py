@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, docker_backend, files, glances_svc, hub_auth, metrics, nas, proxy, pwa, registry, snapshots, usb_storage
+from . import app_variants, config, docker_backend, files, glances_svc, hub_auth, metrics, nas, proxy, pwa, registry, snapshots, usb_storage
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -369,6 +369,67 @@ class _SnapBody(BaseModel):
 
 class _RestoreBody(BaseModel):
     file: str
+
+
+class _VariantInstallBody(BaseModel):
+    variant_id: str
+
+
+class _VariantSelectBody(BaseModel):
+    variant_id: str
+
+
+@app.get("/api/apps/{app_id}/variants")
+def app_variants_list(app_id: str, request: Request, dev: bool = False):
+    """Catalog + installed/active state for this app's installable versions.
+    dev=true also lists 'dev' channel entries (e.g. the weekly build)."""
+    _require_app(request, app_id)
+    app = registry.APPS.get(app_id)
+    if app is None:
+        return JSONResponse({"ok": False, "error": "unknown app"}, status_code=404)
+    return {"ok": True, **app_variants.list_variants(app, show_dev=dev)}
+
+
+@app.post("/api/apps/{app_id}/variants/install")
+def app_variants_install(app_id: str, request: Request, body: _VariantInstallBody):
+    """Kick off a build/pull for one variant (background; poll via the list
+    endpoint's `installing` field for progress)."""
+    _require_admin(request)
+    app = registry.APPS.get(app_id)
+    if app is None:
+        return JSONResponse({"ok": False, "error": "unknown app"}, status_code=404)
+    try:
+        return {"ok": True, **app_variants.install(app, body.variant_id)}
+    except (KeyError, ValueError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.post("/api/apps/{app_id}/variants/select")
+def app_variants_select(app_id: str, request: Request, body: _VariantSelectBody):
+    """Switch which installed version future launches use. Takes effect on
+    the NEXT launch — stop + start (or Restart) a running instance to apply."""
+    _require_admin(request)
+    app = registry.APPS.get(app_id)
+    if app is None:
+        return JSONResponse({"ok": False, "error": "unknown app"}, status_code=404)
+    try:
+        return {"ok": True, **app_variants.select(app, body.variant_id)}
+    except (KeyError, ValueError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.post("/api/apps/{app_id}/variants/uninstall")
+def app_variants_uninstall(app_id: str, request: Request, body: _VariantSelectBody):
+    """Remove an installed version's image to free disk. Refused if it's the
+    active version or an instance is currently using it."""
+    _require_admin(request)
+    app = registry.APPS.get(app_id)
+    if app is None:
+        return JSONResponse({"ok": False, "error": "unknown app"}, status_code=404)
+    try:
+        return {"ok": True, **app_variants.uninstall(app, body.variant_id)}
+    except (KeyError, ValueError, RuntimeError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
 @app.post("/api/apps/{app_id}/reset")

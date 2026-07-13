@@ -331,5 +331,6 @@ def spawn(inst: Instance, app: AppDef) -> subprocess.CompletedProcess:
     for k, v in app.env.items():
         args += ["-e", f"{k}={v}"]
 
-    args.append(app.image)
+    from . import app_variants  # deferred: avoids a circular import at load time
+    args.append(app_variants.active_image(app))
     return _docker(args, timeout=120)

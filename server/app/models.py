@@ -11,6 +11,25 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class AppVariant:
+    """One installable version of an app — a specific image build/pull the user
+    can switch to. Presented in the app tile's 'Manage version' menu, grouped by
+    channel (stable vs development)."""
+    id: str                 # "stable" | "weekly-dev" | future custom ids
+    label: str              # "Stable 1.1.1" | "Latest weekly dev build"
+    channel: str = "stable" # "stable" | "dev" — dev entries only show once the
+                            # per-app dev-channel toggle is on
+    image_tag: str = ""     # local docker tag this variant installs/runs as
+    kind: str = "build"     # "build" (docker build from build_context) | "pull"
+    build_args: dict[str, str] = field(default_factory=dict)
+    source: str = ""        # image ref to pull, when kind == "pull"
+    resolver: str = ""      # name of a resolve_* fn in app_variants.py that
+                            # computes build_args/source dynamically before
+                            # install (e.g. "freecad-weekly" looks up the
+                            # latest weekly release from GitHub each install)
+
+
+@dataclass
 class Service:
     """A sidecar container in an app's stack — the DB/cache/etc. behind a web app
     (e.g. MariaDB + Redis for Nextcloud). Runs on the app's private network,
@@ -93,6 +112,15 @@ class AppDef:
     # a DEV app that runs live from a bind-mounted source tree (edit on the host →
     # rebuild/reload in the container). Empty for every normal app.
     binds: list[tuple[str, str]] = field(default_factory=list)
+    # Installable versions this app offers (empty = no version manager UI; the
+    # app just always runs `image` as today). build_context is the Dockerfile
+    # directory for "build"-kind variants, relative to the SM repo root.
+    variants: list[AppVariant] = field(default_factory=list)
+    build_context: str = ""
+    # docker repo name (no tag) covering all this app's variant images, for
+    # disk-usage listing — e.g. "freecad-streamer" for both "dev" and
+    # "weekly-dev" tags.
+    image_family: str = ""
 
     @property
     def streamed(self) -> bool:

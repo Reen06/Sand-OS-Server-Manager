@@ -6,7 +6,7 @@ reconciled from Docker on startup (single-node MVP)."""
 from __future__ import annotations
 import re
 import threading
-from .models import AppDef, Instance, Mount, Service
+from .models import AppDef, AppVariant, Instance, Mount, Service
 from . import config, docker_backend
 
 # ── App catalogue (add more App Definitions here) ──────────────────────────────
@@ -37,6 +37,25 @@ APPS: dict[str, AppDef] = {
             # nodes. Also what "snapshot" and "factory reset" operate on.
             Mount(name="freecad-config", path="/home/ubuntu/.config", scope="per-user", storage="nfs"),
             Mount(name="freecad-share", path="/home/ubuntu/.local/share", scope="per-user", storage="nfs"),
+        ],
+        # Installable versions — Manage version… in the app tile's gear menu.
+        # "dev" installs whatever FreeCAD/FreeCAD's current weekly build is at
+        # install time (rolling; the resolver re-checks GitHub each install).
+        build_context="containers/freecad-streamer",
+        image_family="freecad-streamer",
+        variants=[
+            AppVariant(
+                id="stable", label="Stable 1.1.1", channel="stable",
+                image_tag="freecad-streamer:dev",
+                build_args={"FREECAD_APPIMAGE_URL":
+                    "https://github.com/FreeCAD/FreeCAD/releases/download/1.1.1/"
+                    "FreeCAD_1.1.1-Linux-x86_64-py311.AppImage"},
+            ),
+            AppVariant(
+                id="weekly-dev", label="Latest weekly dev build", channel="dev",
+                image_tag="freecad-streamer:weekly-dev",
+                resolver="freecad-weekly",
+            ),
         ],
     ),
     "filebrowser": AppDef(
