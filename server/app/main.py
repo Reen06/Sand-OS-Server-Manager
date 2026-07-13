@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, docker_backend, files, glances_svc, hub_auth, metrics, nas, proxy, pwa, registry, snapshots
+from . import config, docker_backend, files, glances_svc, hub_auth, metrics, nas, proxy, pwa, registry, snapshots, usb_storage
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -23,6 +23,7 @@ app = FastAPI(title="Sand-OS Server Manager")
 
 @app.on_event("startup")
 def _startup() -> None:
+    usb_storage.start_poller()   # auto-mount marked USB drives
     registry.reconcile_from_docker()
     glances_svc.start()   # local Glances REST server for the Fleet monitor panel
 
@@ -73,6 +74,35 @@ def _require_admin(request: Request) -> dict:
 
 
 # ── Fleet NAS: shared-folder management (admin-only) ──────────────────────────
+@app.get("/api/nas/usb")
+def usb_list(request: Request):
+    _require_admin(request)
+    return {"ok": True, "devices": usb_storage.list_devices()}
+
+
+class _UsbAssignBody(BaseModel):
+    uuid: str
+    target: str   # 'shared' | 'user:<name>'
+
+
+@app.post("/api/nas/usb/assign")
+def usb_assign(request: Request, body: _UsbAssignBody):
+    _require_admin(request)
+    try:
+        return {"ok": True, **usb_storage.assign(body.uuid, body.target)}
+    except (ValueError, FileNotFoundError, RuntimeError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.post("/api/nas/usb/eject")
+def usb_eject(request: Request, body: _UsbAssignBody):
+    _require_admin(request)
+    try:
+        return {"ok": True, **usb_storage.eject(body.uuid)}
+    except FileNotFoundError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
+
+
 @app.get("/api/nas/shared")
 def nas_shared_list(request: Request):
     _require_admin(request)

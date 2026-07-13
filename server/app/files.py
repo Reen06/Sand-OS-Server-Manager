@@ -50,6 +50,9 @@ def list_roots(user: str) -> list[dict]:
         if members and user not in members:
             continue
         roots.append({"id": f"shared:{folder['name']}", "label": f"{folder['name']} (Shared)"})
+    from . import usb_storage  # lazy: avoid import cycle
+    roots.extend(
+        {"id": r["id"], "label": r["label"]} for r in usb_storage.roots_for(user))
     return roots
 
 
@@ -59,6 +62,12 @@ def _root_base(root_id: str, user: str) -> str:
         raise ValueError("no access to that folder")
     if root_id == "home":
         return _home_dir(user)
+    if root_id.startswith("usb:"):
+        from . import usb_storage
+        for r in usb_storage.roots_for(user):
+            if r["id"] == root_id:
+                return r["path"]
+        raise ValueError("USB drive no longer available")
     return _shared_dir(root_id[len("shared:"):])
 
 
