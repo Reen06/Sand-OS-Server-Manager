@@ -23,7 +23,11 @@ from . import config, nas
 
 
 def _safe_user(user: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_.-]+", "-", user or "").strip("-") or "user"
+    """MUST match docker_backend._safe: the NFS home subpath is users/{safe},
+    and the app containers (FreeCAD/Filebrowser) mount the lowercased form.
+    A case-preserving version here split 'Braeden' into users/Braeden (picker)
+    vs users/braeden (apps) — files no longer followed the user across apps."""
+    return re.sub(r"[^a-z0-9]+", "-", (user or "").lower()).strip("-") or "user"
 
 
 def _home_dir(user: str) -> str:

@@ -203,6 +203,32 @@ def _inject_fb_theme_picker(body: bytes) -> bytes:
         return body
 
 
+# Mobile touch layer for streamed (Selkies) apps: RDP/VNC-viewer style gestures
+# (tap/drag/long-press-right-click, pinch = local view zoom, 2-finger scroll,
+# 3-finger middle-drag) + a soft-keyboard button. Served from disk like the
+# theme bundles; no change to the streamed app's image.
+_TOUCH_JS = Path(__file__).parent / "static" / "sm_touch.js"
+
+
+def _touch_asset(path: str) -> Response | None:
+    if path != "__sm_touch.js":
+        return None
+    if not _TOUCH_JS.is_file():
+        return Response(status_code=404)
+    return FileResponse(_TOUCH_JS, media_type="text/javascript",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
+def _inject_touch(body: bytes) -> bytes:
+    """Reference the touch layer from a streamed app's entry page. The script
+    itself no-ops on non-touch devices, so injecting unconditionally is safe."""
+    if b"</body>" not in body.lower():
+        return body
+    snippet = b'\n<script src="__sm_touch.js" defer></script>\n'
+    idx = body.lower().rfind(b"</body>")
+    return body[:idx] + snippet + body[idx:]
+
+
 def _inject_pwa(body: bytes, app) -> bytes:
     """Inject this app's PWA manifest/icon/theme into its entry HTML so the popped-out
     window installs as its OWN scoped app. Strips the app's own manifest link so ours
@@ -225,6 +251,9 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
         asset = _fb_theme_asset(path)
         if asset is not None:
             return asset
+    touch = _touch_asset(path)
+    if touch is not None:
+        return touch
     port = _instance_port(app_id, user)
     if port is None:
         log.warning("HTTP %s /%s user=%s → no running instance", request.method, path, user)
@@ -263,6 +292,8 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
         content = _inject_pwa(content, app)   # make the popped-out app its own PWA
         if app_id == "filebrowser":
             content = _inject_fb_theme_picker(content)
+        if streamed:
+            content = _inject_touch(content)  # mobile gestures for the stream
     if streamed and path.rstrip("/") == "turn" and "json" in ct:
         content = _inject_extra_turn(content)
     resp = Response(content=content, status_code=r.status_code, headers=out,
