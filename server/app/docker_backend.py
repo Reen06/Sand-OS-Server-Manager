@@ -186,6 +186,12 @@ def _nfs_target(user: str, m) -> tuple[str, str]:
         return "", "sm-nfs-root"
     if m.scope == "shared":
         return f"{config.NAS_SHARED_SUBPATH}/{_safe(m.name)}", f"sm-nfs-shared-{_safe(m.name)}"
+    if m.name != "home":
+        # named per-user mount → a private .appdata corner of the user's home:
+        # app settings (e.g. FreeCAD ~/.config) persist across relaunches AND
+        # follow the user to any node, and snapshots are plain file copies.
+        sub = f"{config.NAS_USERS_SUBPATH}/{_safe(user)}/.appdata/{_safe(m.name)}"
+        return sub, f"sm-nfs-users-{_safe(user)}-{_safe(m.name)}"
     return f"{config.NAS_USERS_SUBPATH}/{_safe(user)}", f"sm-nfs-users-{_safe(user)}"
 
 
@@ -280,6 +286,8 @@ def spawn(inst: Instance, app: AppDef) -> subprocess.CompletedProcess:
                     stderr=f"service '{svc.name}' not ready in time")
 
     args = ["run", "--name", inst.name, "-d", "--rm", "-e", "TZ=UTC"]
+    if getattr(app, "mem_limit", ""):
+        args += ["--memory", app.mem_limit]
     if net:
         args += ["--network", net]
     if app.gpu:

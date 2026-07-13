@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, docker_backend, files, glances_svc, hub_auth, metrics, nas, proxy, pwa, registry
+from . import config, docker_backend, files, glances_svc, hub_auth, metrics, nas, proxy, pwa, registry, snapshots
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -304,6 +304,52 @@ def launch(app_id: str, request: Request):
 def stop(app_id: str, request: Request):
     registry.stop(app_id, _require_app(request, app_id)["username"])
     return {"ok": True, "status": "stopped"}
+
+
+# ── Per-user app state: factory reset + snapshots (NAS .appdata) ───────────────
+class _SnapBody(BaseModel):
+    label: str = ""
+
+
+class _RestoreBody(BaseModel):
+    file: str
+
+
+@app.post("/api/apps/{app_id}/reset")
+def app_reset(app_id: str, request: Request):
+    """Factory defaults: stop + wipe the app's per-user settings. Files kept."""
+    user = _require_app(request, app_id)["username"]
+    if not snapshots.has_appdata(app_id):
+        return JSONResponse({"ok": False, "error": "app keeps no per-user settings"}, status_code=400)
+    return {"ok": True, **snapshots.reset(app_id, user)}
+
+
+@app.get("/api/apps/{app_id}/snapshots")
+def app_snapshots(app_id: str, request: Request):
+    user = _require_app(request, app_id)["username"]
+    return {"ok": True, "snapshots": snapshots.list_snapshots(app_id, user),
+            "supported": snapshots.has_appdata(app_id)}
+
+
+@app.post("/api/apps/{app_id}/snapshot")
+def app_snapshot(app_id: str, request: Request, body: _SnapBody):
+    """Save this app's current per-user settings to the user's NAS folder
+    (users/<u>/snapshots/) — restorable on any node in the fleet."""
+    user = _require_app(request, app_id)["username"]
+    try:
+        return {"ok": True, **snapshots.snapshot(app_id, user, body.label)}
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.post("/api/apps/{app_id}/restore")
+def app_restore(app_id: str, request: Request, body: _RestoreBody):
+    """Stop the app and load a saved snapshot; next launch uses those settings."""
+    user = _require_app(request, app_id)["username"]
+    try:
+        return {"ok": True, **snapshots.restore(app_id, user, body.file)}
+    except (FileNotFoundError, ValueError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
 
 
 @app.get("/api/apps/{app_id}/status")

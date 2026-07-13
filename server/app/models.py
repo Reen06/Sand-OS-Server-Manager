@@ -85,6 +85,9 @@ class AppDef:
     sso_header: str | None = None
     # keep-alive after disconnect before the instance is stopped; 0 = close right away
     keepalive_seconds: int = 600
+    # docker --memory hard cap (e.g. "3g"); "" = uncapped. Prevents one runaway
+    # app from OOMing the whole node.
+    mem_limit: str = ""
     # Extra host→container bind mounts as (host_path, container_path). Unlike Mounts
     # (the NAS/volume layer), these bind a real host directory straight in — used for
     # a DEV app that runs live from a bind-mounted source tree (edit on the host →

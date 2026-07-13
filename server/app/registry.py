@@ -22,6 +22,7 @@ APPS: dict[str, AppDef] = {
         mode="per-user",
         internal_port=8080,
         gpu=True,
+        mem_limit="3g",
         encoder="nvh264enc",
         keepalive_seconds=600,
         # The user's NAS home over NFS — the SAME files they see in Nextcloud,
@@ -31,6 +32,11 @@ APPS: dict[str, AppDef] = {
         mounts=[
             Mount(name="home", path="/home/ubuntu/NAS", scope="per-user", storage="nfs"),
             Mount(name="home", path="/mnt/freecad-projects", scope="per-user", storage="nfs"),
+            # Persistent per-user app settings (NAS .appdata/*): preferences,
+            # toolbars, macros survive relaunches and follow the user across
+            # nodes. Also what "snapshot" and "factory reset" operate on.
+            Mount(name="freecad-config", path="/home/ubuntu/.config", scope="per-user", storage="nfs"),
+            Mount(name="freecad-share", path="/home/ubuntu/.local/share", scope="per-user", storage="nfs"),
         ],
     ),
     "filebrowser": AppDef(
@@ -44,6 +50,7 @@ APPS: dict[str, AppDef] = {
         mode="per-user",
         internal_port=8080,
         gpu=False,
+        mem_limit="512m",
         # The NAS made visible: a private home (per-user) + a library every app
         # and user shares. 'media' resolves to sm-shared-media (also mounted by a
         # future Jellyfin) — proving shared-across-apps data.
@@ -69,6 +76,7 @@ APPS: dict[str, AppDef] = {
         mode="shared",              # one host; per-connection sessions isolate users
         internal_port=8137,         # the Node host serves client + WebSocket here
         gpu=False,
+        mem_limit="2g",
         # The host serves the client bundle at root and the client uses relative asset
         # URLs (vite base "./"), so the proxy strips the /apps/stream/webcad prefix.
         proxy_subpath="root",
@@ -92,6 +100,7 @@ APPS: dict[str, AppDef] = {
         mode="shared",              # one machine, one controller connection
         internal_port=8556,         # FastAPI serves dashboard + API + WebSocket
         gpu=False,
+        mem_limit="2g",
         # The bundle uses relative URLs (vite base "./"), so the proxy strips the
         # /apps/stream/helix prefix like WebCAD.
         proxy_subpath="root",
@@ -120,6 +129,7 @@ APPS: dict[str, AppDef] = {
         mode="shared",       # one static site for everyone; saving is per-user via /api/files
         internal_port=80,
         gpu=False,
+        mem_limit="256m",
         # A plain static build (nginx) served at container root — no baseURL
         # awareness, so the proxy strips to root like Nextcloud/WebCAD.
         proxy_subpath="root",
@@ -135,6 +145,7 @@ APPS: dict[str, AppDef] = {
         mode="shared",              # ONE Nextcloud, per-user accounts inside it
         internal_port=80,
         gpu=False,
+        mem_limit="1536m",
         # Nextcloud serves at root and rewrites its own links via OVERWRITEWEBROOT,
         # so the proxy strips the subpath; and it SSOs via a trusted Remote-User
         # header (user_saml environment-variable backend) → no second login.
