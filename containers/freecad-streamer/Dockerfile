@@ -32,6 +32,18 @@ RUN set -eux; \
     sed -i "s/time\.sleep(2)/await asyncio.sleep(2)/g" "$f"; \
     ! grep -q "           time.sleep(2)" "$f"
 
+# Disable gst-web's hidden Ctrl+Shift+LeftClick -> requestPointerLock() hotkey.
+# FreeCAD uses Ctrl+Click and Shift+Click constantly for selection (e.g. when
+# placing/editing a Sketcher dimension), so this silently grabbed the pointer
+# mid-workflow with no warning — surprising the user with what looks like an
+# unwanted auto-fullscreen. The toolbar's explicit Fullscreen button (added in
+# the Hub viewer) is the deliberate, visible way to get pointer lock now.
+RUN set -eux; \
+    f=/opt/gst-web/input.js; \
+    grep -q "if (down && event.button === 0 && event.ctrlKey && event.shiftKey) {" "$f"; \
+    sed -i "s/if (down && event.button === 0 && event.ctrlKey && event.shiftKey) {/if (false \&\& down \&\& event.button === 0 \&\& event.ctrlKey \&\& event.shiftKey) { \/\/ disabled: surprised users, FreeCAD uses Ctrl+Shift+Click for selection/" "$f"; \
+    grep -q "if (false && down" "$f"
+
 # Fetch + unpack the AppImage (extract, not FUSE-mount, so it works in-build).
 RUN set -eux; \
     apt-get update; \

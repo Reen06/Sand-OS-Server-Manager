@@ -24,10 +24,36 @@ export DISPLAY="${DISPLAY:-:0}"
     sleep 1
   done ) &
 
+# Restore the user's preferences from FreeCAD's own auto-backup before every
+# (re)launch. Verified empirically: the Server Manager tears an instance down
+# with `docker rm -f` (instant SIGKILL, no grace period) and even a clean
+# SIGTERM/window-close does NOT make FreeCAD write its live user.cfg — so
+# settings (dark mode, navigation style, ...) never survived a restart despite
+# .config/.local persisting on the NAS. What DOES survive: FreeCAD's own
+# SavedPreferencePacks/Backups/user.<epoch>.cfg snapshots, written throughout
+# the session as preferences change. Seeding the live user.cfg from the newest
+# one before each launch makes settings durable across restarts/crashes/kills
+# without depending on a graceful-shutdown path that doesn't actually exist.
+restore_freecad_prefs() {
+  local backups="$HOME/.local/share/FreeCAD/v1-1/SavedPreferencePacks/Backups"
+  [ -d "$backups" ] || return 0
+  local latest
+  latest="$(ls -t "$backups"/user.*.cfg 2>/dev/null | head -1)"
+  [ -n "$latest" ] || return 0
+  for dest in "$HOME/.config/FreeCAD/v1-1/user.cfg" "$HOME/.local/share/FreeCAD/v1-1/user.cfg"; do
+    # Don't clobber a live file that's already newer (e.g. a rare clean exit).
+    if [ ! -f "$dest" ] || [ "$latest" -nt "$dest" ]; then
+      mkdir -p "$(dirname "$dest")"
+      cp "$latest" "$dest"
+    fi
+  done
+}
+
 # Keep FreeCAD up: launch it maximized; relaunch if it exits. Guard against a
 # tight crash loop (5 exits in under 5s each → give up so we don't spin).
 fast_fails=0
 while true; do
+  restore_freecad_prefs
   # Make FreeCAD truly fullscreen (fills the display, no decorations/margin) so
   # it looks native — no black border. Match by window CLASS (precise: skips the
   # transient startup windows) and re-apply for a while, since the window appears
