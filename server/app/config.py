@@ -138,8 +138,16 @@ NC_OVERWRITE_HOST = os.environ.get("SM_NC_OVERWRITE_HOST", "")
 SLOT_COUNT = int(os.environ.get("SM_SLOT_COUNT", "16"))
 WEB_PORT_BASE = int(os.environ.get("SM_WEB_PORT_BASE", "8100"))   # 8100, 8101, ...
 TURN_PORT_BASE = int(os.environ.get("SM_TURN_PORT_BASE", "13478")) # 13478, 13479, ...
-RELAY_BASE = int(os.environ.get("SM_RELAY_BASE", "40000"))         # 8 ports per slot
-RELAY_PER_SLOT = 8
+RELAY_BASE = int(os.environ.get("SM_RELAY_BASE", "40000"))
+# 8 ports/slot was too tight: coturn only frees a stale TURN allocation on its
+# periodic watchdog sweep, not the instant a client disconnects, so a burst of
+# WebRTC reconnect attempts (e.g. during a rocky first negotiation) can each
+# grab a couple of relay ports faster than old ones get reclaimed — the pool
+# empties, every further attempt then fails outright with coturn's own
+# "no available ports" / error 508 "Cannot create socket", and the client's
+# retry loop just keeps failing until enough allocations time out on their
+# own. 32 gives real headroom to absorb that burst instead of amplifying it.
+RELAY_PER_SLOT = int(os.environ.get("SM_RELAY_PER_SLOT", "32"))
 # Extra TURN host injected alongside the LAN IP in the /turn ICE-server response.
 # Set to the WireGuard IP (e.g. 10.79.114.1) so VPN/mobile clients — who can't
 # reach the LAN IP directly — also get a TURN candidate they can use.
