@@ -103,6 +103,10 @@ HELIX_SCAN_SUBNETS = os.environ.get(
     ".".join(_detect_lan_ip().split(".")[:3]) + ".0/24",
 )
 
+# OpenMapper — browser-native lighting/projection controller. Build from
+# /home/control/OpenMapper/app/Dockerfile.
+OPENMAPPER_IMAGE = os.environ.get("SM_OPENMAPPER_IMAGE", "sm-openmapper:dev")
+
 # Ray Optics — 2D geometric optics simulator (a 'web' app). Static build served
 # by nginx; build from containers/rayoptics.
 RAYOPTICS_IMAGE = os.environ.get("SM_RAYOPTICS_IMAGE", "sm-rayoptics:latest")

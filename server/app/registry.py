@@ -118,6 +118,21 @@ APPS: dict[str, AppDef] = {
         # Subnets its Carvera discovery TCP-sweeps (home LAN + gateway-node LANs).
         env={"HELIX_SCAN_SUBNETS": config.HELIX_SCAN_SUBNETS},
     ),
+    "openmapper": AppDef(
+        id="openmapper",
+        label="OpenMapper",
+        icon="zap",
+        color="cyan",
+        desc="Touch-first lighting and projection controller with simulated lights.",
+        image=config.OPENMAPPER_IMAGE,
+        kind="web",
+        mode="shared",
+        internal_port=8080,
+        gpu=False,
+        mem_limit="512m",
+        proxy_subpath="root",
+        mounts=[Mount(name="openmapper-projects", path="/data", scope="shared", storage="nfs")],
+    ),
     "rayoptics": AppDef(
         id="rayoptics",
         label="Ray Optics",
