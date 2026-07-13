@@ -1,0 +1,35 @@
+#!/bin/bash
+# Root helper: graft a mounted USB drive into the NAS tree (and remove it).
+# Installed at /usr/local/bin/sandos-usb-bind, allowed via sudoers for the SM
+# user — the ONLY privileged operation the USB feature needs. Arguments are
+# strictly validated so the grant can't be turned into a generic mount/umount.
+#
+#   sandos-usb-bind bind   /media/<user>/<drive>  <NAS>/users/<u>/USB-<label>
+#   sandos-usb-bind bind   /media/<user>/<drive>  <NAS>/shared/media/USB-<label>
+#   sandos-usb-bind unbind <NAS>/.../USB-<label>
+set -euo pipefail
+NAS="${NAS_ROOT:-/home/control/sandos-nas}"
+
+case "${1:-}" in
+  bind)
+    src="${2:-}"; dst="${3:-}"
+    [[ "$src" == /media/* || "$src" == /run/media/* ]] || { echo "bad src" >&2; exit 2; }
+    [[ "$dst" == "$NAS"/users/*/USB-* || "$dst" == "$NAS"/shared/media/USB-* ]] \
+        || { echo "bad dst" >&2; exit 2; }
+    [[ "$src" == *..* || "$dst" == *..* ]] && { echo "bad path" >&2; exit 2; }
+    mkdir -p "$dst"
+    mountpoint -q "$dst" && exit 0     # already grafted
+    mount --bind "$src" "$dst"
+    ;;
+  unbind)
+    dst="${2:-}"
+    [[ "$dst" == "$NAS"/users/*/USB-* || "$dst" == "$NAS"/shared/media/USB-* ]] \
+        || { echo "bad dst" >&2; exit 2; }
+    if mountpoint -q "$dst"; then umount "$dst"; fi
+    rmdir "$dst" 2>/dev/null || true
+    ;;
+  *)
+    echo "usage: sandos-usb-bind bind <src> <dst> | unbind <dst>" >&2
+    exit 2
+    ;;
+esac

@@ -92,6 +92,33 @@ def _mount(name: str) -> str | None:
     return m.group(1).rstrip(".") if m else None
 
 
+def _nas_target(assign_to: str, label: str) -> str:
+    """Where an assigned drive grafts into the NAS tree (thus every app):
+    user drives inside the user's home, shared drives inside the media library."""
+    safe_label = re.sub(r"[^A-Za-z0-9_-]+", "-", label).strip("-") or "drive"
+    if assign_to == "shared":
+        return os.path.join(config.NAS_ROOT, config.NAS_SHARED_SUBPATH,
+                            "media", f"USB-{safe_label}")
+    user = re.sub(r"[^a-z0-9]+", "-", assign_to[len("user:"):].lower()).strip("-")
+    return os.path.join(config.NAS_ROOT, config.NAS_USERS_SUBPATH, user,
+                        f"USB-{safe_label}")
+
+
+def _graft(mountpoint: str, assign_to: str, label: str) -> str | None:
+    """Bind the drive into the NAS tree via the root helper (sudoers-gated)."""
+    target = _nas_target(assign_to, label)
+    r = subprocess.run(["sudo", "-n", "/usr/local/bin/sandos-usb-bind",
+                        "bind", mountpoint, target],
+                       capture_output=True, text=True, timeout=15)
+    return target if r.returncode == 0 else None
+
+
+def _ungraft(assign_to: str, label: str) -> None:
+    subprocess.run(["sudo", "-n", "/usr/local/bin/sandos-usb-bind",
+                    "unbind", _nas_target(assign_to, label)],
+                   capture_output=True, text=True, timeout=15)
+
+
 def _marker_path(mountpoint: str) -> str | None:
     for name in [MARKER, *_LEGACY_MARKERS]:
         path = os.path.join(mountpoint, name)
@@ -151,10 +178,13 @@ def assign(uuid: str, target: str) -> dict:
             "mount failed — headless mounting needs the polkit rule in "
             "usb_storage.py's docstring installed once")
     _write_marker(mountpoint, uuid, target, part["label"])
+    nas_path = _graft(mountpoint, target, part["label"])
     state = _load_state()
     state[uuid] = {"assign": target, "label": part["label"]}
     _save_state(state)
-    return {"uuid": uuid, "mountpoint": mountpoint, "assign": target}
+    return {"uuid": uuid, "mountpoint": mountpoint, "assign": target,
+            "nas_path": nas_path,
+            "nas_visible": nas_path is not None}
 
 
 def forget(uuid: str) -> dict:
@@ -165,6 +195,11 @@ def forget(uuid: str) -> dict:
     _save_state(state)
     removed = False
     part = next((p for p in usb_partitions() if p["uuid"] == uuid), None)
+    if part:
+        marker = _read_marker(part["mountpoint"]) if part["mountpoint"] else None
+        info = marker or {}
+        if info.get("assign"):
+            _ungraft(info["assign"], info.get("label") or part["label"])
     if part and part["mountpoint"]:
         path = _marker_path(part["mountpoint"])
         while path:
@@ -182,6 +217,9 @@ def format_drive(uuid: str, fs: str = "vfat") -> dict:
     part = next((p for p in usb_partitions() if p["uuid"] == uuid), None)
     if part is None:
         raise FileNotFoundError(uuid)
+    known = _load_state().get(uuid, {})
+    if known.get("assign"):
+        _ungraft(known["assign"], known.get("label") or part["label"])
     if part["mountpoint"]:
         subprocess.run(["udisksctl", "unmount", "-b", f"/dev/{part['name']}",
                         "--no-user-interaction"],
@@ -203,6 +241,9 @@ def eject(uuid: str) -> dict:
     part = next((p for p in usb_partitions() if p["uuid"] == uuid), None)
     if part is None:
         raise FileNotFoundError(uuid)
+    known = _load_state().get(uuid, {})
+    if known.get("assign"):
+        _ungraft(known["assign"], known.get("label") or part["label"])
     if part["mountpoint"]:
         subprocess.run(["udisksctl", "unmount", "-b", f"/dev/{part['name']}",
                         "--no-user-interaction"],
@@ -234,9 +275,16 @@ def _poll_loop() -> None:
             for part in usb_partitions():
                 if part["mountpoint"] is None and part["uuid"] in state:
                     mp = _mount(part["name"])  # re-inserted known drive
-                    if mp and not _read_marker(mp):
-                        info = state[part["uuid"]]
-                        _write_marker(mp, part["uuid"], info["assign"], info["label"])
+                    info = state[part["uuid"]]
+                    if mp:
+                        if not _read_marker(mp):
+                            _write_marker(mp, part["uuid"], info["assign"], info["label"])
+                        _graft(mp, info["assign"], info["label"])
+                elif part["mountpoint"] and part["uuid"] in state:
+                    info = state[part["uuid"]]
+                    target = _nas_target(info["assign"], info["label"])
+                    if not os.path.ismount(target):
+                        _graft(part["mountpoint"], info["assign"], info["label"])
         except Exception:  # noqa: BLE001
             pass
         time.sleep(_POLL_S)

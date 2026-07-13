@@ -14,10 +14,12 @@ NAS_GID="${NAS_GID:-1000}"
 
 mkdir -p "$NAS_ROOT/users" "$NAS_ROOT/shared"
 docker rm -f sandos-nfs >/dev/null 2>&1 || true
+# :rshared + crossmnt: USB drives bind-mounted into the NAS tree AFTER the
+# container starts still propagate into /nfs and get exported to clients.
 docker run -d --name sandos-nfs --privileged --restart unless-stopped \
-  -v "$NAS_ROOT":/nfs \
+  --mount type=bind,source="$NAS_ROOT",target=/nfs,bind-propagation=rshared \
   -v /lib/modules:/lib/modules:ro \
-  -e NFS_EXPORT_0="/nfs *(rw,fsid=0,sync,no_subtree_check,insecure,all_squash,anonuid=${NAS_UID},anongid=${NAS_GID})" \
+  -e NFS_EXPORT_0="/nfs *(rw,fsid=0,crossmnt,sync,no_subtree_check,insecure,all_squash,anonuid=${NAS_UID},anongid=${NAS_GID})" \
   -p 2049:2049 \
   erichough/nfs-server:latest
 echo "sandos-nfs started — exporting $NAS_ROOT over NFSv4 (:2049), all_squash -> ${NAS_UID}:${NAS_GID}"
