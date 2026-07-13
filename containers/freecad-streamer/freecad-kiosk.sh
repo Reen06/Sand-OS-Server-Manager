@@ -40,12 +40,20 @@ restore_freecad_prefs() {
   local latest
   latest="$(ls -t "$backups"/user.*.cfg 2>/dev/null | head -1)"
   [ -n "$latest" ] || return 0
+  # ALWAYS overwrite — no "only if newer" guard. That guard was the actual bug:
+  # .config/.local persist on the NAS across a full stop+relaunch (not just a
+  # `docker restart`), so the STALE live user.cfg from the previous session is
+  # still sitting there with its own (often newer, e.g. FreeCAD re-touches it
+  # on its own read/normalize pass) mtime — so "-nt" would decide the stale
+  # file looked newer than the very backup that was seeded FROM it last time,
+  # and skip the restore, silently keeping old settings. There is no clean-
+  # shutdown path that legitimately makes the live file MORE current than the
+  # newest backup (verified: neither SIGTERM nor a graceful window-close ever
+  # updates it correctly) — the backup is always the right answer.
+  echo "[freecad-kiosk] restoring prefs from $(basename "$latest")"
   for dest in "$HOME/.config/FreeCAD/v1-1/user.cfg" "$HOME/.local/share/FreeCAD/v1-1/user.cfg"; do
-    # Don't clobber a live file that's already newer (e.g. a rare clean exit).
-    if [ ! -f "$dest" ] || [ "$latest" -nt "$dest" ]; then
-      mkdir -p "$(dirname "$dest")"
-      cp "$latest" "$dest"
-    fi
+    mkdir -p "$(dirname "$dest")"
+    cp "$latest" "$dest"
   done
 }
 
