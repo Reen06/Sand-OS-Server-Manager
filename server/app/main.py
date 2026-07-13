@@ -94,6 +94,32 @@ def usb_assign(request: Request, body: _UsbAssignBody):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
+@app.post("/api/nas/usb/forget")
+def usb_forget(request: Request, body: _UsbAssignBody):
+    """Remove the drive's SandOS metadata (marker + server memory). Data kept."""
+    _require_admin(request)
+    return {"ok": True, **usb_storage.forget(body.uuid)}
+
+
+class _UsbFormatBody(BaseModel):
+    uuid: str
+    fs: str = "vfat"
+    confirm: bool = False
+
+
+@app.post("/api/nas/usb/format")
+def usb_format(request: Request, body: _UsbFormatBody):
+    """FULL ERASE of the partition. Requires confirm=true."""
+    _require_admin(request)
+    if not body.confirm:
+        return JSONResponse({"ok": False, "error": "formatting erases everything; confirm=true required"},
+                            status_code=428)
+    try:
+        return {"ok": True, **usb_storage.format_drive(body.uuid, body.fs)}
+    except (ValueError, FileNotFoundError, RuntimeError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
 @app.post("/api/nas/usb/eject")
 def usb_eject(request: Request, body: _UsbAssignBody):
     _require_admin(request)

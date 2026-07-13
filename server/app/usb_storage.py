@@ -30,7 +30,8 @@ import time
 
 from . import config
 
-MARKER = "sandos-storage.md"
+MARKER = ".sandos-storage.md"          # hidden by default
+_LEGACY_MARKERS = ["sandos-storage.md"]  # still honored/cleaned up
 _STATE_FILE = os.path.join(config.NAS_ROOT, ".usb-state.json")
 _POLL_S = 10
 
@@ -91,9 +92,17 @@ def _mount(name: str) -> str | None:
     return m.group(1).rstrip(".") if m else None
 
 
+def _marker_path(mountpoint: str) -> str | None:
+    for name in [MARKER, *_LEGACY_MARKERS]:
+        path = os.path.join(mountpoint, name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 def _read_marker(mountpoint: str) -> dict | None:
-    path = os.path.join(mountpoint, MARKER)
-    if not os.path.isfile(path):
+    path = _marker_path(mountpoint)
+    if path is None:
         return None
     meta = {}
     for line in open(path).read().splitlines():
@@ -146,6 +155,48 @@ def assign(uuid: str, target: str) -> dict:
     state[uuid] = {"assign": target, "label": part["label"]}
     _save_state(state)
     return {"uuid": uuid, "mountpoint": mountpoint, "assign": target}
+
+
+def forget(uuid: str) -> dict:
+    """Unregister a drive from this OS: delete its marker file(s) and the
+    server-side state entry. The drive's DATA is untouched."""
+    state = _load_state()
+    state.pop(uuid, None)
+    _save_state(state)
+    removed = False
+    part = next((p for p in usb_partitions() if p["uuid"] == uuid), None)
+    if part and part["mountpoint"]:
+        path = _marker_path(part["mountpoint"])
+        while path:
+            os.remove(path)
+            removed = True
+            path = _marker_path(part["mountpoint"])
+    return {"uuid": uuid, "forgotten": True, "marker_removed": removed}
+
+
+def format_drive(uuid: str, fs: str = "vfat") -> dict:
+    """FULL ERASE: unmount and reformat the partition (everything is lost).
+    Uses udisks2 over D-Bus so the same polkit grant covers it headless."""
+    if fs not in ("vfat", "exfat", "ext4"):
+        raise ValueError("fs must be vfat, exfat or ext4")
+    part = next((p for p in usb_partitions() if p["uuid"] == uuid), None)
+    if part is None:
+        raise FileNotFoundError(uuid)
+    if part["mountpoint"]:
+        subprocess.run(["udisksctl", "unmount", "-b", f"/dev/{part['name']}",
+                        "--no-user-interaction"],
+                       capture_output=True, text=True, timeout=30)
+    r = subprocess.run(
+        ["busctl", "call", "org.freedesktop.UDisks2",
+         f"/org/freedesktop/UDisks2/block_devices/{part['name']}",
+         "org.freedesktop.UDisks2.Block", "Format", "sa{sv}", fs, "0"],
+        capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise RuntimeError(f"format failed: {r.stderr.strip() or r.stdout.strip()}")
+    state = _load_state()
+    state.pop(uuid, None)   # old uuid is gone with the old filesystem
+    _save_state(state)
+    return {"uuid": uuid, "formatted": True, "fs": fs}
 
 
 def eject(uuid: str) -> dict:
