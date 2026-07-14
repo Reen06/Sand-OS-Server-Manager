@@ -281,6 +281,26 @@ def _piped_transfer(src_cmd: list[str], dst_cmd: list[str], job: dict | None,
         raise RuntimeError(b"".join(out_chunks).decode(errors="replace").strip() or "image transfer failed")
 
 
+def _prune_docker(host: str | None = None) -> None:
+    """Best-effort reclaim of dangling image layers + stale build cache after
+    an image is added/removed on a docker store. Never raises — a prune
+    failure should never fail the move/mirror/clone that triggered it.
+
+    Why this is needed at all: docker image ls's "Size" for a typical app is
+    mostly SHARED base layers (Ubuntu, CUDA, Node…), so removing one app's
+    tag only frees the bytes unique to it — any base layer that becomes
+    orphaned once nothing local references it anymore just sits there as
+    "reclaimable" (confirmed live: 6+ GB of it) until something prunes it.
+    `docker image prune` only ever removes genuinely untagged/dangling
+    images — never anything a live tag still points to."""
+    for args in (["image", "prune", "-f"], ["builder", "prune", "-f"]):
+        try:
+            cmd = ["docker"] + (["-H", host] if host else []) + args
+            subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def move_to_usb(app_id: str, usb_uuid: str, keep_local: bool, job: dict | None = None) -> dict:
     app = registry.APPS.get(app_id)
     if app is None:
@@ -319,6 +339,9 @@ def move_to_usb(app_id: str, usb_uuid: str, keep_local: bool, job: dict | None =
 
     if not keep_local:
         subprocess.run(["docker", "rmi", tag], capture_output=True, text=True, timeout=60)
+
+    _prune_docker(None)   # local — reclaim whatever the rmi above just orphaned
+    _prune_docker(host)   # the USB store too, for completeness
 
     return {"ok": True, "mode": "usb", "usb_uuid": usb_uuid, "kept_local": keep_local,
             "size_bytes": _image_size(tag, host)}
@@ -369,6 +392,10 @@ def move_to_local(app_id: str, delete_usb_copy: bool = False, job: dict | None =
         # popping the entry entirely would lose that.
         state[app_id] = {"mode": "local", "last_usb_uuid": loc["usb_uuid"]}
     _save_state(state)
+
+    _prune_docker(host)   # the USB store, if the copy there was just removed
+    _prune_docker(None)   # local — the freshly-loaded image can orphan old layers too
+
     return {"ok": True, "mode": "local", "size_bytes": _image_size(tag, None)}
 
 
@@ -466,4 +493,5 @@ def remove_usb_copy(app_id: str) -> dict:
     state = _load_state()
     state.pop(app_id, None)
     _save_state(state)
+    _prune_docker(host)
     return {"ok": True, "removed": tag, "usb_uuid": usb_uuid}
