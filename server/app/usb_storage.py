@@ -140,12 +140,14 @@ def _save_state(state: dict) -> None:
 
 
 def _mount(name: str) -> str | None:
-    """udisksctl mount; returns the mountpoint or None."""
+    """udisksctl mount; returns the mountpoint or None. Matches to end-of-line
+    (not \\S+) since a drive's label — and thus its mountpoint under
+    /media/<user>/<label> — can contain spaces (e.g. "SSK SSD")."""
     r = subprocess.run(["udisksctl", "mount", "-b", f"/dev/{name}",
                         "--no-user-interaction"],
                        capture_output=True, text=True, timeout=30)
-    m = re.search(r"at (\S+)", r.stdout + r.stderr)
-    return m.group(1).rstrip(".") if m else None
+    m = re.search(r"at (.+?)\.?$", r.stdout + r.stderr, re.MULTILINE)
+    return m.group(1) if m else None
 
 
 def _nas_target(assign_to: str, label: str) -> str:
