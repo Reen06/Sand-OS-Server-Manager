@@ -20,9 +20,12 @@ goals — see the Storage Fleet Plan KB doc):
                                                  carefulness as app_storage).
 
 A USB-hosted app also gets a portable manifest written next to it
-(<mountpoint>/sandos-apps/<app_id>/appdef.json) — everything another Server
-Manager node needs to display + relaunch this app once the drive is plugged
-in there. See pending_imports.py for that side of the story.
+(<mountpoint>/SandOS/app-hosting/apps/<app_id>/appdef.json) — everything
+another Server Manager node needs to display + relaunch this app once the
+drive is plugged in there. See pending_imports.py for that side of the
+story. Everything SandOS puts on a drive lives under one visible "SandOS/"
+folder (with its own README) — personal files elsewhere on the drive are
+never touched.
 """
 from __future__ import annotations
 
@@ -36,6 +39,7 @@ from .models import AppDef
 
 _STATE_FILE = os.path.join(config.NAS_ROOT, ".app-images-state.json")
 MANIFEST_NAME = "appdef.json"
+_MANIFEST_ROOT = os.path.join("SandOS", "app-hosting", "apps")
 
 
 def _load_state() -> dict:
@@ -149,7 +153,8 @@ def write_manifest(app: AppDef, mountpoint: str) -> None:
     """Everything a DIFFERENT Server Manager node needs to render this app's
     card and relaunch it, once this drive is plugged in there — the
     'auto-populate the dashboard' half of the portability story."""
-    path = os.path.join(mountpoint, "sandos-apps", app.id, MANIFEST_NAME)
+    usb_storage.ensure_sandos_readme(mountpoint)
+    path = os.path.join(mountpoint, _MANIFEST_ROOT, app.id, MANIFEST_NAME)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     manifest = {
         "id": app.id, "label": app.label, "icon": app.icon, "color": app.color,
@@ -165,7 +170,7 @@ def write_manifest(app: AppDef, mountpoint: str) -> None:
 
 
 def read_manifest(mountpoint: str, app_id: str) -> dict | None:
-    path = os.path.join(mountpoint, "sandos-apps", app_id, MANIFEST_NAME)
+    path = os.path.join(mountpoint, _MANIFEST_ROOT, app_id, MANIFEST_NAME)
     try:
         with open(path) as f:
             return json.load(f)
@@ -176,7 +181,7 @@ def read_manifest(mountpoint: str, app_id: str) -> dict | None:
 def list_manifests(mountpoint: str) -> list[dict]:
     """Every app manifest present on a drive — the USB poller's pending-
     imports scan uses this."""
-    root = os.path.join(mountpoint, "sandos-apps")
+    root = os.path.join(mountpoint, _MANIFEST_ROOT)
     out = []
     if not os.path.isdir(root):
         return out

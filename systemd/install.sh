@@ -21,5 +21,11 @@ systemctl daemon-reload
 systemctl enable --now "$UNIT"
 sleep 2
 systemctl --no-pager --lines=6 status "$UNIT" || true
+
+# USB app-hosting (Fleet page's "Enable app hosting" toggle) needs its own
+# narrowly-scoped one-time root setup — bundled into the SAME installer so a
+# fresh/re-run install never needs a separate manual step. Safe to re-run.
+bash "$HERE/../containers/nfs-server/setup-usb-dockerd.sh"
+
 echo
 echo "INSTALLED → http://10.0.0.164:8170   (logs: journalctl -u $UNIT -f)"

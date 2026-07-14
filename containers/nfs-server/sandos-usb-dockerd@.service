@@ -11,7 +11,7 @@ After=network.target
 Type=notify
 EnvironmentFile=/run/sandos-usb-docker-%i.env
 ExecStart=/usr/bin/dockerd \
-    --data-root ${SANDOS_USB_MOUNTPOINT}/sandos-docker-data \
+    --data-root ${SANDOS_USB_MOUNTPOINT}/SandOS/app-hosting/docker-data \
     --host unix:///run/sandos-usb-docker-%i.sock \
     --pidfile /run/sandos-usb-docker-%i.pid
 # Same crash-resilience as the main docker.service.

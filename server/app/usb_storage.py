@@ -42,6 +42,45 @@ _LEGACY_MARKERS = ["sandos-storage.md"]  # still honored/cleaned up
 _STATE_FILE = os.path.join(config.NAS_ROOT, ".usb-state.json")
 _POLL_S = 10
 
+# Everything SandOS ever puts ON a drive's own filesystem (data-mount
+# bind-targets, app-hosting's dockerd storage, portable app manifests) lives
+# under this ONE visible top-level folder — never scattered loose alongside
+# the drive owner's own files.
+SANDOS_ROOT_DIRNAME = "SandOS"
+_README = """# SandOS — please don't edit these folders by hand
+
+This drive is registered with a Sand-OS Server Manager. Everything it needs
+lives inside THIS "SandOS" folder — your own files elsewhere on the drive
+are never touched or moved.
+
+- `app-hosting/docker-data/` — a second Docker daemon's private image
+  storage (so an app's image can live on this drive instead of the
+  server's own disk). Opaque internal format — editing or deleting
+  anything in here can corrupt every app whose image lives on this drive.
+- `app-hosting/apps/<app-id>/appdef.json` — a small, portable description
+  of one app (name, icon, how to launch it), so plugging this drive into
+  a DIFFERENT Server Manager lets it offer to import that app. Safe to
+  read, not meant to be hand-edited.
+- `data-mounts/<app-id>/<user>/<mount-name>/` — one app's actual saved
+  data (settings, files) when you've chosen to store it here instead of
+  on the server's own disk.
+
+All of this is managed through the Sand-OS dashboard (Fleet page, and each
+app's gear menu → Storage/Image location) — you shouldn't need to touch
+any of it by hand. Deleting a folder here permanently removes that
+data/image.
+"""
+
+
+def ensure_sandos_readme(mountpoint: str) -> None:
+    """Write/refresh the explanatory README in a drive's SandOS/ folder.
+    Idempotent and cheap — safe to call every time anything is written
+    there (data-mount creation, app-hosting start, manifest write)."""
+    root = os.path.join(mountpoint, SANDOS_ROOT_DIRNAME)
+    os.makedirs(root, exist_ok=True)
+    with open(os.path.join(root, "README.md"), "w") as f:
+        f.write(_README)
+
 _lock = threading.Lock()
 _devices: dict[str, dict] = {}   # uuid -> {name, label, size, mountpoint, assign}
 
@@ -171,6 +210,35 @@ def _write_marker(mountpoint: str, uuid: str, assign: str, label: str) -> None:
         )
 
 
+_DOCKERD_HELPER = "/usr/local/bin/sandos-usb-dockerd"
+_DOCKERD_UNIT = "/etc/systemd/system/sandos-usb-dockerd@.service"
+_SETUP_SCRIPT_HINT = (
+    "containers/nfs-server/setup-usb-dockerd.sh (in the Sand-OS-Server-Manager repo)")
+
+
+def dockerd_setup_status() -> dict:
+    """Whether the one-time root setup for USB app-hosting is done — checked
+    live (not assumed) so the UI can show EXACTLY what's missing instead of
+    a generic 'if it isn't set up, this fails' warning. The helper file and
+    unit are just world-readable file checks; the sudoers grant is read via
+    `sudo -n -l` (listing your OWN grants doesn't need a password, unlike
+    running an arbitrary new command would)."""
+    helper_ok = os.access(_DOCKERD_HELPER, os.X_OK)
+    unit_ok = os.path.isfile(_DOCKERD_UNIT)
+    sudoers_ok = False
+    try:
+        r = subprocess.run(["sudo", "-n", "-l"], capture_output=True, text=True, timeout=10)
+        sudoers_ok = r.returncode == 0 and _DOCKERD_HELPER in r.stdout
+    except Exception:  # noqa: BLE001
+        pass
+    ready = helper_ok and unit_ok and sudoers_ok
+    return {
+        "ready": ready, "helper_installed": helper_ok, "unit_installed": unit_ok,
+        "sudoers_configured": sudoers_ok,
+        "setup_hint": None if ready else f"sudo bash {_SETUP_SCRIPT_HINT}",
+    }
+
+
 def dockerd_socket_path(uuid: str) -> str:
     """The deterministic -H socket path for a drive's secondary dockerd —
     pure string construction, no liveness check. app_images.py uses THIS
@@ -219,6 +287,12 @@ def set_app_hosting(uuid: str, enabled: bool) -> dict:
     if enabled:
         if not mountpoint:
             raise RuntimeError("drive isn't mounted right now")
+        setup = dockerd_setup_status()
+        if not setup["ready"]:
+            raise RuntimeError(
+                "one-time setup needed on this Server Manager node before app hosting can "
+                f"work (once, ever — not per drive): run `{setup['setup_hint']}` as root, "
+                "then try again.")
         part = next((p for p in usb_partitions() if p["uuid"] == uuid), None)
         if part and part["fstype"] in _NON_POSIX_FSTYPES:
             raise RuntimeError(
@@ -228,8 +302,9 @@ def set_app_hosting(uuid: str, enabled: bool) -> dict:
                 "storage on this drive is unaffected either way)")
         if not _start_dockerd(uuid, mountpoint):
             raise RuntimeError(
-                "couldn't start the per-drive Docker daemon — needs the one-time "
-                "setup in usb_storage.py's docstring (helper script + sudoers)")
+                "couldn't start the per-drive Docker daemon — the one-time setup looked "
+                "done but starting it still failed; check `journalctl -u "
+                f"sandos-usb-dockerd@{uuid}.service` on the Server Manager host")
         from . import pending_imports   # deferred: avoids a circular import
         pending_imports.scan_drive(uuid, mountpoint)
     else:

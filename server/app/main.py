@@ -137,6 +137,15 @@ class _UsbAppHostingBody(BaseModel):
     enabled: bool
 
 
+@app.get("/api/nas/usb/app-hosting/setup-status")
+def usb_app_hosting_setup_status(request: Request):
+    """Live check of the one-time root setup (helper script, systemd unit,
+    sudoers grant) — lets the Fleet page show exactly what's missing (and
+    the one command to fix it) instead of a generic warning."""
+    _require_admin(request)
+    return {"ok": True, **usb_storage.dockerd_setup_status()}
+
+
 @app.post("/api/nas/usb/app-hosting")
 def usb_app_hosting(request: Request, body: _UsbAppHostingBody):
     """Toggle whether this assigned drive runs a secondary Docker daemon, so

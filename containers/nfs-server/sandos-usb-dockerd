@@ -11,11 +11,44 @@
 #
 # `start` writes /run/sandos-usb-docker-<uuid>.env (consumed by the templated
 # unit below) and enables+starts sandos-usb-dockerd@<uuid>.service. `stop`
-# disables+stops it. The drive's OWN data (<mountpoint>/sandos-docker-data)
+# disables+stops it. The drive's OWN data (<mountpoint>/SandOS/app-hosting/)
 # is never touched by stop — only the running daemon process goes away.
+#
+# Everything SandOS puts on a drive lives under ONE visible top-level
+# "SandOS/" folder (+ the small pre-existing .sandos-storage.md marker at the
+# drive root) — personal files elsewhere on the drive are never touched.
 set -euo pipefail
 
 UUID_RE='^[a-zA-Z0-9-]+$'
+
+_write_readme() {
+  local root="$1/SandOS"
+  mkdir -p "$root"
+  cat > "$root/README.md" <<'EOF'
+# SandOS — please don't edit these folders by hand
+
+This drive is registered with a Sand-OS Server Manager. Everything it needs
+lives inside THIS "SandOS" folder — your own files elsewhere on the drive
+are never touched or moved.
+
+- `app-hosting/docker-data/` — a second Docker daemon's private image
+  storage (so an app's image can live on this drive instead of the
+  server's own disk). Opaque internal format — editing or deleting
+  anything in here can corrupt every app whose image lives on this drive.
+- `app-hosting/apps/<app-id>/appdef.json` — a small, portable description
+  of one app (name, icon, how to launch it), so plugging this drive into
+  a DIFFERENT Server Manager lets it offer to import that app. Safe to
+  read, not meant to be hand-edited.
+- `data-mounts/<app-id>/<user>/<mount-name>/` — one app's actual saved
+  data (settings, files) when you've chosen to store it here instead of
+  on the server's own disk.
+
+All of this is managed through the Sand-OS dashboard (Fleet page, and each
+app's gear menu → Storage/Image location) — you shouldn't need to touch
+any of it by hand. Deleting a folder here permanently removes that
+data/image.
+EOF
+}
 
 case "${1:-}" in
   start)
@@ -32,7 +65,8 @@ case "${1:-}" in
         || { echo "bad mountpoint" >&2; exit 2; }
     [[ "$mountpoint" == *..* ]] && { echo "bad path" >&2; exit 2; }
     mountpoint -q "$mountpoint" || { echo "not a mountpoint" >&2; exit 2; }
-    mkdir -p "$mountpoint/sandos-docker-data"
+    mkdir -p "$mountpoint/SandOS/app-hosting/docker-data"
+    _write_readme "$mountpoint"
     printf 'SANDOS_USB_MOUNTPOINT=%s\n' "$mountpoint" > "/run/sandos-usb-docker-${uuid}.env"
     systemctl enable --now "sandos-usb-dockerd@${uuid}.service"
     ;;

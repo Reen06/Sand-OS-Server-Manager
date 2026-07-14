@@ -198,8 +198,10 @@ def _safe(s: str) -> str:
 def _usb_target(app_id: str, user: str, m) -> str:
     """Subpath under a USB drive's own root for this (app, user-or-shared,
     mount) — parallel to _nfs_target's naming, but on the drive itself rather
-    than the fleet NAS export."""
-    return f"sandos-apps/{_safe(app_id)}/{_safe(user)}/{_safe(m.name)}"
+    than the fleet NAS export. Nested under the same visible "SandOS/" folder
+    every SandOS-managed thing on a drive lives in (see usb_storage.py /
+    app_images.py) — personal files elsewhere on the drive are never touched."""
+    return f"SandOS/data-mounts/{_safe(app_id)}/{_safe(user)}/{_safe(m.name)}"
 
 
 def usb_volume_name(uuid: str, app_id: str, user: str, m) -> str:
@@ -220,6 +222,7 @@ def ensure_usb_volume(uuid: str, app_id: str, user: str, m, host: str | None = N
         raise RuntimeError(
             "that USB drive isn't plugged in / mounted right now — plug it in "
             "(or re-assign this mount to local/NFS storage)")
+    usb_storage.ensure_sandos_readme(mountpoint)
     subpath = _usb_target(app_id, user, m)
     abs_path = os.path.join(mountpoint, subpath)
     os.makedirs(abs_path, exist_ok=True)
