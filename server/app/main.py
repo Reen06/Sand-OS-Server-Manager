@@ -133,6 +133,60 @@ def usb_eject(request: Request, body: _UsbAssignBody):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
 
 
+@app.get("/api/nas/usb/disks")
+def usb_disks(request: Request):
+    """Hotplug/USB DISKS, including totally blank ones with no partition
+    table — the provisioning wizard's "detected but unformatted drive" cards.
+    (GET /api/nas/usb only lists existing partitions, which a blank drive
+    doesn't have.)"""
+    _require_admin(request)
+    return {"ok": True, "disks": usb_storage.usb_disks()}
+
+
+class _UsbProvisionBody(BaseModel):
+    disk: str
+    mode: str            # "single" | "split"
+    confirm: bool = False
+    fstype: str = "exfat"
+    label: str = "SANDOS"
+    app_gib: int = 20
+    app_label: str = "SANDOS-APPS"
+    media_fstype: str = "exfat"
+    media_label: str = "SANDOS"
+
+
+@app.post("/api/nas/usb/provision")
+def usb_provision(request: Request, body: _UsbProvisionBody):
+    """Wipe + repartition an ENTIRE physical drive (not one partition — see
+    /format for that) into one or two partitions, format them, and auto-
+    assign the result. Requires confirm=true — this erases everything on
+    the whole disk, every existing partition. Runs as a background job;
+    poll /api/nas/usb/provision/status?disk=..."""
+    _require_admin(request)
+    if not body.confirm:
+        return JSONResponse(
+            {"ok": False, "error": "provisioning erases the ENTIRE drive; confirm=true required"},
+            status_code=428)
+    try:
+        if body.mode == "single":
+            return usb_storage.provision_drive(body.disk, "single",
+                                               fstype=body.fstype, label=body.label)
+        return usb_storage.provision_drive(
+            body.disk, "split", app_gib=body.app_gib, app_label=body.app_label,
+            media_fstype=body.media_fstype, media_label=body.media_label)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.get("/api/nas/usb/provision/status")
+def usb_provision_status(request: Request, disk: str):
+    _require_admin(request)
+    status = usb_storage.provision_status(disk)
+    if status is None:
+        return JSONResponse({"ok": False, "error": "no provision job for that disk"}, status_code=404)
+    return {"ok": True, **status}
+
+
 class _UsbAppHostingBody(BaseModel):
     uuid: str
     enabled: bool

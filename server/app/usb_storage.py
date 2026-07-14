@@ -105,7 +105,9 @@ _NON_POSIX_FSTYPES = {"vfat", "exfat", "ntfs", "ntfs3"}
 
 
 def usb_partitions() -> list[dict]:
-    """Partitions on hotplug/USB disks: [{name,uuid,label,size,mountpoint,fstype}]."""
+    """Partitions on hotplug/USB disks: [{name,uuid,label,size,mountpoint,fstype,disk}].
+    `disk` (e.g. "/dev/sdc") is the parent whole-disk device — lets the
+    provisioning wizard trace a partition back to what it'd repartition."""
     out = []
     for disk in _lsblk():
         if disk.get("type") != "disk":
@@ -121,7 +123,25 @@ def usb_partitions() -> list[dict]:
                     "size": part.get("size", ""),
                     "mountpoint": part.get("mountpoint"),
                     "fstype": (part.get("fstype") or "").lower(),
+                    "disk": f"/dev/{disk['name']}",
                 })
+    return out
+
+
+def usb_disks() -> list[dict]:
+    """Hotplug/USB DISKS (not just partitions) — including brand-new, totally
+    blank drives with no partition table at all, which usb_partitions() can't
+    see (it only returns EXISTING partitions). Backs the provisioning
+    wizard's "detected but unformatted drive" cards."""
+    out = []
+    for disk in _lsblk():
+        if disk.get("type") != "disk":
+            continue
+        if disk.get("tran") != "usb" and not disk.get("hotplug"):
+            continue
+        parts = [p for p in usb_partitions() if p["disk"] == f"/dev/{disk['name']}"]
+        out.append({"name": f"/dev/{disk['name']}", "size": disk.get("size", ""),
+                    "partitions": parts})
     return out
 
 
@@ -424,6 +444,121 @@ def eject(uuid: str) -> dict:
                         "--no-user-interaction"],
                        capture_output=True, text=True, timeout=30)
     return {"uuid": uuid, "ejected": True}
+
+
+# ── whole-disk provisioning wizard ("Provision…" / "Repartition…") ───────────
+# Wipes+repartitions an ENTIRE physical drive (not one partition — see
+# format_drive() for that) into one or two partitions via the
+# sandos-usb-provision privileged helper, then auto-assigns the result and
+# (for the app-hosting partition) auto-enables app-hosting, so there's no
+# manual follow-up step. Background-job + poll, same shape as
+# app_variants.py's install()/install_status().
+_provision_lock = threading.Lock()
+_provision_jobs: dict[str, dict] = {}   # disk -> {"log":[...], "done":bool, "error":str|None}
+
+_PROVISION_FSTYPES = ("vfat", "exfat", "ext4")
+
+
+def provision_status(disk: str) -> dict | None:
+    job = _provision_jobs.get(disk)
+    if not job:
+        return None
+    return {"done": job["done"], "error": job["error"], "log_tail": job["log"][-30:]}
+
+
+def _disk_re_ok(disk: str) -> bool:
+    return bool(re.match(r"^/dev/(sd[a-z]+|nvme\d+n\d+)$", disk))
+
+
+def _forget_disk_partitions(disk: str) -> None:
+    """Unmount/ungraft/stop-app-hosting every CURRENT partition on a disk and
+    purge their state entries before wiping it — mirrors format_drive()'s
+    single-partition pre-wipe cleanup, just for every partition on the disk
+    at once (the old UUIDs are gone the moment it's repartitioned regardless,
+    this just does it cleanly instead of leaving stale state/graft points)."""
+    for part in usb_partitions():
+        if part["disk"] != disk:
+            continue
+        known = _load_state().get(part["uuid"], {})
+        if known.get("assign"):
+            _ungraft(known["assign"], known.get("label") or part["label"])
+        if known.get("app_hosting"):
+            _stop_dockerd(part["uuid"])
+        if part["mountpoint"]:
+            subprocess.run(["udisksctl", "unmount", "-b", f"/dev/{part['name']}",
+                            "--no-user-interaction"], capture_output=True, timeout=30)
+        state = _load_state()
+        state.pop(part["uuid"], None)
+        _save_state(state)
+
+
+def provision_drive(disk: str, mode: str, **kwargs) -> dict:
+    """Kick off a background wipe+partition+format(+assign+app-host) job for
+    a WHOLE disk. Returns immediately; poll via provision_status(disk)."""
+    if not _disk_re_ok(disk):
+        raise ValueError("bad disk path")
+    if mode not in ("single", "split"):
+        raise ValueError("mode must be 'single' or 'split'")
+    with _provision_lock:
+        existing = _provision_jobs.get(disk)
+        if existing and not existing["done"]:
+            raise ValueError(f"{disk} already has a provision job in progress")
+        job = {"log": [], "done": False, "error": None}
+        _provision_jobs[disk] = job
+    threading.Thread(target=_run_provision, args=(disk, mode, kwargs, job),
+                     daemon=True, name=f"provision-{disk.replace('/', '-')}").start()
+    return {"ok": True, "status": "provisioning"}
+
+
+def _run_provision(disk: str, mode: str, kwargs: dict, job: dict) -> None:
+    try:
+        if mode == "single":
+            fstype, label = kwargs["fstype"], kwargs["label"]
+            if fstype not in _PROVISION_FSTYPES:
+                raise ValueError("fstype must be vfat, exfat or ext4")
+            cmd = ["sudo", "-n", "/usr/local/bin/sandos-usb-provision",
+                   "single", disk, fstype, label]
+        else:
+            app_gib = int(kwargs["app_gib"])
+            app_label, media_fstype, media_label = (
+                kwargs["app_label"], kwargs["media_fstype"], kwargs["media_label"])
+            if media_fstype not in _PROVISION_FSTYPES:
+                raise ValueError("media_fstype must be vfat, exfat or ext4")
+            cmd = ["sudo", "-n", "/usr/local/bin/sandos-usb-provision", "split", disk,
+                   str(app_gib), app_label, media_fstype, media_label]
+
+        _forget_disk_partitions(disk)
+
+        job["log"].append("$ " + " ".join(cmd))
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1)
+        for line in proc.stdout:
+            job["log"].append(line.rstrip())
+            job["log"][:] = job["log"][-500:]
+        proc.wait(timeout=180)
+        if proc.returncode != 0:
+            job["error"] = f"exit code {proc.returncode}"
+            return
+
+        time.sleep(2)   # let the kernel/udev settle after partprobe before re-scanning
+
+        new_parts = next((d["partitions"] for d in usb_disks() if d["name"] == disk), [])
+        for i, part in enumerate(new_parts):
+            try:
+                assign(part["uuid"], "shared")
+            except Exception as e:  # noqa: BLE001
+                job["log"].append(f"warning: assign failed for {part['name']}: {e}")
+                continue
+            if mode == "split" and i == 0:   # first partition is always the ext4 app-hosting one
+                try:
+                    set_app_hosting(part["uuid"], True)
+                except Exception as e:  # noqa: BLE001
+                    job["log"].append(f"warning: app-hosting enable failed: {e}")
+        job["log"].append(f"done — {len(new_parts)} partition(s) ready")
+    except Exception as e:  # noqa: BLE001
+        job["error"] = str(e)
+    finally:
+        job["done"] = True
 
 
 def mountpoint_for(uuid: str) -> str | None:

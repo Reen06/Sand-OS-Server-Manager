@@ -1,0 +1,95 @@
+#!/bin/bash
+# Root helper: wipe + repartition a WHOLE USB disk into one or two partitions
+# and format them. Installed at /usr/local/bin/sandos-usb-provision, allowed
+# via sudoers for the SM user (same narrow-scope pattern as sandos-usb-bind /
+# sandos-usb-dockerd) — DESTROYS EVERYTHING on the target disk.
+#
+#   sandos-usb-provision single <disk> <fstype> <label>
+#   sandos-usb-provision split  <disk> <app_gib> <app_label> <media_fstype> <media_label>
+#
+# `split` always makes the FIRST partition ext4 (app-hosting) sized
+# <app_gib>, the rest <media_fstype> — the layout proven live on a real
+# drive. Every input is re-validated HERE, independent of the caller
+# (defense in depth) — including labels: this is exactly the class of bug
+# that broke an earlier hand-run script (parted's script mode splits
+# arguments on whitespace), so labels are rejected outright if they contain
+# anything but alnum/hyphen, rather than trusted to already be safe.
+set -euo pipefail
+
+DISK_RE='^/dev/(sd[a-z]+|nvme[0-9]+n[0-9]+)$'
+LABEL_RE='^[A-Za-z0-9-]{1,32}$'
+FSTYPES="vfat exfat ext4"
+
+_check_disk() {
+    local disk="$1"
+    [[ "$disk" =~ $DISK_RE ]] || { echo "bad disk path" >&2; exit 2; }
+    # Independently verify this is a hotplug/USB device — never trust the
+    # caller. This is the single most important safety rail here: it must
+    # be impossible for this script to touch an internal disk even if
+    # called with a wrong/malicious argument.
+    local info
+    info=$(lsblk -d -n -o TRAN,HOTPLUG "$disk" 2>/dev/null) || { echo "no such disk" >&2; exit 2; }
+    local tran hotplug
+    read -r tran hotplug <<< "$info"
+    if [[ "$tran" != "usb" && "$hotplug" != "1" ]]; then
+        echo "refusing: $disk is not a hotplug/USB device" >&2
+        exit 2
+    fi
+}
+
+_check_label() {
+    [[ "$1" =~ $LABEL_RE ]] || { echo "bad label (alnum/hyphen only, max 32 chars): $1" >&2; exit 2; }
+}
+
+_check_fstype() {
+    [[ " $FSTYPES " == *" $1 "* ]] || { echo "bad fstype: $1 (must be vfat/exfat/ext4)" >&2; exit 2; }
+}
+
+_mkfs() {
+    local part="$1" fstype="$2" label="$3"
+    case "$fstype" in
+        ext4)  mkfs.ext4 -q -L "$label" "$part" ;;
+        exfat) mkfs.exfat -n "$label" "$part" ;;
+        vfat)  mkfs.vfat -n "$label" "$part" ;;
+    esac
+}
+
+case "${1:-}" in
+  single)
+    disk="${2:-}"; fstype="${3:-}"; label="${4:-}"
+    _check_disk "$disk"; _check_fstype "$fstype"; _check_label "$label"
+
+    wipefs -a "$disk"
+    sgdisk -Z "$disk" >/dev/null 2>&1 || true
+    parted -s "$disk" mklabel gpt
+    parted -s "$disk" mkpart "$label" 1MiB 100%
+    partprobe "$disk"
+    sleep 2
+    _mkfs "${disk}1" "$fstype" "$label"
+    ;;
+
+  split)
+    disk="${2:-}"; app_gib="${3:-}"; app_label="${4:-}"; media_fstype="${5:-}"; media_label="${6:-}"
+    _check_disk "$disk"
+    [[ "$app_gib" =~ ^[0-9]+$ ]] || { echo "bad app_gib (must be a positive integer)" >&2; exit 2; }
+    _check_label "$app_label"; _check_fstype "$media_fstype"; _check_label "$media_label"
+
+    wipefs -a "$disk"
+    sgdisk -Z "$disk" >/dev/null 2>&1 || true
+    parted -s "$disk" mklabel gpt
+    parted -s "$disk" mkpart "$app_label" ext4 1MiB "${app_gib}GiB"
+    parted -s "$disk" mkpart "$media_label" "${app_gib}GiB" 100%
+    partprobe "$disk"
+    sleep 2
+    mkfs.ext4 -q -L "$app_label" "${disk}1"
+    _mkfs "${disk}2" "$media_fstype" "$media_label"
+    ;;
+
+  *)
+    echo "usage: sandos-usb-provision single <disk> <fstype> <label>" >&2
+    echo "     | sandos-usb-provision split <disk> <app_gib> <app_label> <media_fstype> <media_label>" >&2
+    exit 2
+    ;;
+esac
+
+lsblk "$disk" -o NAME,SIZE,FSTYPE,LABEL
