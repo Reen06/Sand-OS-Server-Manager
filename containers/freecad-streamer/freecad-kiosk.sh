@@ -57,11 +57,22 @@ restore_freecad_prefs() {
   done
 }
 
+ensure_freecad_config_files() {
+  local config_dir="$HOME/.config/FreeCAD/v1-1"
+  mkdir -p "$config_dir"
+  for f in user.cfg system.cfg; do
+    [ -e "$config_dir/$f" ] || : > "$config_dir/$f"
+    chmod 660 "$config_dir/$f" 2>/dev/null || true
+  done
+}
+
 # Keep FreeCAD up: launch it maximized; relaunch if it exits. Guard against a
 # tight crash loop (5 exits in under 5s each → give up so we don't spin).
 fast_fails=0
 while true; do
+  ensure_freecad_config_files
   restore_freecad_prefs
+  ensure_freecad_config_files
   # Make FreeCAD truly fullscreen (fills the display, no decorations/margin) so
   # it looks native — no black border. Match by window CLASS (precise: skips the
   # transient startup windows) and re-apply for a while, since the window appears
