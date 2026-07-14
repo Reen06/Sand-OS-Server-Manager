@@ -69,9 +69,13 @@ def location(app_id: str) -> dict:
 
 
 def list_image_options(app_id: str) -> dict:
-    """Current image location + size, and every app-hosting-enabled USB
-    drive it could move/mirror to (with free space) — backs the Manage
-    modal's 'Image location' section."""
+    """Current image location + size, and every USB drive it could move/
+    mirror to (with free space) — backs the Manage modal's 'Image location'
+    section. Any assigned+mounted drive with a POSIX filesystem qualifies,
+    not just ones already app-hosting-enabled: picking one that isn't
+    enabled yet turns it on as PART of the move/mirror action (the Fleet
+    page has no separate "enable app hosting" control on purpose — that
+    decision belongs here, in context, not as a standalone pre-step)."""
     app = registry.APPS.get(app_id)
     if app is None:
         raise KeyError(app_id)
@@ -80,12 +84,14 @@ def list_image_options(app_id: str) -> dict:
     tag = _image_tag(app)
     size = _image_size(tag, host) if (host or loc["mode"] == "local") else None
     drives = [d for d in usb_storage.list_devices()
-              if d.get("app_hosting") and d.get("mountpoint") and d.get("assign")]
+              if d.get("mountpoint") and d.get("assign")
+              and d.get("fstype") not in usb_storage._NON_POSIX_FSTYPES]
     options = [{"mode": "local", "label": "This server (local disk)"}]
     for d in drives:
         options.append({
             "mode": "usb", "usb_uuid": d["uuid"],
-            "label": f"USB: {d['label']}",
+            "label": f"USB: {d['label']}" + ("" if d.get("app_hosting") else " (will enable app hosting)"),
+            "app_hosting": bool(d.get("app_hosting")),
             "free_bytes": usb_storage.free_bytes_for(d["uuid"]),
         })
     return {
@@ -204,9 +210,11 @@ def move_to_usb(app_id: str, usb_uuid: str, keep_local: bool) -> dict:
         raise RuntimeError("that USB drive isn't plugged in right now")
     host = usb_storage.docker_host_for(usb_uuid)
     if not host:
-        raise RuntimeError(
-            "app hosting isn't enabled on that drive yet — enable it from the "
-            "Fleet page's USB Storage section first")
+        # First use of this drive for app-hosting — turn it on as PART of the
+        # move/mirror action rather than requiring a separate Fleet-page
+        # step. Raises the same clear setup/fstype errors either way.
+        usb_storage.set_app_hosting(usb_uuid, True)
+        host = usb_storage.docker_host_for(usb_uuid)
 
     tag = _image_tag(app)
     if not _image_exists(tag, None):
