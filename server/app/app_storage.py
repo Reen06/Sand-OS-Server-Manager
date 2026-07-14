@@ -28,9 +28,45 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import time
+import uuid as _uuid_mod
 
 from . import config, docker_backend, registry, usb_storage
 from .models import Mount
+
+# ── Background move jobs ──────────────────────────────────────────────────────
+_move_jobs: dict[str, dict] = {}
+_move_jobs_lock = threading.Lock()
+
+
+def _new_job(app_id: str, user: str, mount_name: str, target_mode: str) -> tuple[str, dict]:
+    job_id = _uuid_mod.uuid4().hex
+    job: dict = {
+        "job_id": job_id,
+        "app_id": app_id,
+        "user": user,
+        "mount_name": mount_name,
+        "target_mode": target_mode,
+        "done": False,
+        "ok": False,
+        "error": None,
+        "bytes_copied": 0,
+        "total_bytes": None,
+        "old_volume": None,
+        "new_volume": None,
+    }
+    with _move_jobs_lock:
+        _move_jobs[job_id] = job
+        # Keep at most 200 completed jobs so memory doesn't grow unbounded.
+        done_ids = [k for k, v in _move_jobs.items() if v["done"]]
+        for k in done_ids[:-200]:
+            del _move_jobs[k]
+    return job_id, job
+
+
+def move_status(job_id: str) -> dict | None:
+    return _move_jobs.get(job_id)
 
 _STATE_FILE = os.path.join(config.NAS_ROOT, ".app-storage-state.json")
 
@@ -166,8 +202,10 @@ def _instance_running(app_id: str, user: str) -> bool:
     return docker_backend.running(name, host=app_images.active_docker_host(app_id))
 
 
-def move(app_id: str, user: str, mount_name: str, target_mode: str,
-         usb_uuid: str | None = None) -> dict:
+def start_move(app_id: str, user: str, mount_name: str, target_mode: str,
+               usb_uuid: str | None = None) -> str:
+    """Validate eagerly, then kick off the copy in a background thread.
+    Returns a job_id the caller can poll via move_status()."""
     if target_mode not in ("local", "nfs", "usb"):
         raise ValueError("target_mode must be local, nfs or usb")
     if target_mode == "usb" and not usb_uuid:
@@ -178,41 +216,76 @@ def move(app_id: str, user: str, mount_name: str, target_mode: str,
     if _instance_running(app_id, user):
         raise ValueError(f"stop {app_id} before moving its storage")
 
-    old_vol = _current_volume(app_id, user, m)
+    job_id, job = _new_job(app_id, user, mount_name, target_mode)
+    t = threading.Thread(
+        target=_run_move,
+        args=(job, app_id, user, mount_name, target_mode, usb_uuid),
+        daemon=True,
+        name=f"storage-move-{job_id[:8]}",
+    )
+    t.start()
+    return job_id
 
-    if target_mode == "usb":
-        new_vol = docker_backend.ensure_usb_volume(usb_uuid, app_id, user, m)
-    elif target_mode == "nfs" and config.NAS_ENABLED:
-        new_vol = docker_backend.ensure_nfs_volume(user, m)
-    else:
-        new_vol = registry.resolve_volume(app_id, user, m)
-        subprocess.run(["docker", "volume", "create", new_vol],
-                       capture_output=True, timeout=15)
 
-    if new_vol == old_vol:
-        raise ValueError("that's already where this mount's data lives")
+def _volume_size(vol: str) -> int:
+    r = subprocess.run(["docker", "run", "--rm", "-v", f"{vol}:/v", "alpine", "du", "-sb", "/v"],
+                       capture_output=True, text=True, timeout=30)
+    try:
+        return int(r.stdout.split()[0])
+    except Exception:  # noqa: BLE001
+        return 0
 
-    copy = subprocess.run(
-        ["docker", "run", "--rm", "-v", f"{old_vol}:/from", "-v", f"{new_vol}:/to",
-         "alpine", "sh", "-c",
-         "cp -a /from/. /to/ 2>/dev/null; echo OLD:$(du -sb /from 2>/dev/null | cut -f1); "
-         "echo NEW:$(du -sb /to 2>/dev/null | cut -f1)"],
-        capture_output=True, text=True, timeout=600)
-    if copy.returncode != 0:
-        raise RuntimeError(copy.stderr.strip() or "copy failed")
-    sizes = dict(re.findall(r"(OLD|NEW):(\d+)", copy.stdout))
-    old_sz, new_sz = int(sizes.get("OLD", 0)), int(sizes.get("NEW", 0))
-    # Tolerate a little drift (sparse files, filesystem overhead) but catch an
-    # obviously-truncated copy rather than silently switching to bad data.
-    if old_sz > 0 and new_sz < old_sz * 0.9:
-        raise RuntimeError(
-            f"copy looks incomplete ({new_sz} of {old_sz} bytes) — not switching over")
 
-    state = _load_state()
-    state[_key(app_id, user, mount_name)] = {"mode": target_mode, "usb_uuid": usb_uuid}
-    _save_state(state)
-    return {"ok": True, "old_volume": old_vol, "new_volume": new_vol,
-            "bytes_copied": new_sz, "mode": target_mode}
+def _run_move(job: dict, app_id: str, user: str, mount_name: str,
+              target_mode: str, usb_uuid: str | None) -> None:
+    try:
+        m = _mount(app_id, mount_name)
+        old_vol = _current_volume(app_id, user, m)
+
+        if target_mode == "usb":
+            new_vol = docker_backend.ensure_usb_volume(usb_uuid, app_id, user, m)
+        elif target_mode == "nfs" and config.NAS_ENABLED:
+            new_vol = docker_backend.ensure_nfs_volume(user, m)
+        else:
+            new_vol = registry.resolve_volume(app_id, user, m)
+            subprocess.run(["docker", "volume", "create", new_vol],
+                           capture_output=True, timeout=15)
+
+        if new_vol == old_vol:
+            raise ValueError("that's already where this mount's data lives")
+
+        job["old_volume"] = old_vol
+        job["new_volume"] = new_vol
+        job["total_bytes"] = _volume_size(old_vol)
+
+        # Popen (not run) so we can sample the destination's size WHILE the
+        # copy is still in flight — that's what lets the UI show a real x/x
+        # GB + % instead of just an indeterminate spinner.
+        copy_proc = subprocess.Popen(
+            ["docker", "run", "--rm", "-v", f"{old_vol}:/from", "-v", f"{new_vol}:/to",
+             "alpine", "sh", "-c", "cp -a /from/. /to/"])
+        while copy_proc.poll() is None:
+            job["bytes_copied"] = _volume_size(new_vol)
+            time.sleep(2)
+        if copy_proc.returncode != 0:
+            raise RuntimeError("copy failed")
+
+        old_sz, new_sz = job["total_bytes"], _volume_size(new_vol)
+        if old_sz > 0 and new_sz < old_sz * 0.9:
+            raise RuntimeError(
+                f"copy looks incomplete ({new_sz} of {old_sz} bytes) — not switching over")
+
+        state = _load_state()
+        state[_key(app_id, user, mount_name)] = {"mode": target_mode, "usb_uuid": usb_uuid}
+        _save_state(state)
+
+        job["bytes_copied"] = new_sz
+        job["ok"] = True
+    except Exception as e:  # noqa: BLE001
+        job["error"] = str(e)
+        job["ok"] = False
+    finally:
+        job["done"] = True
 
 
 def delete_old(app_id: str, user: str, mount_name: str, old_volume: str) -> dict:

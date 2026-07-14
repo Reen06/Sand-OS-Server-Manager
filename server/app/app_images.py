@@ -33,9 +33,33 @@ import dataclasses
 import json
 import os
 import subprocess
+import threading
+import uuid as _uuid_mod
 
 from . import config, registry, usb_storage
 from .models import AppDef
+
+# ── Background image-move jobs ────────────────────────────────────────────────
+_img_jobs: dict[str, dict] = {}
+_img_jobs_lock = threading.Lock()
+
+
+def _new_img_job(app_id: str, action: str) -> tuple[str, dict]:
+    job_id = _uuid_mod.uuid4().hex
+    job: dict = {"job_id": job_id, "app_id": app_id, "action": action,
+                 "done": False, "ok": False, "error": None,
+                 "size_bytes": None, "mode": None,
+                 "bytes_copied": 0, "total_bytes": None}
+    with _img_jobs_lock:
+        _img_jobs[job_id] = job
+        done_ids = [k for k, v in _img_jobs.items() if v["done"]]
+        for k in done_ids[:-200]:
+            del _img_jobs[k]
+    return job_id, job
+
+
+def img_job_status(job_id: str) -> dict | None:
+    return _img_jobs.get(job_id)
 
 _STATE_FILE = os.path.join(config.NAS_ROOT, ".app-images-state.json")
 MANIFEST_NAME = "appdef.json"
@@ -121,13 +145,25 @@ def _image_exists(tag: str, host: str | None) -> bool:
 
 
 def _image_size(tag: str, host: str | None) -> int | None:
+    """Virtual size of the image — all layers combined, which is what actually
+    gets written to disk when saving/loading. docker image inspect .Size only
+    returns the unique (non-shared) layer bytes, which is too low; docker image
+    ls --format json gives the correct virtual size as a human-readable string."""
+    import re as _re
     args = (["docker"] + (["-H", host] if host else [])
-            + ["image", "inspect", tag, "--format", "{{.Size}}"])
+            + ["image", "ls", "--format", "{{json .}}", tag])
     r = subprocess.run(args, capture_output=True, text=True, timeout=15)
-    try:
-        return int(r.stdout.strip())
-    except ValueError:
-        return None
+    for line in r.stdout.strip().splitlines():
+        try:
+            d = json.loads(line)
+            size_str = d.get("Size", "")
+            m = _re.match(r"([\d.]+)\s*(TB|GB|MB|KB|B)", size_str, _re.IGNORECASE)
+            if m:
+                value, unit = float(m[1]), m[2].upper()
+                return int(value * {"TB": 1e12, "GB": 1e9, "MB": 1e6, "KB": 1e3, "B": 1}[unit])
+        except Exception:  # noqa: BLE001
+            continue
+    return None
 
 
 def _instance_running_anywhere(app_id: str) -> bool:
@@ -198,7 +234,51 @@ def list_manifests(mountpoint: str) -> list[dict]:
     return out
 
 
-def move_to_usb(app_id: str, usb_uuid: str, keep_local: bool) -> dict:
+def _piped_transfer(src_cmd: list[str], dst_cmd: list[str], job: dict | None,
+                    timeout: int = 1800) -> None:
+    """Stream `docker image save` straight into `docker ... image load` with no
+    intermediate tarball (so a move never transiently needs double the local
+    disk) — but read/write it ourselves in chunks, rather than wiring the OS
+    pipe directly between the two processes, so `job["bytes_copied"]` can be
+    updated live as bytes actually cross the wire. This is what lets the UI
+    show a real x/x GB + % instead of just an indeterminate spinner.
+
+    `load`'s combined stdout/stderr is drained on a background thread WHILE we
+    write — reading it only after the transfer loop (e.g. via communicate())
+    would deadlock if `load` fills its output pipe's OS buffer before we get
+    to it, since it'd then block on writing output, which blocks it reading
+    more stdin, which blocks us writing more of `save`'s output."""
+    save = subprocess.Popen(src_cmd, stdout=subprocess.PIPE)
+    load = subprocess.Popen(dst_cmd, stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out_chunks: list[bytes] = []
+    reader = threading.Thread(target=lambda: out_chunks.extend(iter(lambda: load.stdout.read(4096), b"")),
+                              daemon=True)
+    reader.start()
+    copied = 0
+    try:
+        while True:
+            chunk = save.stdout.read(1024 * 1024)
+            if not chunk:
+                break
+            load.stdin.write(chunk)
+            copied += len(chunk)
+            if job is not None:
+                job["bytes_copied"] = copied
+    finally:
+        save.stdout.close()
+        try:
+            load.stdin.close()
+        except BrokenPipeError:
+            pass
+    save.wait(timeout=timeout)
+    load.wait(timeout=timeout)
+    reader.join(timeout=5)
+    if save.returncode != 0 or load.returncode != 0:
+        raise RuntimeError(b"".join(out_chunks).decode(errors="replace").strip() or "image transfer failed")
+
+
+def move_to_usb(app_id: str, usb_uuid: str, keep_local: bool, job: dict | None = None) -> dict:
     app = registry.APPS.get(app_id)
     if app is None:
         raise KeyError(app_id)
@@ -220,15 +300,11 @@ def move_to_usb(app_id: str, usb_uuid: str, keep_local: bool) -> dict:
     if not _image_exists(tag, None):
         raise RuntimeError(f"{app.label}'s image isn't installed locally — nothing to move")
 
-    # Stream straight across — no intermediate tarball on local disk, so a
-    # move never transiently needs double the local space.
-    save = subprocess.Popen(["docker", "image", "save", tag], stdout=subprocess.PIPE)
-    load = subprocess.run(["docker", "-H", host, "image", "load"],
-                          stdin=save.stdout, capture_output=True, text=True, timeout=1800)
-    save.stdout.close()
-    save.wait(timeout=1800)
-    if save.returncode != 0 or load.returncode != 0:
-        raise RuntimeError(load.stderr.strip() or "image transfer failed")
+    if job is not None:
+        job["total_bytes"] = _image_size(tag, None)
+
+    _piped_transfer(["docker", "image", "save", tag],
+                    ["docker", "-H", host, "image", "load"], job)
     if not _image_exists(tag, host):
         raise RuntimeError("image transfer reported success but the image isn't on the drive")
 
@@ -245,7 +321,7 @@ def move_to_usb(app_id: str, usb_uuid: str, keep_local: bool) -> dict:
             "size_bytes": _image_size(tag, host)}
 
 
-def move_to_local(app_id: str) -> dict:
+def move_to_local(app_id: str, job: dict | None = None) -> dict:
     app = registry.APPS.get(app_id)
     if app is None:
         raise KeyError(app_id)
@@ -260,13 +336,11 @@ def move_to_local(app_id: str) -> dict:
         raise RuntimeError("that USB drive isn't plugged in right now")
 
     tag = _image_tag(app)
-    save = subprocess.Popen(["docker", "-H", host, "image", "save", tag], stdout=subprocess.PIPE)
-    load = subprocess.run(["docker", "image", "load"],
-                          stdin=save.stdout, capture_output=True, text=True, timeout=1800)
-    save.stdout.close()
-    save.wait(timeout=1800)
-    if save.returncode != 0 or load.returncode != 0:
-        raise RuntimeError(load.stderr.strip() or "image transfer failed")
+    if job is not None:
+        job["total_bytes"] = _image_size(tag, host)
+
+    _piped_transfer(["docker", "-H", host, "image", "save", tag],
+                    ["docker", "image", "load"], job)
     if not _image_exists(tag, None):
         raise RuntimeError("image transfer reported success but the image isn't local")
 
@@ -280,6 +354,74 @@ def move_to_local(app_id: str) -> dict:
     state[app_id] = {"mode": "local", "last_usb_uuid": loc["usb_uuid"]}
     _save_state(state)
     return {"ok": True, "mode": "local", "size_bytes": _image_size(tag, None)}
+
+
+def start_move_to_usb(app_id: str, usb_uuid: str, keep_local: bool) -> str:
+    """Validate eagerly, then copy the image in a background thread. Returns job_id."""
+    app = registry.APPS.get(app_id)
+    if app is None:
+        raise KeyError(app_id)
+    if _instance_running_anywhere(app_id):
+        raise ValueError(f"stop every running instance of {app.label} before moving its image")
+    if not usb_storage.mountpoint_for(usb_uuid):
+        raise RuntimeError("that USB drive isn't plugged in right now")
+    tag = _image_tag(app)
+    if not _image_exists(tag, None):
+        raise RuntimeError(f"{app.label}'s image isn't installed locally — nothing to move")
+
+    action = "mirror" if keep_local else "move"
+    job_id, job = _new_img_job(app_id, action)
+    t = threading.Thread(target=_run_move_to_usb,
+                         args=(job, app_id, usb_uuid, keep_local),
+                         daemon=True, name=f"img-move-{job_id[:8]}")
+    t.start()
+    return job_id
+
+
+def _run_move_to_usb(job: dict, app_id: str, usb_uuid: str, keep_local: bool) -> None:
+    try:
+        result = move_to_usb(app_id, usb_uuid, keep_local, job=job)
+        job["mode"] = result.get("mode")
+        job["size_bytes"] = result.get("size_bytes")
+        job["ok"] = True
+    except Exception as e:  # noqa: BLE001
+        job["error"] = str(e)
+        job["ok"] = False
+    finally:
+        job["done"] = True
+
+
+def start_move_to_local(app_id: str) -> str:
+    """Validate eagerly, then copy back to local in a background thread. Returns job_id."""
+    app = registry.APPS.get(app_id)
+    if app is None:
+        raise KeyError(app_id)
+    if _instance_running_anywhere(app_id):
+        raise ValueError(f"stop every running instance of {app.label} before moving its image")
+    loc = location(app_id)
+    if loc["mode"] != "usb":
+        raise ValueError(f"{app.label}'s image is already local")
+    if not usb_storage.docker_host_for(loc["usb_uuid"]):
+        raise RuntimeError("that USB drive isn't plugged in right now")
+
+    job_id, job = _new_img_job(app_id, "move-to-local")
+    t = threading.Thread(target=_run_move_to_local, args=(job, app_id),
+                         daemon=True, name=f"img-local-{job_id[:8]}")
+    t.start()
+    return job_id
+
+
+def _run_move_to_local(job: dict, app_id: str) -> None:
+    try:
+        result = move_to_local(app_id, job=job)
+        job["mode"] = result.get("mode")
+        job["size_bytes"] = result.get("size_bytes")
+        job["ok"] = True
+    except Exception as e:  # noqa: BLE001
+        job["error"] = str(e)
+        job["ok"] = False
+    finally:
+        job["done"] = True
 
 
 def remove_usb_copy(app_id: str) -> dict:
