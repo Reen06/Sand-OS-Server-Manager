@@ -1,0 +1,84 @@
+#!/bin/bash
+# Root helper: bring up a WireGuard tunnel to a SandOS Hub from a staged conf
+# file this box fetched from a one-time enrollment link. Installed at
+# /usr/local/bin/sandos-wg-enroll, allowed via sudoers for the SM user (same
+# narrow-scope pattern as sandos-usb-bind / sandos-usb-dockerd /
+# sandos-usb-provision).
+#
+#   sandos-wg-enroll up <staged_conf_path>
+#   sandos-wg-enroll down
+#
+# The staged conf path is FIXED (no glob) in the sudoers rule — there's only
+# ever one enrollment conf per box. Every input is re-validated HERE,
+# independent of the caller (defense in depth): the conf's [Interface] block
+# may only contain PrivateKey/Address/ListenPort, and [Peer] only
+# PublicKey/Endpoint/AllowedIPs/PersistentKeepalive — anything else (most
+# importantly PostUp/PreUp/PostDown/PreDown, which wg-quick executes as
+# shell) is rejected outright, since this script runs as root and the conf
+# file's contents ultimately came from the network.
+set -euo pipefail
+
+IFACE="sandos-hub"
+STAGED_CONF="/etc/sandos/wg-enroll-staging.conf"
+DEST_CONF="/etc/wireguard/${IFACE}.conf"
+
+_check_conf() {
+    local conf="$1"
+    [[ -f "$conf" ]] || { echo "no staged conf at $conf" >&2; exit 2; }
+
+    # Walk the file section by section; reject any key outside the allowlist
+    # for that section (and reject anything outside [Interface]/[Peer] at all).
+    local section=""
+    while IFS= read -r line; do
+        line="${line%%#*}"                      # strip comments
+        line="$(echo -n "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [[ -z "$line" ]] && continue
+
+        if [[ "$line" =~ ^\[(.+)\]$ ]]; then
+            section="${BASH_REMATCH[1]}"
+            case "$section" in
+                Interface|Peer) ;;
+                *) echo "bad conf: unexpected section [$section]" >&2; exit 2 ;;
+            esac
+            continue
+        fi
+
+        local key="${line%%=*}"
+        key="$(echo -n "$key" | sed 's/[[:space:]]*$//')"
+        case "$section" in
+            Interface)
+                case "$key" in PrivateKey|Address|ListenPort) ;;
+                    *) echo "bad conf: disallowed key '$key' in [Interface]" >&2; exit 2 ;;
+                esac
+                ;;
+            Peer)
+                case "$key" in PublicKey|Endpoint|AllowedIPs|PersistentKeepalive) ;;
+                    *) echo "bad conf: disallowed key '$key' in [Peer]" >&2; exit 2 ;;
+                esac
+                ;;
+            *)
+                echo "bad conf: key '$key' outside any section" >&2; exit 2
+                ;;
+        esac
+    done < "$conf"
+}
+
+case "${1:-}" in
+  up)
+    conf="${2:-}"
+    [[ "$conf" == "$STAGED_CONF" ]] || { echo "refusing: only $STAGED_CONF is accepted" >&2; exit 2; }
+    _check_conf "$conf"
+    install -m 0600 "$conf" "$DEST_CONF"
+    wg-quick up "$IFACE"
+    ;;
+  down)
+    wg-quick down "$IFACE" 2>/dev/null || true
+    ;;
+  *)
+    echo "usage: sandos-wg-enroll up $STAGED_CONF" >&2
+    echo "     | sandos-wg-enroll down" >&2
+    exit 2
+    ;;
+esac
+
+wg show "$IFACE" 2>/dev/null || true
