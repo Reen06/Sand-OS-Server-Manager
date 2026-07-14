@@ -145,25 +145,28 @@ def _image_exists(tag: str, host: str | None) -> bool:
 
 
 def _image_size(tag: str, host: str | None) -> int | None:
-    """Virtual size of the image — all layers combined, which is what actually
-    gets written to disk when saving/loading. docker image inspect .Size only
-    returns the unique (non-shared) layer bytes, which is too low; docker image
-    ls --format json gives the correct virtual size as a human-readable string."""
-    import re as _re
+    """Real byte size of the image — the number that actually matters for
+    both "how much space will this free up" and "how many bytes will a
+    save|load transfer move."
+
+    An earlier version of this function deliberately preferred `docker image
+    ls`'s human "Size" column over `docker image inspect`'s `.Size` field,
+    on the theory that `.Size` under-counts (only unique, non-shared layer
+    bytes). That theory was wrong, discovered live: `ls`'s "Size" reported
+    17GB for FreeCAD's image, but the ACTUAL save|load transfer only ever
+    moved ~4.36GB — matching `docker image inspect --format '{{.Size}}'`
+    almost exactly (differs by <0.001%). `ls`'s "Size" reflects the newer
+    Docker CLI's inflated "disk usage" concept (shared-base layers counted
+    as if unique), not real transferable/reclaimable bytes. `.Size` is the
+    correct source for both a progress bar's total_bytes AND the "frees up
+    X" figure shown before a move."""
     args = (["docker"] + (["-H", host] if host else [])
-            + ["image", "ls", "--format", "{{json .}}", tag])
+            + ["image", "inspect", tag, "--format", "{{.Size}}"])
     r = subprocess.run(args, capture_output=True, text=True, timeout=15)
-    for line in r.stdout.strip().splitlines():
-        try:
-            d = json.loads(line)
-            size_str = d.get("Size", "")
-            m = _re.match(r"([\d.]+)\s*(TB|GB|MB|KB|B)", size_str, _re.IGNORECASE)
-            if m:
-                value, unit = float(m[1]), m[2].upper()
-                return int(value * {"TB": 1e12, "GB": 1e9, "MB": 1e6, "KB": 1e3, "B": 1}[unit])
-        except Exception:  # noqa: BLE001
-            continue
-    return None
+    try:
+        return int(r.stdout.strip())
+    except (ValueError, AttributeError):
+        return None
 
 
 def _instance_running_anywhere(app_id: str) -> bool:
