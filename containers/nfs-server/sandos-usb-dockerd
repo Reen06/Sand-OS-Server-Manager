@@ -31,10 +31,11 @@ This drive is registered with a Sand-OS Server Manager. Everything it needs
 lives inside THIS "SandOS" folder — your own files elsewhere on the drive
 are never touched or moved.
 
-- `app-hosting/docker-data/` — a second Docker daemon's private image
-  storage (so an app's image can live on this drive instead of the
-  server's own disk). Opaque internal format — editing or deleting
-  anything in here can corrupt every app whose image lives on this drive.
+- `app-hosting/docker-data/` and `app-hosting/containerd-root/` — a second
+  Docker daemon + its own separate containerd, private image storage (so
+  an app's image can live on this drive instead of the server's own disk).
+  Opaque internal format — editing or deleting anything in here can
+  corrupt every app whose image lives on this drive.
 - `app-hosting/apps/<app-id>/appdef.json` — a small, portable description
   of one app (name, icon, how to launch it), so plugging this drive into
   a DIFFERENT Server Manager lets it offer to import that app. Safe to
@@ -66,14 +67,24 @@ case "${1:-}" in
     [[ "$mountpoint" == *..* ]] && { echo "bad path" >&2; exit 2; }
     mountpoint -q "$mountpoint" || { echo "not a mountpoint" >&2; exit 2; }
     mkdir -p "$mountpoint/SandOS/app-hosting/docker-data"
+    mkdir -p "$mountpoint/SandOS/app-hosting/containerd-root"
     _write_readme "$mountpoint"
     printf 'SANDOS_USB_MOUNTPOINT=%s\n' "$mountpoint" > "/run/sandos-usb-docker-${uuid}.env"
+    # containerd first — dockerd's --containerd flag only ever CONNECTS to an
+    # already-running containerd, it never spawns one itself. Without this
+    # separate instance dockerd silently falls back to the HOST's own
+    # containerd, and an image "moved" to USB never actually leaves local
+    # disk (hit live). `Requires=`/`After=` on the dockerd unit itself also
+    # pulls this in automatically, but starting it explicitly here first
+    # keeps the ordering obvious and lets `enable` cover both units.
+    systemctl enable --now "sandos-usb-containerd@${uuid}.service"
     systemctl enable --now "sandos-usb-dockerd@${uuid}.service"
     ;;
   stop)
     uuid="${2:-}"
     [[ "$uuid" =~ $UUID_RE ]] || { echo "bad uuid" >&2; exit 2; }
     systemctl disable --now "sandos-usb-dockerd@${uuid}.service" 2>/dev/null || true
+    systemctl disable --now "sandos-usb-containerd@${uuid}.service" 2>/dev/null || true
     rm -f "/run/sandos-usb-docker-${uuid}.env"
     ;;
   *)

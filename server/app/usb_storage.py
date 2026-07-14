@@ -53,10 +53,11 @@ This drive is registered with a Sand-OS Server Manager. Everything it needs
 lives inside THIS "SandOS" folder — your own files elsewhere on the drive
 are never touched or moved.
 
-- `app-hosting/docker-data/` — a second Docker daemon's private image
-  storage (so an app's image can live on this drive instead of the
-  server's own disk). Opaque internal format — editing or deleting
-  anything in here can corrupt every app whose image lives on this drive.
+- `app-hosting/docker-data/` and `app-hosting/containerd-root/` — a second
+  Docker daemon + its own separate containerd, private image storage (so
+  an app's image can live on this drive instead of the server's own disk).
+  Opaque internal format — editing or deleting anything in here can
+  corrupt every app whose image lives on this drive.
 - `app-hosting/apps/<app-id>/appdef.json` — a small, portable description
   of one app (name, icon, how to launch it), so plugging this drive into
   a DIFFERENT Server Manager lets it offer to import that app. Safe to

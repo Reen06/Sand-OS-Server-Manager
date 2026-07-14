@@ -26,6 +26,7 @@ fi
 
 install -m 0755 "$HERE/sandos-usb-dockerd" /usr/local/bin/sandos-usb-dockerd
 install -m 0644 "$HERE/sandos-usb-dockerd@.service" /etc/systemd/system/sandos-usb-dockerd@.service
+install -m 0644 "$HERE/sandos-usb-containerd@.service" /etc/systemd/system/sandos-usb-containerd@.service
 install -m 0755 "$HERE/sandos-usb-provision" /usr/local/bin/sandos-usb-provision
 systemctl daemon-reload
 

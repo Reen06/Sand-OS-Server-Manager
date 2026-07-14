@@ -1,0 +1,32 @@
+[Unit]
+Description=Sand-OS per-drive containerd (USB app hosting) for drive %i
+# Required by sandos-usb-dockerd@%i.service. Docker Engine defaults to
+# connecting to the HOST's own containerd (/run/containerd/containerd.sock)
+# whenever --containerd isn't pointed somewhere that's actually listening —
+# a bare `--containerd <path>` on the dockerd unit alone is NOT enough to
+# get isolated storage, since dockerd only ever CONNECTS to a containerd,
+# it never spawns/owns one at an arbitrary path. This unit runs the real,
+# separate containerd process each USB-hosted app's dockerd instance talks
+# to, rooted entirely on the USB drive — otherwise "moving" an image to USB
+# is a lie: it still lives in the host's shared containerd content store.
+After=network.target
+
+[Service]
+Type=notify
+EnvironmentFile=/run/sandos-usb-docker-%i.env
+ExecStart=/usr/bin/containerd \
+    --config /dev/null \
+    --root ${SANDOS_USB_MOUNTPOINT}/SandOS/app-hosting/containerd-root \
+    --state /run/sandos-usb-containerd-%i-state \
+    --address ${SANDOS_USB_MOUNTPOINT}/SandOS/app-hosting/containerd.sock
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+Delegate=yes
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
