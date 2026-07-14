@@ -18,6 +18,12 @@ Polkit rule for headless mounting as the SM user (install once):
       if (action.id.indexOf("org.freedesktop.udisks2.filesystem-mount") == 0 &&
           subject.user == "control") { return polkit.Result.YES; }
     });
+
+App hosting (install once, see containers/nfs-server/sandos-usb-dockerd[@.service]):
+  - Copy sandos-usb-dockerd to /usr/local/bin/, chmod +x.
+  - Copy sandos-usb-dockerd@.service to /etc/systemd/system/, `systemctl daemon-reload`.
+  - Sudoers (/etc/sudoers.d/62-sandos-usb-dockerd):
+      control ALL=(root) NOPASSWD: /usr/local/bin/sandos-usb-dockerd
 """
 from __future__ import annotations
 
@@ -155,6 +161,67 @@ def _write_marker(mountpoint: str, uuid: str, assign: str, label: str) -> None:
         )
 
 
+def dockerd_socket_path(uuid: str) -> str:
+    """The deterministic -H socket path for a drive's secondary dockerd —
+    pure string construction, no liveness check. app_images.py uses THIS
+    (not docker_host_for) for actual docker-CLI calls: if the drive isn't
+    plugged in the docker CLI just fails with a plain connection-refused
+    error against a nonexistent socket, which is the CORRECT behavior (the
+    image genuinely isn't reachable) rather than a silent, wrong fallback to
+    the local daemon."""
+    return f"unix:///run/sandos-usb-docker-{uuid}.sock"
+
+
+def _start_dockerd(uuid: str, mountpoint: str) -> bool:
+    r = subprocess.run(["sudo", "-n", "/usr/local/bin/sandos-usb-dockerd",
+                        "start", uuid, mountpoint],
+                       capture_output=True, text=True, timeout=30)
+    return r.returncode == 0
+
+
+def _stop_dockerd(uuid: str) -> None:
+    subprocess.run(["sudo", "-n", "/usr/local/bin/sandos-usb-dockerd", "stop", uuid],
+                   capture_output=True, text=True, timeout=30)
+
+
+def docker_host_for(uuid: str) -> str | None:
+    """The -H socket for this drive's secondary dockerd, ONLY if app-hosting
+    is enabled AND the drive is currently mounted (the daemon should be up)
+    — None otherwise. This is the LIVENESS-CHECKED variant, for UI status
+    (e.g. 'this drive isn't connected right now') — not for making the actual
+    docker call, see dockerd_socket_path()."""
+    state = _load_state()
+    if not state.get(uuid, {}).get("app_hosting"):
+        return None
+    if not mountpoint_for(uuid):
+        return None
+    return dockerd_socket_path(uuid)
+
+
+def set_app_hosting(uuid: str, enabled: bool) -> dict:
+    """Toggle whether this assigned drive runs a secondary dockerd (so an
+    app's IMAGE can be relocated onto it, not just its data). Requires the
+    drive to already be assigned (see assign()) and currently mounted."""
+    state = _load_state()
+    if uuid not in state:
+        raise ValueError("assign this drive first (Fleet > USB Storage)")
+    mountpoint = mountpoint_for(uuid)
+    if enabled:
+        if not mountpoint:
+            raise RuntimeError("drive isn't mounted right now")
+        if not _start_dockerd(uuid, mountpoint):
+            raise RuntimeError(
+                "couldn't start the per-drive Docker daemon — needs the one-time "
+                "setup in usb_storage.py's docstring (helper script + sudoers)")
+        from . import pending_imports   # deferred: avoids a circular import
+        pending_imports.scan_drive(uuid, mountpoint)
+    else:
+        _stop_dockerd(uuid)
+    state[uuid]["app_hosting"] = enabled
+    _save_state(state)
+    return {"uuid": uuid, "app_hosting": enabled}
+
+
 def list_devices() -> list[dict]:
     """Current USB partitions annotated with known assignments."""
     state = _load_state()
@@ -162,7 +229,8 @@ def list_devices() -> list[dict]:
     for part in usb_partitions():
         known = state.get(part["uuid"], {})
         marker = _read_marker(part["mountpoint"]) if part["mountpoint"] else None
-        out.append({**part, "assign": (marker or known).get("assign", "")})
+        out.append({**part, "assign": (marker or known).get("assign", ""),
+                    "app_hosting": bool(known.get("app_hosting"))})
     return out
 
 
@@ -181,7 +249,10 @@ def assign(uuid: str, target: str) -> dict:
     _write_marker(mountpoint, uuid, target, part["label"])
     nas_path = _graft(mountpoint, target, part["label"])
     state = _load_state()
-    state[uuid] = {"assign": target, "label": part["label"]}
+    # Merge, not overwrite — re-assigning (e.g. a label change) must not lose
+    # an existing app_hosting flag out from under a drive that's already
+    # hosting a relocated app image.
+    state[uuid] = {**state.get(uuid, {}), "assign": target, "label": part["label"]}
     _save_state(state)
     return {"uuid": uuid, "mountpoint": mountpoint, "assign": target,
             "nas_path": nas_path,
@@ -192,6 +263,8 @@ def forget(uuid: str) -> dict:
     """Unregister a drive from this OS: delete its marker file(s) and the
     server-side state entry. The drive's DATA is untouched."""
     state = _load_state()
+    if state.get(uuid, {}).get("app_hosting"):
+        _stop_dockerd(uuid)   # never leave an orphaned per-drive daemon running
     state.pop(uuid, None)
     _save_state(state)
     removed = False
@@ -221,6 +294,8 @@ def format_drive(uuid: str, fs: str = "vfat") -> dict:
     known = _load_state().get(uuid, {})
     if known.get("assign"):
         _ungraft(known["assign"], known.get("label") or part["label"])
+    if known.get("app_hosting"):
+        _stop_dockerd(uuid)   # the drive is about to be wiped — nothing left to host
     if part["mountpoint"]:
         subprocess.run(["udisksctl", "unmount", "-b", f"/dev/{part['name']}",
                         "--no-user-interaction"],
@@ -245,6 +320,11 @@ def eject(uuid: str) -> dict:
     known = _load_state().get(uuid, {})
     if known.get("assign"):
         _ungraft(known["assign"], known.get("label") or part["label"])
+    if known.get("app_hosting"):
+        # Stop the daemon (its data-root is about to disappear from under it)
+        # but keep the app_hosting FLAG — re-inserting the drive resumes it
+        # via the poller, same as NAS grafting already does for assignment.
+        _stop_dockerd(uuid)
     if part["mountpoint"]:
         subprocess.run(["udisksctl", "unmount", "-b", f"/dev/{part['name']}",
                         "--no-user-interaction"],
@@ -291,6 +371,27 @@ def roots_for(user: str) -> list[dict]:
     return out
 
 
+def _dockerd_active(uuid: str) -> bool:
+    r = subprocess.run(["systemctl", "is-active", "--quiet",
+                        f"sandos-usb-dockerd@{uuid}.service"], timeout=10)
+    return r.returncode == 0
+
+
+def _ensure_dockerd_running(uuid: str, mountpoint: str, info: dict) -> None:
+    """Resume an app-hosting drive's daemon on re-insertion — same 'known
+    assignment survives unplug/replug' idea the NAS grafting already gets,
+    just for the secondary dockerd instead of a bind mount. Also scans the
+    drive for portable app manifests (deferred import: pending_imports.py
+    imports app_images.py, which imports THIS module — importing it lazily
+    here, not at module load time, avoids a circular import)."""
+    if not info.get("app_hosting"):
+        return
+    if not _dockerd_active(uuid):
+        _start_dockerd(uuid, mountpoint)
+    from . import pending_imports
+    pending_imports.scan_drive(uuid, mountpoint)
+
+
 def _poll_loop() -> None:
     while True:
         try:
@@ -303,11 +404,13 @@ def _poll_loop() -> None:
                         if not _read_marker(mp):
                             _write_marker(mp, part["uuid"], info["assign"], info["label"])
                         _graft(mp, info["assign"], info["label"])
+                        _ensure_dockerd_running(part["uuid"], mp, info)
                 elif part["mountpoint"] and part["uuid"] in state:
                     info = state[part["uuid"]]
                     target = _nas_target(info["assign"], info["label"])
                     if not os.path.ismount(target):
                         _graft(part["mountpoint"], info["assign"], info["label"])
+                    _ensure_dockerd_running(part["uuid"], part["mountpoint"], info)
         except Exception:  # noqa: BLE001
             pass
         time.sleep(_POLL_S)

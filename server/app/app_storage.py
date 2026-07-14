@@ -161,8 +161,9 @@ def list_locations(app_id: str, user: str) -> dict:
 
 
 def _instance_running(app_id: str, user: str) -> bool:
+    from . import app_images
     name = registry.instance_name(app_id, user)
-    return docker_backend.running(name)
+    return docker_backend.running(name, host=app_images.active_docker_host(app_id))
 
 
 def move(app_id: str, user: str, mount_name: str, target_mode: str,

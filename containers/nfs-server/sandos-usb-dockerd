@@ -1,0 +1,42 @@
+#!/bin/bash
+# Root helper: start/stop a SECOND dockerd instance rooted on an assigned USB
+# drive, so an app's IMAGE can live on that drive instead of the node's own
+# disk. Docker can't split one daemon's image storage per-image across mount
+# points — a second daemon with its own --data-root is the actual mechanism,
+# not a workaround. Installed at /usr/local/bin/sandos-usb-dockerd, allowed
+# via sudoers for the SM user (same narrow-scope pattern as sandos-usb-bind).
+#
+#   sandos-usb-dockerd start <uuid> <mountpoint>
+#   sandos-usb-dockerd stop  <uuid>
+#
+# `start` writes /run/sandos-usb-docker-<uuid>.env (consumed by the templated
+# unit below) and enables+starts sandos-usb-dockerd@<uuid>.service. `stop`
+# disables+stops it. The drive's OWN data (<mountpoint>/sandos-docker-data)
+# is never touched by stop — only the running daemon process goes away.
+set -euo pipefail
+
+UUID_RE='^[a-zA-Z0-9-]+$'
+
+case "${1:-}" in
+  start)
+    uuid="${2:-}"; mountpoint="${3:-}"
+    [[ "$uuid" =~ $UUID_RE ]] || { echo "bad uuid" >&2; exit 2; }
+    [[ "$mountpoint" == /media/* || "$mountpoint" == /run/media/* ]] \
+        || { echo "bad mountpoint" >&2; exit 2; }
+    [[ "$mountpoint" == *..* ]] && { echo "bad path" >&2; exit 2; }
+    mountpoint -q "$mountpoint" || { echo "not a mountpoint" >&2; exit 2; }
+    mkdir -p "$mountpoint/sandos-docker-data"
+    printf 'SANDOS_USB_MOUNTPOINT=%s\n' "$mountpoint" > "/run/sandos-usb-docker-${uuid}.env"
+    systemctl enable --now "sandos-usb-dockerd@${uuid}.service"
+    ;;
+  stop)
+    uuid="${2:-}"
+    [[ "$uuid" =~ $UUID_RE ]] || { echo "bad uuid" >&2; exit 2; }
+    systemctl disable --now "sandos-usb-dockerd@${uuid}.service" 2>/dev/null || true
+    rm -f "/run/sandos-usb-docker-${uuid}.env"
+    ;;
+  *)
+    echo "usage: sandos-usb-dockerd start <uuid> <mountpoint> | stop <uuid>" >&2
+    exit 2
+    ;;
+esac

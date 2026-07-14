@@ -1,0 +1,28 @@
+[Unit]
+Description=Sand-OS per-drive Docker daemon (USB app hosting) for drive %i
+# Independent of the host's main docker.service — this is a SEPARATE daemon
+# instance with its own --data-root/socket, so an app's image can live on the
+# assigned USB drive instead of the node's own disk. Started/stopped by the
+# sandos-usb-dockerd helper as the drive is assigned/unassigned for app
+# hosting (server/app/usb_storage.py's poller), not enabled at boot.
+After=network.target
+
+[Service]
+Type=notify
+EnvironmentFile=/run/sandos-usb-docker-%i.env
+ExecStart=/usr/bin/dockerd \
+    --data-root ${SANDOS_USB_MOUNTPOINT}/sandos-docker-data \
+    --host unix:///run/sandos-usb-docker-%i.sock \
+    --pidfile /run/sandos-usb-docker-%i.pid
+# Same crash-resilience as the main docker.service.
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+Delegate=yes
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

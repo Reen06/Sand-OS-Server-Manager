@@ -62,14 +62,18 @@ def _variant(app: AppDef, variant_id: str) -> AppVariant:
     raise KeyError(f"no such variant {variant_id!r} for {app.id}")
 
 
-def _docker_image_exists(tag: str) -> bool:
-    r = subprocess.run(["docker", "image", "inspect", tag],
+def _host_args(host: str | None) -> list[str]:
+    return ["-H", host] if host else []
+
+
+def _docker_image_exists(tag: str, host: str | None = None) -> bool:
+    r = subprocess.run(["docker", *_host_args(host), "image", "inspect", tag],
                        capture_output=True, timeout=10)
     return r.returncode == 0
 
 
-def _docker_image_size(tag: str) -> int | None:
-    r = subprocess.run(["docker", "image", "inspect", tag, "--format", "{{.Size}}"],
+def _docker_image_size(tag: str, host: str | None = None) -> int | None:
+    r = subprocess.run(["docker", *_host_args(host), "image", "inspect", tag, "--format", "{{.Size}}"],
                        capture_output=True, text=True, timeout=10)
     try:
         return int(r.stdout.strip())
@@ -77,11 +81,16 @@ def _docker_image_size(tag: str) -> int | None:
         return None
 
 
-def _image_in_use(tag: str) -> bool:
+def _image_in_use(tag: str, host: str | None = None) -> bool:
     """True if any container (running or stopped) still references this image."""
-    r = subprocess.run(["docker", "ps", "-a", "--filter", f"ancestor={tag}", "-q"],
+    r = subprocess.run(["docker", *_host_args(host), "ps", "-a", "--filter", f"ancestor={tag}", "-q"],
                        capture_output=True, text=True, timeout=10)
     return bool(r.stdout.strip())
+
+
+def _host_for(app: AppDef) -> str | None:
+    from . import app_images
+    return app_images.active_docker_host(app.id)
 
 
 # ── dynamic resolvers: fill in build_args right before an install ──────────────
@@ -117,17 +126,18 @@ def list_variants(app: AppDef, show_dev: bool = False) -> dict:
     state = _load_state()
     active_id = state.get(app.id, {}).get("variant_id") or _default_active(app)
     job = _jobs.get(app.id)
+    host = _host_for(app)
 
     out = []
     for v in app.variants:
         if v.channel == "dev" and not show_dev:
             continue
-        installed = _docker_image_exists(v.image_tag)
+        installed = _docker_image_exists(v.image_tag, host)
         out.append({
             "id": v.id, "label": v.label, "channel": v.channel,
             "installed": installed,
             "active": v.id == active_id,
-            "size": _docker_image_size(v.image_tag) if installed else None,
+            "size": _docker_image_size(v.image_tag, host) if installed else None,
         })
     return {
         "supported": True,
@@ -148,7 +158,9 @@ def _default_active(app: AppDef) -> str:
 def active_image(app: AppDef) -> str:
     """What docker_backend.spawn() should actually run. Falls back to
     `app.image` when variants are unused/undeclared, or the selected variant
-    somehow isn't installed (never launch a tag that isn't there)."""
+    somehow isn't installed (never launch a tag that isn't there). Checks the
+    app's ACTUAL daemon (local, or a USB drive if the image was relocated) —
+    checking the wrong one would wrongly report "not installed"."""
     if not app.variants:
         return app.image
     state = _load_state()
@@ -157,14 +169,14 @@ def active_image(app: AppDef) -> str:
         v = _variant(app, variant_id)
     except KeyError:
         return app.image
-    return v.image_tag if _docker_image_exists(v.image_tag) else app.image
+    return v.image_tag if _docker_image_exists(v.image_tag, _host_for(app)) else app.image
 
 
 # ── actions ──────────────────────────────────────────────────────────────────
 
 def select(app: AppDef, variant_id: str) -> dict:
     v = _variant(app, variant_id)
-    if not _docker_image_exists(v.image_tag):
+    if not _docker_image_exists(v.image_tag, _host_for(app)):
         raise ValueError(f"{v.label} isn't installed yet — install it first")
     state = _load_state()
     state[app.id] = {"variant_id": variant_id}
@@ -174,14 +186,16 @@ def select(app: AppDef, variant_id: str) -> dict:
 
 def uninstall(app: AppDef, variant_id: str) -> dict:
     v = _variant(app, variant_id)
+    host = _host_for(app)
     state = _load_state()
     if state.get(app.id, {}).get("variant_id", _default_active(app)) == variant_id:
         raise ValueError("can't uninstall the active version — switch to another first")
-    if not _docker_image_exists(v.image_tag):
+    if not _docker_image_exists(v.image_tag, host):
         return {"removed": False, "reason": "not installed"}
-    if _image_in_use(v.image_tag):
+    if _image_in_use(v.image_tag, host):
         raise ValueError("an instance is using this version — stop it first")
-    r = subprocess.run(["docker", "rmi", v.image_tag], capture_output=True, text=True, timeout=60)
+    r = subprocess.run(["docker", *_host_args(host), "rmi", v.image_tag],
+                       capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip() or r.stdout.strip())
     return {"removed": True}
@@ -212,6 +226,10 @@ def install(app: AppDef, variant_id: str) -> dict:
 
 
 def _run_install(app: AppDef, v: AppVariant, job: dict) -> None:
+    # Note: builds/pulls always target the app's CURRENT daemon (local, or a
+    # USB drive if the image already lives there) — installing a new variant
+    # of an already-relocated app keeps it on that same drive.
+    host = _host_for(app)
     try:
         build_args = dict(v.build_args)
         if v.resolver:
@@ -220,10 +238,10 @@ def _run_install(app: AppDef, v: AppVariant, job: dict) -> None:
             build_args.update({k: val for k, val in resolved.items() if not k.startswith("_")})
 
         if v.kind == "pull":
-            cmd = ["docker", "pull", v.source or v.image_tag]
+            cmd = ["docker", *_host_args(host), "pull", v.source or v.image_tag]
         else:
             context = os.path.join(_REPO_ROOT, app.build_context)
-            cmd = ["docker", "build", "-t", v.image_tag]
+            cmd = ["docker", *_host_args(host), "build", "-t", v.image_tag]
             for k, val in build_args.items():
                 cmd += ["--build-arg", f"{k}={val}"]
             cmd.append(context)
@@ -237,11 +255,11 @@ def _run_install(app: AppDef, v: AppVariant, job: dict) -> None:
         proc.wait(timeout=1800)
 
         if v.kind == "pull" and v.source and v.source != v.image_tag:
-            subprocess.run(["docker", "tag", v.source, v.image_tag], timeout=15)
+            subprocess.run(["docker", *_host_args(host), "tag", v.source, v.image_tag], timeout=15)
 
         if proc.returncode != 0:
             job["error"] = f"exit code {proc.returncode}"
-        elif not _docker_image_exists(v.image_tag):
+        elif not _docker_image_exists(v.image_tag, host):
             job["error"] = "build finished but the image tag wasn't produced"
     except Exception as e:  # noqa: BLE001
         job["error"] = str(e)

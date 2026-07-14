@@ -425,8 +425,9 @@ def url_for(inst: Instance) -> str:
 
 def status(app_id: str, user: str) -> str:
     """stopped | starting (running, web not ready) | active (connected) | idle."""
+    from . import app_images
     inst = _instances.get((app_id, _eff(app_id, user)))
-    if not inst or not docker_backend.running(inst.name):
+    if not inst or not docker_backend.running(inst.name, host=app_images.active_docker_host(app_id)):
         return "stopped"
     if not docker_backend.web_ready(inst.web_port):
         return "starting"
@@ -434,36 +435,41 @@ def status(app_id: str, user: str) -> str:
 
 
 def launch(app_id: str, user: str) -> Instance:
+    from . import app_images
     if app_id not in APPS:
         raise KeyError(app_id)
     app = APPS[app_id]
+    host = app_images.active_docker_host(app_id)
     with _lock_for((app_id, _eff(app_id, user))):
         inst = _instance_for(app_id, user)
-        if not docker_backend.running(inst.name):
+        if not docker_backend.running(inst.name, host=host):
             res = docker_backend.spawn(inst, app)
             if res.returncode != 0:
                 if app.services:
-                    docker_backend.teardown(inst.name, app)  # clean a partial stack
+                    docker_backend.teardown(inst.name, app, host=host)  # clean a partial stack
                 raise RuntimeError(res.stderr.strip() or "docker run failed")
         return inst
 
 
 def stop(app_id: str, user: str) -> None:
+    from . import app_images
     name = instance_name(app_id, user)   # shared-aware
     app = APPS.get(app_id)
+    host = app_images.active_docker_host(app_id)
     if app:
-        docker_backend.teardown(name, app)   # primary + any sidecars + network
+        docker_backend.teardown(name, app, host=host)   # primary + any sidecars + network
     else:
-        docker_backend.stop(name)
+        docker_backend.stop(name, host=host)
 
 
 def instances_summary() -> list[dict]:
     """Every currently-tracked instance across all apps, with its container name
     and running state — used by /api/sm/apps/stats (Fleet page's per-app
     breakdown) to join registry state against `docker stats`."""
+    from . import app_images
     return [
         {"app_id": app_id, "user": user, "name": inst.name,
-         "running": docker_backend.running(inst.name)}
+         "running": docker_backend.running(inst.name, host=app_images.active_docker_host(app_id))}
         for (app_id, user), inst in _instances.items()
     ]
 
@@ -486,31 +492,35 @@ def list_for_user(user: str) -> list[dict]:
 def reconcile_from_docker() -> None:
     """On startup, re-adopt any existing sm- containers using their ACTUAL
     published ports (not a fresh slot) so the in-memory map matches reality and
-    new launches don't collide with a running instance's ports."""
-    for name in docker_backend.list_sm_containers():
-        web_port = docker_backend.published_web_port(name)
-        if web_port is None:
-            continue   # sidecars (DB/cache) publish no web port — skip them
-        # Identify (app_id, user). Shared apps are a bare `sm-{app}`; per-user
-        # apps are `sm-{app}-{user}`.
-        bare = name[3:]  # strip 'sm-'
-        app_id = user = None
-        if bare in APPS and APPS[bare].mode == "shared":
-            app_id, user = bare, _SHARED
-        else:
-            m = re.match(r"^sm-([a-z0-9-]+?)-(.+)$", name)
-            if m and m.group(1) in APPS:
-                app_id, user = m.group(1), m.group(2)
-        if not app_id:
-            continue
-        slot = web_port - config.WEB_PORT_BASE
-        if not (0 <= slot < config.SLOT_COUNT):
-            continue
-        relay_min = config.RELAY_BASE + slot * config.RELAY_PER_SLOT
-        _slots[slot] = (app_id, user)
-        _instances[(app_id, user)] = Instance(
-            app_id=app_id, user=user, slot=slot, name=name,
-            web_port=web_port, turn_port=config.TURN_PORT_BASE + slot,
-            relay_min=relay_min, relay_max=relay_min + config.RELAY_PER_SLOT - 1,
-            volume=f"{name}-projects",
-        )
+    new launches don't collide with a running instance's ports. Checks EVERY
+    active daemon (the default one + any USB-hosting drive's secondary
+    dockerd) — an app whose image lives on a USB drive is invisible to the
+    default daemon entirely."""
+    for docker_host in docker_backend.all_docker_hosts():
+        for name in docker_backend.list_sm_containers(host=docker_host):
+            web_port = docker_backend.published_web_port(name, host=docker_host)
+            if web_port is None:
+                continue   # sidecars (DB/cache) publish no web port — skip them
+            # Identify (app_id, user). Shared apps are a bare `sm-{app}`; per-user
+            # apps are `sm-{app}-{user}`.
+            bare = name[3:]  # strip 'sm-'
+            app_id = user = None
+            if bare in APPS and APPS[bare].mode == "shared":
+                app_id, user = bare, _SHARED
+            else:
+                m = re.match(r"^sm-([a-z0-9-]+?)-(.+)$", name)
+                if m and m.group(1) in APPS:
+                    app_id, user = m.group(1), m.group(2)
+            if not app_id:
+                continue
+            slot = web_port - config.WEB_PORT_BASE
+            if not (0 <= slot < config.SLOT_COUNT):
+                continue
+            relay_min = config.RELAY_BASE + slot * config.RELAY_PER_SLOT
+            _slots[slot] = (app_id, user)
+            _instances[(app_id, user)] = Instance(
+                app_id=app_id, user=user, slot=slot, name=name,
+                web_port=web_port, turn_port=config.TURN_PORT_BASE + slot,
+                relay_min=relay_min, relay_max=relay_min + config.RELAY_PER_SLOT - 1,
+                volume=f"{name}-projects",
+            )

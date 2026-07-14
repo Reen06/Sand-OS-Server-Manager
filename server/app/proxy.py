@@ -21,7 +21,7 @@ from fastapi import Request, WebSocket
 from fastapi.responses import FileResponse, Response
 from starlette.websockets import WebSocketDisconnect
 
-from . import config, docker_backend, pwa, registry
+from . import app_images, config, docker_backend, pwa, registry
 
 log = logging.getLogger("sm.proxy")
 if not log.handlers:
@@ -61,8 +61,12 @@ def _auth() -> str:
 
 
 def _instance_port(app_id: str, user: str) -> int | None:
+    # The published port itself is reachable at 127.0.0.1:<port> regardless of
+    # which daemon started the container (port publishing is a host-level
+    # thing) — but the RUNNING check must query the app's actual daemon, or a
+    # USB-hosted app always reads as "not running" against the default one.
     inst = registry.get_instance(app_id, user)
-    if inst and docker_backend.running(inst.name):
+    if inst and docker_backend.running(inst.name, host=app_images.active_docker_host(app_id)):
         return inst.web_port
     return None
 

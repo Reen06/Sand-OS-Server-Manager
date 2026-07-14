@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import app_storage, app_variants, config, docker_backend, files, glances_svc, hub_auth, metrics, nas, proxy, pwa, registry, snapshots, usb_storage
+from . import app_images, app_storage, app_variants, config, docker_backend, files, glances_svc, hub_auth, metrics, nas, pending_imports, proxy, pwa, registry, snapshots, usb_storage
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -130,6 +130,22 @@ def usb_eject(request: Request, body: _UsbAssignBody):
         return {"ok": True, **usb_storage.eject(body.uuid)}
     except FileNotFoundError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
+
+
+class _UsbAppHostingBody(BaseModel):
+    uuid: str
+    enabled: bool
+
+
+@app.post("/api/nas/usb/app-hosting")
+def usb_app_hosting(request: Request, body: _UsbAppHostingBody):
+    """Toggle whether this assigned drive runs a secondary Docker daemon, so
+    an app's IMAGE (not just its data) can be relocated onto it."""
+    _require_admin(request)
+    try:
+        return {"ok": True, **usb_storage.set_app_hosting(body.uuid, body.enabled)}
+    except (ValueError, RuntimeError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
 @app.get("/api/nas/shared")
@@ -349,8 +365,15 @@ def sm_apps_stats(request: Request):
     administration/monitoring, visible to anyone who can see the Fleet page."""
     _require_identity(request)
     instances = registry.instances_summary()
-    running_names = [i["name"] for i in instances if i["running"]]
-    live = docker_backend.stats(running_names)
+    # Bucket by daemon (an app whose image lives on a USB drive is only
+    # visible to THAT drive's secondary dockerd, not the default one).
+    by_host: dict[str | None, list[str]] = {}
+    for i in instances:
+        if i["running"]:
+            by_host.setdefault(app_images.active_docker_host(i["app_id"]), []).append(i["name"])
+    live: dict[str, dict] = {}
+    for host, names in by_host.items():
+        live.update(docker_backend.stats(names, host=host))
     by_app: dict[str, list[dict]] = {}
     for i in instances:
         if not i["running"]:
@@ -510,6 +533,93 @@ def app_storage_reclaim(app_id: str, request: Request, body: _StorageReclaimBody
             app_id, user, body.mount_name, body.old_volume)}
     except (KeyError, ValueError, RuntimeError) as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+# ── Image location — move/mirror the app's IMAGE (not its data) to USB ────────
+class _ImageMoveBody(BaseModel):
+    usb_uuid: str
+
+
+@app.get("/api/apps/{app_id}/image-location")
+def app_image_location(app_id: str, request: Request):
+    """Where this app's IMAGE currently lives (local disk / a USB drive) and
+    what app-hosting-enabled drives it could move/mirror to — backs the
+    Manage modal's 'Image location' section."""
+    _require_admin(request)
+    try:
+        return {"ok": True, **app_images.list_image_options(app_id)}
+    except KeyError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
+
+
+@app.post("/api/apps/{app_id}/image-location/move")
+def app_image_move(app_id: str, request: Request, body: _ImageMoveBody):
+    """Move the image to USB — frees local disk; the local copy is removed
+    once the USB copy is verified present."""
+    _require_admin(request)
+    try:
+        return {"ok": True, **app_images.move_to_usb(app_id, body.usb_uuid, keep_local=False)}
+    except (KeyError, ValueError, RuntimeError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.post("/api/apps/{app_id}/image-location/mirror")
+def app_image_mirror(app_id: str, request: Request, body: _ImageMoveBody):
+    """Mirror the image to USB — keeps BOTH copies, for redundancy. Uses
+    MORE disk, the opposite goal of Move — a separate action on purpose."""
+    _require_admin(request)
+    try:
+        return {"ok": True, **app_images.move_to_usb(app_id, body.usb_uuid, keep_local=True)}
+    except (KeyError, ValueError, RuntimeError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.post("/api/apps/{app_id}/image-location/move-to-local")
+def app_image_move_to_local(app_id: str, request: Request):
+    """Move the image back to this node's own disk. The USB copy is left in
+    place — freeing it is a separate, explicit /remove-usb-copy call."""
+    _require_admin(request)
+    try:
+        return {"ok": True, **app_images.move_to_local(app_id)}
+    except (KeyError, ValueError, RuntimeError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.post("/api/apps/{app_id}/image-location/remove-usb-copy")
+def app_image_remove_usb_copy(app_id: str, request: Request):
+    """Explicit follow-up to move-to-local: delete the now-leftover USB copy.
+    Refuses if that drive is still the ACTIVE copy (can't happen by accident)."""
+    _require_admin(request)
+    try:
+        return {"ok": True, **app_images.remove_usb_copy(app_id)}
+    except (KeyError, ValueError, RuntimeError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+# ── Same-mesh app portability — pending imports from a plugged-in drive ────────
+@app.get("/api/apps/pending-imports")
+def apps_pending_imports(request: Request):
+    """Apps detected on an app-hosting-enabled USB drive that this node has
+    never seen before. NEVER auto-registered — surfaced here for an explicit
+    admin click (see /import) per the no-silent-execution-from-removable-
+    media decision."""
+    _require_admin(request)
+    return {"ok": True, "pending": pending_imports.list_pending()}
+
+
+@app.post("/api/apps/pending-imports/{app_id}/import")
+def apps_import_pending(app_id: str, request: Request):
+    _require_admin(request)
+    try:
+        return {"ok": True, **pending_imports.import_app(app_id)}
+    except (KeyError, ValueError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.post("/api/apps/pending-imports/{app_id}/dismiss")
+def apps_dismiss_pending(app_id: str, request: Request):
+    _require_admin(request)
+    return {"ok": True, **pending_imports.dismiss(app_id)}
 
 
 @app.post("/api/apps/{app_id}/reset")
