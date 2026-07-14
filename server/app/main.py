@@ -610,15 +610,26 @@ def app_storage_list(app_id: str, request: Request):
 
 @app.post("/api/apps/{app_id}/storage/move")
 def app_storage_move(app_id: str, request: Request, body: _StorageMoveBody):
-    """Move one Mount's data to a new location. Refused while the instance is
-    running; the OLD copy is kept until an explicit /storage/reclaim call."""
+    """Start moving one Mount's data to a new location in the background.
+    Returns a job_id immediately; poll GET /storage/move/status/{job_id}."""
     ident = _require_admin(request)
     user = registry._eff(app_id, ident["username"])
     try:
-        return {"ok": True, **app_storage.move(
-            app_id, user, body.mount_name, body.target_mode, body.usb_uuid)}
+        job_id = app_storage.start_move(
+            app_id, user, body.mount_name, body.target_mode, body.usb_uuid)
+        return {"ok": True, "job_id": job_id}
     except (KeyError, ValueError, RuntimeError) as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.get("/api/apps/{app_id}/storage/move/status/{job_id}")
+def app_storage_move_status(app_id: str, job_id: str, request: Request):
+    """Poll the status of a background storage-move job."""
+    _require_admin(request)
+    job = app_storage.move_status(job_id)
+    if job is None:
+        return JSONResponse({"ok": False, "error": "job not found"}, status_code=404)
+    return {"ok": True, **job}
 
 
 @app.post("/api/apps/{app_id}/storage/reclaim")
@@ -652,35 +663,59 @@ def app_image_location(app_id: str, request: Request):
 
 @app.post("/api/apps/{app_id}/image-location/move")
 def app_image_move(app_id: str, request: Request, body: _ImageMoveBody):
-    """Move the image to USB — frees local disk; the local copy is removed
-    once the USB copy is verified present."""
+    """Start moving the image to USB in the background. Returns job_id immediately."""
     _require_admin(request)
     try:
-        return {"ok": True, **app_images.move_to_usb(app_id, body.usb_uuid, keep_local=False)}
+        job_id = app_images.start_move_to_usb(app_id, body.usb_uuid, keep_local=False)
+        return {"ok": True, "job_id": job_id}
     except (KeyError, ValueError, RuntimeError) as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
 @app.post("/api/apps/{app_id}/image-location/mirror")
 def app_image_mirror(app_id: str, request: Request, body: _ImageMoveBody):
-    """Mirror the image to USB — keeps BOTH copies, for redundancy. Uses
-    MORE disk, the opposite goal of Move — a separate action on purpose."""
+    """Start mirroring the image to USB in the background. Returns job_id immediately."""
     _require_admin(request)
     try:
-        return {"ok": True, **app_images.move_to_usb(app_id, body.usb_uuid, keep_local=True)}
+        job_id = app_images.start_move_to_usb(app_id, body.usb_uuid, keep_local=True)
+        return {"ok": True, "job_id": job_id}
     except (KeyError, ValueError, RuntimeError) as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
 @app.post("/api/apps/{app_id}/image-location/move-to-local")
 def app_image_move_to_local(app_id: str, request: Request):
-    """Move the image back to this node's own disk. The USB copy is left in
-    place — freeing it is a separate, explicit /remove-usb-copy call."""
+    """Copy the image back to local disk AND remove the USB copy — frees the
+    drive. Returns job_id immediately."""
     _require_admin(request)
     try:
-        return {"ok": True, **app_images.move_to_local(app_id)}
+        job_id = app_images.start_move_to_local(app_id, delete_usb_copy=True)
+        return {"ok": True, "job_id": job_id}
     except (KeyError, ValueError, RuntimeError) as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.post("/api/apps/{app_id}/image-location/clone-to-local")
+def app_image_clone_to_local(app_id: str, request: Request):
+    """Copy the image back to local disk but LEAVE the USB copy in place —
+    for when the drive should stay portable to another node. Returns
+    job_id immediately."""
+    _require_admin(request)
+    try:
+        job_id = app_images.start_move_to_local(app_id, delete_usb_copy=False)
+        return {"ok": True, "job_id": job_id}
+    except (KeyError, ValueError, RuntimeError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.get("/api/apps/{app_id}/image-location/move/status/{job_id}")
+def app_image_move_status(app_id: str, job_id: str, request: Request):
+    """Poll the status of a background image-move job."""
+    _require_admin(request)
+    job = app_images.img_job_status(job_id)
+    if job is None:
+        return JSONResponse({"ok": False, "error": "job not found"}, status_code=404)
+    return {"ok": True, **job}
 
 
 @app.post("/api/apps/{app_id}/image-location/remove-usb-copy")

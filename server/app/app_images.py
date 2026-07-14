@@ -324,7 +324,16 @@ def move_to_usb(app_id: str, usb_uuid: str, keep_local: bool, job: dict | None =
             "size_bytes": _image_size(tag, host)}
 
 
-def move_to_local(app_id: str, job: dict | None = None) -> dict:
+def move_to_local(app_id: str, delete_usb_copy: bool = False, job: dict | None = None) -> dict:
+    """Copy the image back to local disk. Mirrors move_to_usb's own Move vs
+    Mirror split, just in the opposite direction:
+      delete_usb_copy=True   "Move to local"   — frees the USB drive; the
+                                                  USB copy is removed once
+                                                  the local copy is verified.
+      delete_usb_copy=False  "Clone to local"  — keeps BOTH copies (the USB
+                                                  one stays the active one
+                                                  from other nodes' point of
+                                                  view, this is just a spare)."""
     app = registry.APPS.get(app_id)
     if app is None:
         raise KeyError(app_id)
@@ -348,13 +357,17 @@ def move_to_local(app_id: str, job: dict | None = None) -> dict:
         raise RuntimeError("image transfer reported success but the image isn't local")
 
     state = _load_state()
-    # Keep the drive's uuid around (as "local" now, not "usb") so a later
-    # remove_usb_copy() knows which drive's leftover copy to clean up —
-    # popping the entry entirely would lose that. USB copy is deliberately
-    # left in place otherwise — freeing it is a separate, explicit step,
-    # same "never delete without a follow-up" rule as app_storage.py's
-    # move()/delete_old().
-    state[app_id] = {"mode": "local", "last_usb_uuid": loc["usb_uuid"]}
+    if delete_usb_copy:
+        r = subprocess.run(["docker", "-H", host, "rmi", tag],
+                           capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr.strip() or r.stdout.strip() or "couldn't remove the USB copy")
+        state[app_id] = {"mode": "local"}
+    else:
+        # Keep the drive's uuid around (as "local" now, not "usb") so a later
+        # remove_usb_copy() knows which drive's leftover copy to clean up —
+        # popping the entry entirely would lose that.
+        state[app_id] = {"mode": "local", "last_usb_uuid": loc["usb_uuid"]}
     _save_state(state)
     return {"ok": True, "mode": "local", "size_bytes": _image_size(tag, None)}
 
@@ -394,7 +407,7 @@ def _run_move_to_usb(job: dict, app_id: str, usb_uuid: str, keep_local: bool) ->
         job["done"] = True
 
 
-def start_move_to_local(app_id: str) -> str:
+def start_move_to_local(app_id: str, delete_usb_copy: bool = False) -> str:
     """Validate eagerly, then copy back to local in a background thread. Returns job_id."""
     app = registry.APPS.get(app_id)
     if app is None:
@@ -407,16 +420,17 @@ def start_move_to_local(app_id: str) -> str:
     if not usb_storage.docker_host_for(loc["usb_uuid"]):
         raise RuntimeError("that USB drive isn't plugged in right now")
 
-    job_id, job = _new_img_job(app_id, "move-to-local")
-    t = threading.Thread(target=_run_move_to_local, args=(job, app_id),
+    action = "move-to-local" if delete_usb_copy else "clone-to-local"
+    job_id, job = _new_img_job(app_id, action)
+    t = threading.Thread(target=_run_move_to_local, args=(job, app_id, delete_usb_copy),
                          daemon=True, name=f"img-local-{job_id[:8]}")
     t.start()
     return job_id
 
 
-def _run_move_to_local(job: dict, app_id: str) -> None:
+def _run_move_to_local(job: dict, app_id: str, delete_usb_copy: bool) -> None:
     try:
-        result = move_to_local(app_id, job=job)
+        result = move_to_local(app_id, delete_usb_copy, job=job)
         job["mode"] = result.get("mode")
         job["size_bytes"] = result.get("size_bytes")
         job["ok"] = True
