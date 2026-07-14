@@ -264,8 +264,11 @@ def _run_move(job: dict, app_id: str, user: str, mount_name: str,
         copy_proc = subprocess.Popen(
             ["docker", "run", "--rm", "-v", f"{old_vol}:/from", "-v", f"{new_vol}:/to",
              "alpine", "sh", "-c", "cp -a /from/. /to/"])
+        # A `du` sample racing cp -a mid-write (e.g. catching a file between
+        # truncate and rewrite) can occasionally read back LOWER than the
+        # previous sample — never report that to the UI as a regression.
         while copy_proc.poll() is None:
-            job["bytes_copied"] = _volume_size(new_vol)
+            job["bytes_copied"] = max(job["bytes_copied"], _volume_size(new_vol))
             time.sleep(2)
         if copy_proc.returncode != 0:
             raise RuntimeError("copy failed")
