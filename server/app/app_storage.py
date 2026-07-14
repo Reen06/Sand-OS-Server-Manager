@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 
 from . import config, docker_backend, registry, usb_storage
@@ -85,6 +86,22 @@ def effective_storage(app_id: str, user: str, m: Mount) -> tuple[str, str | None
     return getattr(m, "storage", "local"), None
 
 
+def _volume_size_bytes(volume: str) -> int | None:
+    """On-disk size of a docker volume's content — a throwaway alpine `du`,
+    same idiom `move()` already uses for the copy+verify step. None if the
+    volume doesn't exist yet (never created) or the probe fails."""
+    r = subprocess.run(
+        ["docker", "run", "--rm", "-v", f"{volume}:/v", "alpine",
+         "du", "-sb", "/v"],
+        capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        return None
+    try:
+        return int(r.stdout.split()[0])
+    except (IndexError, ValueError):
+        return None
+
+
 def _current_volume(app_id: str, user: str, m: Mount) -> str:
     """The volume name currently backing this mount, whatever mode it's in —
     used to find the OLD data to copy from during a move."""
@@ -96,27 +113,48 @@ def _current_volume(app_id: str, user: str, m: Mount) -> str:
     return registry.resolve_volume(app_id, user, m)
 
 
+def _local_free_bytes() -> int | None:
+    try:
+        return shutil.disk_usage("/var/lib/docker").free
+    except OSError:
+        return None
+
+
+def _nas_free_bytes() -> int | None:
+    try:
+        return shutil.disk_usage(config.NAS_ROOT).free
+    except OSError:
+        return None
+
+
 def list_locations(app_id: str, user: str) -> dict:
-    """One row per relocatable Mount: current location + the menu of targets a
-    'manage storage' UI can move it to."""
+    """One row per relocatable Mount: current location + SIZE (so 'how much
+    room will this take up' is answerable before moving anything), plus the
+    menu of targets a 'manage storage' UI can move it to, each annotated with
+    how much free space is actually there right now."""
     app = registry.APPS.get(app_id)
     if not app:
         raise KeyError(app_id)
     devices = [d for d in usb_storage.list_devices() if d.get("mountpoint") and d.get("assign")]
+    local_free = _local_free_bytes()
+    nas_free = _nas_free_bytes() if config.NAS_ENABLED else None
     rows = []
     for m in _relocatable(app_id):
         mode, usb_uuid = effective_storage(app_id, user, m)
-        options = [{"mode": "local", "label": "This server (local disk)"}]
+        options = [{"mode": "local", "label": "This server (local disk)", "free_bytes": local_free}]
         if config.NAS_ENABLED:
-            options.append({"mode": "nfs", "label": "Fleet NAS (shared across nodes)"})
+            options.append({"mode": "nfs", "label": "Fleet NAS (shared across nodes)",
+                             "free_bytes": nas_free})
         for d in devices:
             options.append({
                 "mode": "usb", "usb_uuid": d["uuid"],
-                "label": f"USB: {d['label']} ({d.get('size', '?')})",
+                "label": f"USB: {d['label']}",
+                "free_bytes": usb_storage.free_bytes_for(d["uuid"]),
             })
         rows.append({
             "mount_name": m.name, "path": m.path, "scope": m.scope,
             "current_mode": mode, "current_usb_uuid": usb_uuid,
+            "current_size_bytes": _volume_size_bytes(_current_volume(app_id, user, m)),
             "options": options,
         })
     return {"app_id": app_id, "mounts": rows}

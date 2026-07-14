@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -258,6 +259,19 @@ def mountpoint_for(uuid: str) -> str | None:
     volume) when the drive a running app depends on isn't there."""
     part = next((p for p in usb_partitions() if p["uuid"] == uuid), None)
     return part["mountpoint"] if part else None
+
+
+def free_bytes_for(uuid: str) -> int | None:
+    """Free space on an assigned drive's own filesystem right now — lets the
+    storage-move UI show 'will it fit' before committing to a move. None if
+    the drive isn't currently mounted."""
+    mountpoint = mountpoint_for(uuid)
+    if not mountpoint:
+        return None
+    try:
+        return shutil.disk_usage(mountpoint).free
+    except OSError:
+        return None
 
 
 def roots_for(user: str) -> list[dict]:
