@@ -49,15 +49,24 @@ _devices: dict[str, dict] = {}   # uuid -> {name, label, size, mountpoint, assig
 def _lsblk() -> list[dict]:
     try:
         out = subprocess.run(
-            ["lsblk", "-J", "-o", "NAME,TRAN,SIZE,LABEL,UUID,MOUNTPOINT,TYPE,HOTPLUG"],
+            ["lsblk", "-J", "-o", "NAME,TRAN,SIZE,LABEL,UUID,MOUNTPOINT,TYPE,HOTPLUG,FSTYPE"],
             capture_output=True, text=True, timeout=10).stdout
         return json.loads(out).get("blockdevices", [])
     except Exception:  # noqa: BLE001
         return []
 
 
+# Filesystems with no Unix ownership/permission model — dockerd's data-root
+# needs real chown/chmod/hardlinks (overlay2), which these can never provide.
+# Fine for plain data storage (the existing NAS-graft feature), fundamentally
+# incompatible with app-hosting (a second dockerd) — checked upfront in
+# set_app_hosting() so this fails with one clear message instead of dockerd
+# crash-looping trying and failing to chown its data-root.
+_NON_POSIX_FSTYPES = {"vfat", "exfat", "ntfs", "ntfs3"}
+
+
 def usb_partitions() -> list[dict]:
-    """Partitions on hotplug/USB disks: [{name,uuid,label,size,mountpoint}]."""
+    """Partitions on hotplug/USB disks: [{name,uuid,label,size,mountpoint,fstype}]."""
     out = []
     for disk in _lsblk():
         if disk.get("type") != "disk":
@@ -72,6 +81,7 @@ def usb_partitions() -> list[dict]:
                     "label": part.get("label") or part["name"],
                     "size": part.get("size", ""),
                     "mountpoint": part.get("mountpoint"),
+                    "fstype": (part.get("fstype") or "").lower(),
                 })
     return out
 
@@ -209,6 +219,13 @@ def set_app_hosting(uuid: str, enabled: bool) -> dict:
     if enabled:
         if not mountpoint:
             raise RuntimeError("drive isn't mounted right now")
+        part = next((p for p in usb_partitions() if p["uuid"] == uuid), None)
+        if part and part["fstype"] in _NON_POSIX_FSTYPES:
+            raise RuntimeError(
+                f"this drive is formatted {part['fstype']} — Docker's image storage needs "
+                "real Unix permissions (chown/hardlinks), which vfat/exFAT/NTFS can't "
+                "provide. Reformat it as ext4 to use it for app hosting (plain file "
+                "storage on this drive is unaffected either way)")
         if not _start_dockerd(uuid, mountpoint):
             raise RuntimeError(
                 "couldn't start the per-drive Docker daemon — needs the one-time "

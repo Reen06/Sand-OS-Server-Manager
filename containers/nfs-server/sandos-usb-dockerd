@@ -20,8 +20,15 @@ UUID_RE='^[a-zA-Z0-9-]+$'
 case "${1:-}" in
   start)
     uuid="${2:-}"; mountpoint="${3:-}"
+    NAS="${NAS_ROOT:-/home/control/sandos-nas}"
     [[ "$uuid" =~ $UUID_RE ]] || { echo "bad uuid" >&2; exit 2; }
-    [[ "$mountpoint" == /media/* || "$mountpoint" == /run/media/* ]] \
+    # A drive also assigned to NAS sharing is bind-mounted at TWO paths for the
+    # same underlying storage — lsblk (and thus usb_storage.mountpoint_for())
+    # may report either one. Accept both the raw udisksctl mount and the NAS
+    # graft targets (matching sandos-usb-bind's own dst patterns) since they're
+    # the identical bytes either way.
+    [[ "$mountpoint" == /media/* || "$mountpoint" == /run/media/* \
+       || "$mountpoint" == "$NAS"/users/*/USB-* || "$mountpoint" == "$NAS"/shared/media/USB-* ]] \
         || { echo "bad mountpoint" >&2; exit 2; }
     [[ "$mountpoint" == *..* ]] && { echo "bad path" >&2; exit 2; }
     mountpoint -q "$mountpoint" || { echo "not a mountpoint" >&2; exit 2; }
