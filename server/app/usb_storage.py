@@ -251,6 +251,15 @@ def eject(uuid: str) -> dict:
     return {"uuid": uuid, "ejected": True}
 
 
+def mountpoint_for(uuid: str) -> str | None:
+    """Live mountpoint of an assigned drive, or None if it isn't currently
+    plugged in/mounted. Used by app_storage.py to bind an app's data straight
+    onto the drive — and to fail fast (not silently fall back to an empty
+    volume) when the drive a running app depends on isn't there."""
+    part = next((p for p in usb_partitions() if p["uuid"] == uuid), None)
+    return part["mountpoint"] if part else None
+
+
 def roots_for(user: str) -> list[dict]:
     """Extra file-picker roots from mounted, assigned drives."""
     from .files import _safe_user  # lazy: avoid import cycle

@@ -3,6 +3,7 @@ docker CLI (no extra SDK dependency). Mirrors the proven run-lan.sh parameters,
 but with per-instance ports so concurrent instances don't collide."""
 from __future__ import annotations
 import json
+import os
 import subprocess
 import time
 import urllib.error
@@ -178,6 +179,48 @@ def _safe(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-") or "x"
 
 
+def _usb_target(app_id: str, user: str, m) -> str:
+    """Subpath under a USB drive's own root for this (app, user-or-shared,
+    mount) — parallel to _nfs_target's naming, but on the drive itself rather
+    than the fleet NAS export."""
+    return f"sandos-apps/{_safe(app_id)}/{_safe(user)}/{_safe(m.name)}"
+
+
+def usb_volume_name(uuid: str, app_id: str, user: str, m) -> str:
+    return f"sm-usb-{_safe(uuid)}-{_safe(app_id)}-{_safe(user)}-{_safe(m.name)}"
+
+
+def ensure_usb_volume(uuid: str, app_id: str, user: str, m) -> str:
+    """Ensure a bind-backed docker volume onto an assigned USB drive's own
+    filesystem. Fails loudly if the drive isn't mounted right now — deliberate:
+    an app depending on a USB mount must refuse to start pointed at nothing,
+    not silently spawn against an empty local volume."""
+    from . import usb_storage
+    mountpoint = usb_storage.mountpoint_for(uuid)
+    if not mountpoint:
+        raise RuntimeError(
+            "that USB drive isn't plugged in / mounted right now — plug it in "
+            "(or re-assign this mount to local/NFS storage)")
+    subpath = _usb_target(app_id, user, m)
+    abs_path = os.path.join(mountpoint, subpath)
+    os.makedirs(abs_path, exist_ok=True)
+    vol = usb_volume_name(uuid, app_id, user, m)
+    if _docker(["volume", "inspect", vol], timeout=10).returncode != 0:
+        _docker(["volume", "create", "--driver", "local", "--opt", "type=none",
+                 "--opt", "o=bind", "--opt", f"device={abs_path}", vol], timeout=15)
+    return vol
+
+
+def nfs_volume_name(user: str, m) -> str:
+    return _nfs_target(user, m)[1]
+
+
+def ensure_nfs_volume(user: str, m) -> str:
+    """Public wrapper — app_storage.py resolves/creates NFS-backed volumes the
+    same way spawn()'s _mount_args does internally."""
+    return _ensure_nfs(user, m)
+
+
 def _nfs_target(user: str, m) -> tuple[str, str]:
     """(export subpath, docker volume name) for an NFS mount. per-user → the
     user's NAS home (same files across ALL their apps); shared → shared/{name};
@@ -215,10 +258,16 @@ def _ensure_nfs(user: str, m) -> str:
 
 
 def _mount_args(app_id: str, user: str, mounts) -> list[str]:
-    from . import registry
+    from . import registry, app_storage
     out: list[str] = []
     for m in mounts:
-        if getattr(m, "storage", "local") == "nfs" and config.NAS_ENABLED:
+        # app_storage's per-(app,user,mount) override takes precedence over the
+        # Mount's own declared default — this is what makes "move this app's
+        # data onto a USB drive" actually change where it runs from.
+        mode, usb_uuid = app_storage.effective_storage(app_id, user, m)
+        if mode == "usb" and usb_uuid:
+            vol = ensure_usb_volume(usb_uuid, app_id, user, m)
+        elif mode == "nfs" and config.NAS_ENABLED:
             vol = _ensure_nfs(user, m)                      # fleet NAS over NFSv4
         else:
             vol = registry.resolve_volume(app_id, user, m)  # node-local docker volume
@@ -235,6 +284,7 @@ def _spawn_service(inst: Instance, app: AppDef, svc, net: str) -> subprocess.Com
     for k, v in svc.env.items():
         args += ["-e", f"{k}={v}"]
     args += _mount_args(app.id, inst.user, svc.mounts)
+    args += getattr(svc, "docker_args", [])
     args.append(svc.image)
     args += svc.cmd
     return _docker(args, timeout=90)
@@ -330,6 +380,8 @@ def spawn(inst: Instance, app: AppDef) -> subprocess.CompletedProcess:
     # App-specific extra env (declared on the App Definition).
     for k, v in app.env.items():
         args += ["-e", f"{k}={v}"]
+
+    args += getattr(app, "docker_args", [])
 
     from . import app_variants  # deferred: avoids a circular import at load time
     args.append(app_variants.active_image(app))

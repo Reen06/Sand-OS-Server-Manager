@@ -168,6 +168,44 @@ APPS: dict[str, AppDef] = {
         # awareness, so the proxy strips to root like Nextcloud/WebCAD.
         proxy_subpath="root",
     ),
+    "renode": AppDef(
+        id="renode",
+        label="Renode",
+        icon="cpu",
+        color="green",
+        desc="Open-source microcontroller simulator — a real terminal onto "
+             "Renode's monitor console (load .resc scripts, simulate boards, "
+             "read UART). Not a Wokwi-style breadboard GUI — Wokwi itself "
+             "isn't self-hostable.",
+        # `docker build -t sm-renode-web:latest containers/renode-web` once,
+        # same manual-build pattern as WebCAD/HeliX/OpenMapper (no variants).
+        image=config.RENODE_IMAGE,
+        kind="web",
+        mode="shared",
+        internal_port=8080,
+        gpu=False,
+        mem_limit="1g",
+        proxy_subpath="root",     # ttyd serves its own root UI
+        mounts=[Mount(name="renode-projects", path="/root/projects", scope="shared", storage="nfs")],
+    ),
+    "stirlingpdf": AppDef(
+        id="stirlingpdf",
+        label="Stirling PDF",
+        icon="pencil",       # whitelisted; closest "edit a document" glyph the Hub ships
+        color="amber",
+        desc="FOSS PDF toolkit — merge, split, convert, OCR, sign, and more.",
+        image=config.STIRLINGPDF_IMAGE,
+        kind="web",
+        mode="shared",       # one shared tool instance; no per-user accounts of its own
+        internal_port=8080,
+        gpu=False,
+        mem_limit="1g",
+        proxy_subpath="root",     # not baseURL-aware, like WebCAD/Ray Optics
+        mounts=[
+            Mount(name="stirlingpdf-config", path="/configs", scope="shared"),
+            Mount(name="stirlingpdf-logs", path="/logs", scope="shared"),
+        ],
+    ),
     "nextcloud": AppDef(
         id="nextcloud",
         label="Nextcloud",
@@ -224,6 +262,70 @@ APPS: dict[str, AppDef] = {
                 ready_cmd=["sh", "-c", "mariadb-admin ping -p$MARIADB_ROOT_PASSWORD --silent"],
             ),
             Service(name="redis", image=config.REDIS_IMAGE),
+            # Collabora Online — Docs/Sheets/Slides, wired in via the richdocuments
+            # app (containers/nextcloud/20-sm-saml.sh installs + points it at
+            # http://collabora:9980). No published host port — same as db/redis,
+            # reached only container-to-container by Nextcloud itself.
+            Service(
+                name="collabora",
+                image=config.COLLABORA_IMAGE,
+                env={
+                    "domain": config.COLLABORA_DOMAIN_REGEX,
+                    "extra_params": "--o:ssl.enable=false --o:ssl.termination=true --o:net.proto=IPv4",
+                    "dictionaries": "en_US",
+                },
+                # Collabora's entrypoint wants /dev/mqueue writable + (on some
+                # kernels) CAP_MKNOD for its loolwsd sandbox setup.
+                docker_args=["--cap-add", "MKNOD"],
+            ),
+        ],
+    ),
+    # OnlyOffice Document Server — catalogued as an alternative to Collabora for
+    # Docs/Sheets/Slides, but intentionally NOT deployed yet: this stack needs
+    # ~4GB+ free RAM (doc server + Postgres + RabbitMQ + Redis) the box doesn't
+    # currently have headroom for. Nothing is pulled/built until someone
+    # actually presses Start — same as every other app — so cataloguing it now
+    # is free; just don't launch it until there's real headroom to spare.
+    "onlyoffice": AppDef(
+        id="onlyoffice",
+        label="OnlyOffice",
+        icon="globe",
+        color="blue",
+        desc="Docs/Sheets/Slides alternative to Collabora — needs ~4GB+ free "
+             "RAM; verify headroom before starting.",
+        image=config.ONLYOFFICE_IMAGE,
+        kind="web",
+        mode="shared",        # one shared document server, like Collabora
+        internal_port=80,
+        gpu=False,
+        mem_limit="4g",
+        proxy_subpath="root",
+        env={
+            "DB_TYPE": "postgres",
+            "DB_HOST": "db",
+            "DB_PORT": "5432",
+            "DB_NAME": "onlyoffice",
+            "DB_USER": "onlyoffice",
+            "DB_PWD": config.ONLYOFFICE_DB_PASSWORD,
+            "AMQP_URI": "amqp://guest:guest@rabbitmq",
+            "REDIS_SERVER_HOST": "redis",
+            "JWT_ENABLED": "true",
+            "JWT_SECRET": config.ONLYOFFICE_JWT_SECRET,
+        },
+        services=[
+            Service(
+                name="db",
+                image=config.ONLYOFFICE_POSTGRES_IMAGE,
+                env={
+                    "POSTGRES_DB": "onlyoffice",
+                    "POSTGRES_USER": "onlyoffice",
+                    "POSTGRES_PASSWORD": config.ONLYOFFICE_DB_PASSWORD,
+                },
+                mounts=[Mount(name="onlyoffice-db", path="/var/lib/postgresql/data", scope="shared")],
+                ready_cmd=["pg_isready", "-U", "onlyoffice"],
+            ),
+            Service(name="rabbitmq", image=config.ONLYOFFICE_RABBITMQ_IMAGE),
+            Service(name="redis", image=config.ONLYOFFICE_REDIS_IMAGE),
         ],
     ),
 }

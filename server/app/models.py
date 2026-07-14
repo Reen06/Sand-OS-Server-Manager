@@ -44,6 +44,9 @@ class Service:
     # primary container isn't started until every service with a probe passes —
     # e.g. wait for MariaDB before Nextcloud installs against it.
     ready_cmd: list[str] = field(default_factory=list)
+    # Escape hatch: extra raw `docker run` flags for this sidecar (e.g. Collabora's
+    # `--cap-add MKNOD`). Empty for every existing service — opt-in only.
+    docker_args: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -63,6 +66,11 @@ class Mount:
     # local  = a Docker volume on the node (fast, node-local, not shared).
     # nfs    = the fleet NAS over NFSv4 — the SAME bytes on every node, no
     #          duplication; per-user → users/{user}, shared → shared/{name}.
+    # usb    = bind-mounted onto an assigned USB drive (by UUID) instead of the
+    #          node's own disk — frees node space, and follows the drive if it's
+    #          moved to another Server Manager node. This is a per-install
+    #          RUNTIME override (see app_storage.py), not set here on the AppDef —
+    #          `storage` above is just the mount's default/fallback.
     storage: str = "local"
 
 
@@ -121,6 +129,9 @@ class AppDef:
     # disk-usage listing — e.g. "freecad-streamer" for both "dev" and
     # "weekly-dev" tags.
     image_family: str = ""
+    # Escape hatch: extra raw `docker run` flags for the PRIMARY container.
+    # Empty for every existing app — opt-in only.
+    docker_args: list[str] = field(default_factory=list)
 
     @property
     def streamed(self) -> bool:

@@ -111,6 +111,25 @@ OPENMAPPER_IMAGE = os.environ.get("SM_OPENMAPPER_IMAGE", "sm-openmapper:dev")
 # by nginx; build from containers/rayoptics.
 RAYOPTICS_IMAGE = os.environ.get("SM_RAYOPTICS_IMAGE", "sm-rayoptics:latest")
 
+# Stirling-PDF — FOSS PDF toolkit (merge/split/convert/OCR/etc.), a 'web' app.
+# Official upstream image, no build needed.
+STIRLINGPDF_IMAGE = os.environ.get("SM_STIRLINGPDF_IMAGE", "stirlingtools/stirling-pdf:latest")
+
+# Renode — real open-source microcontroller simulator (Wokwi itself is closed-
+# source SaaS and not self-hostable). Exposed as a browser terminal onto its
+# monitor console via ttyd; build from containers/renode-web.
+RENODE_IMAGE = os.environ.get("SM_RENODE_IMAGE", "sm-renode-web:latest")
+
+# OnlyOffice Document Server — catalogued as an alternative to Collabora, but
+# NOT deployed by default (needs ~4GB RAM headroom the box may not have —
+# nothing is pulled/built until someone actually presses Start on it).
+ONLYOFFICE_IMAGE = os.environ.get("SM_ONLYOFFICE_IMAGE", "onlyoffice/documentserver:latest")
+ONLYOFFICE_POSTGRES_IMAGE = os.environ.get("SM_OO_POSTGRES_IMAGE", "postgres:15-alpine")
+ONLYOFFICE_RABBITMQ_IMAGE = os.environ.get("SM_OO_RABBITMQ_IMAGE", "rabbitmq:3-alpine")
+ONLYOFFICE_REDIS_IMAGE = os.environ.get("SM_OO_REDIS_IMAGE", "redis:7-alpine")
+ONLYOFFICE_DB_PASSWORD = os.environ.get("SM_OO_DB_PASSWORD", "oo-db-pass")
+ONLYOFFICE_JWT_SECRET = os.environ.get("SM_OO_JWT_SECRET", "change-me-oo-jwt-secret")
+
 # Nextcloud — the flagship cloud/NAS app (a 'web' app + MariaDB/Redis stack).
 NEXTCLOUD_IMAGE = os.environ.get("SM_NEXTCLOUD_IMAGE", "sm-nextcloud:latest")
 MARIADB_IMAGE = os.environ.get("SM_MARIADB_IMAGE", "mariadb:11")
@@ -131,6 +150,18 @@ NC_TRUSTED_DOMAINS = os.environ.get(
 # Host header — works once Caddy forwards Host on the /apps route. Set to your
 # Hub host (e.g. vpn1603.duckdns.org) if login redirects point at the wrong host.
 NC_OVERWRITE_HOST = os.environ.get("SM_NC_OVERWRITE_HOST", "")
+
+# Collabora Online — Nextcloud's real-time Docs/Sheets/Slides editor, run as a
+# sidecar Service of the nextcloud AppDef (never its own app card — see
+# registry.py). It has no published host port (same as the db/redis sidecars);
+# Nextcloud's richdocuments app reaches it container-to-container at
+# http://collabora:9980 (wired up in containers/nextcloud/20-sm-saml.sh).
+# "domain" is the WOPI-host allowlist regex — matches Nextcloud's own trusted
+# domains so the only caller (Nextcloud itself) is accepted.
+COLLABORA_IMAGE = os.environ.get("SM_COLLABORA_IMAGE", "collabora/code:latest")
+COLLABORA_DOMAIN_REGEX = os.environ.get(
+    "SM_COLLABORA_DOMAIN_REGEX",
+    "|".join(h.replace(".", r"\.") for h in (NC_TRUSTED_DOMAINS.split() + ["nextcloud"]) if h))
 
 # Per-instance port allocation. Each instance gets a slot; from the slot we derive
 # a unique web port, TURN port, and a small UDP relay range so concurrent

@@ -61,4 +61,19 @@ for mid in $LEGACY; do
   occ files_external:delete -y "$mid" >/dev/null 2>&1 && echo "[sm] retired legacy blanket Shared mount (id $mid)"
 done
 
+# ── Collabora Online (richdocuments) — Docs/Sheets/Slides in-browser ──────────
+# richdocuments is a stock Nextcloud-appstore app (not bundled offline like
+# user_saml), so this needs outbound internet on first boot; harmless no-op on
+# every later boot (occ app:install is idempotent, wopi_url set is a plain
+# config write). Collabora itself is the "collabora" sidecar on this same
+# private network (registry.py), reachable at its network alias — no published
+# host port, so nothing outside this stack can reach it directly.
+occ app:install richdocuments >/dev/null 2>&1 || true
+occ app:enable richdocuments >/dev/null 2>&1 || true
+occ config:app:set richdocuments wopi_url --value="http://collabora:9980"
+# WOPI callbacks are container-to-container by hostname, not a real public
+# domain — Nextcloud otherwise refuses to call back to a "local" address.
+occ config:system:set allow_local_remote_servers --value=true --type=boolean
+echo "[sm] richdocuments (Collabora Online) pointed at http://collabora:9980"
+
 exit 0

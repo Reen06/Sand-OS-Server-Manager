@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import app_variants, config, docker_backend, files, glances_svc, hub_auth, metrics, nas, proxy, pwa, registry, snapshots, usb_storage
+from . import app_storage, app_variants, config, docker_backend, files, glances_svc, hub_auth, metrics, nas, proxy, pwa, registry, snapshots, usb_storage
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -428,6 +428,55 @@ def app_variants_uninstall(app_id: str, request: Request, body: _VariantSelectBo
         return JSONResponse({"ok": False, "error": "unknown app"}, status_code=404)
     try:
         return {"ok": True, **app_variants.uninstall(app, body.variant_id)}
+    except (KeyError, ValueError, RuntimeError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+class _StorageMoveBody(BaseModel):
+    mount_name: str
+    target_mode: str          # local | nfs | usb
+    usb_uuid: str | None = None
+
+
+class _StorageReclaimBody(BaseModel):
+    mount_name: str
+    old_volume: str
+
+
+@app.get("/api/apps/{app_id}/storage")
+def app_storage_list(app_id: str, request: Request):
+    """Where this app's data volumes currently live + what they could move to
+    (local / fleet NAS / an assigned USB drive) — backs the dashboard's
+    'Storage location' section in the app-manage modal."""
+    ident = _require_admin(request)
+    user = registry._eff(app_id, ident["username"])
+    try:
+        return {"ok": True, **app_storage.list_locations(app_id, user)}
+    except KeyError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
+
+
+@app.post("/api/apps/{app_id}/storage/move")
+def app_storage_move(app_id: str, request: Request, body: _StorageMoveBody):
+    """Move one Mount's data to a new location. Refused while the instance is
+    running; the OLD copy is kept until an explicit /storage/reclaim call."""
+    ident = _require_admin(request)
+    user = registry._eff(app_id, ident["username"])
+    try:
+        return {"ok": True, **app_storage.move(
+            app_id, user, body.mount_name, body.target_mode, body.usb_uuid)}
+    except (KeyError, ValueError, RuntimeError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.post("/api/apps/{app_id}/storage/reclaim")
+def app_storage_reclaim(app_id: str, request: Request, body: _StorageReclaimBody):
+    """Free a moved-away-from volume once its replacement is confirmed good."""
+    ident = _require_admin(request)
+    user = registry._eff(app_id, ident["username"])
+    try:
+        return {"ok": True, **app_storage.delete_old(
+            app_id, user, body.mount_name, body.old_volume)}
     except (KeyError, ValueError, RuntimeError) as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
