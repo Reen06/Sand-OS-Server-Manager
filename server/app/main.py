@@ -6,6 +6,7 @@ SSO) and the auth-gated TLS proxy come in the next phase — for now 'user' is a
 cookie so per-user instances are demonstrable on the LAN.
 """
 from __future__ import annotations
+import getpass
 import subprocess
 import threading
 import time
@@ -316,6 +317,40 @@ def sm_info():
             for a in registry.APPS.values()
         ],
     }
+
+
+class _SshAuthorizeBody(BaseModel):
+    public_key: str
+
+
+@app.post("/api/sm/ssh/authorize")
+def sm_ssh_authorize(request: Request, body: _SshAuthorizeBody):
+    """Let the Hub SSH into this node's own OS account — bootstraps off the
+    SAME Hub-session trust already used for every other admin action (a
+    Hub session cookie forwarded here IS already "the Hub can administer
+    this node"), so there's no separate manual key-copying step. Idempotent
+    (a re-authorize with the same key is a no-op) and additive only — never
+    removes an existing authorized_keys entry.
+
+    Requires this node to have its own sshd already running/enabled (a
+    normal Linux default) — nothing here installs or configures sshd itself.
+    """
+    _require_admin(request)
+    key = body.public_key.strip()
+    if not key or "\n" in key or not key.split()[0].startswith("ssh-"):
+        return JSONResponse({"ok": False, "error": "that doesn't look like a public key"},
+                            status_code=400)
+    ssh_dir = Path.home() / ".ssh"
+    ssh_dir.mkdir(mode=0o700, exist_ok=True)
+    auth_file = ssh_dir / "authorized_keys"
+    existing = auth_file.read_text() if auth_file.exists() else ""
+    if key not in existing.splitlines():
+        with open(auth_file, "a") as f:
+            if existing and not existing.endswith("\n"):
+                f.write("\n")
+            f.write(key + "\n")
+        auth_file.chmod(0o600)
+    return {"ok": True, "user": getpass.getuser()}
 
 
 @app.post("/api/sm/restart")
