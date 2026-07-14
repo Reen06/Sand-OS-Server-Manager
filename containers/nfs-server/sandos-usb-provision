@@ -48,7 +48,15 @@ _check_fstype() {
 _mkfs() {
     local part="$1" fstype="$2" label="$3"
     case "$fstype" in
-        ext4)  mkfs.ext4 -q -L "$label" "$part" ;;
+        # -E root_owner=<uid>:<gid> makes the filesystem's root directory
+        # owned by the Server Manager user from the moment it's created,
+        # instead of root — without this, every fresh ext4 app-hosting
+        # partition is root-owned and the (deliberately unprivileged) SM
+        # process can't write its own SandOS/ folder or README to it (hit
+        # live: a real move failed partway with "Permission denied" writing
+        # README.md). sudo always sets SUDO_UID/SUDO_GID for the invoking
+        # user, so no new argument is needed to know who that is.
+        ext4)  mkfs.ext4 -q -L "$label" -E root_owner="${SUDO_UID:-1000}:${SUDO_GID:-1000}" "$part" ;;
         exfat) mkfs.exfat -n "$label" "$part" ;;
         vfat)  mkfs.vfat -n "$label" "$part" ;;
     esac
@@ -81,7 +89,7 @@ case "${1:-}" in
     parted -s "$disk" mkpart "$media_label" "${app_gib}GiB" 100%
     partprobe "$disk"
     sleep 2
-    mkfs.ext4 -q -L "$app_label" "${disk}1"
+    mkfs.ext4 -q -L "$app_label" -E root_owner="${SUDO_UID:-1000}:${SUDO_GID:-1000}" "${disk}1"
     _mkfs "${disk}2" "$media_fstype" "$media_label"
     ;;
 
