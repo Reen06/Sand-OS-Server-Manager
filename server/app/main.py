@@ -6,6 +6,9 @@ SSO) and the auth-gated TLS proxy come in the next phase — for now 'user' is a
 cookie so per-user instances are demonstrable on the LAN.
 """
 from __future__ import annotations
+import subprocess
+import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -288,6 +291,34 @@ def sm_info():
             for a in registry.APPS.values()
         ],
     }
+
+
+@app.post("/api/sm/restart")
+def sm_restart(request: Request):
+    """Restart THIS node's Server Manager systemd unit — not the app
+    containers it manages, which keep running independently (they're plain
+    `docker run` processes, not children of this one). Fleet page button
+    (per-node "Restart Server Manager"), proxied via the Hub.
+
+    Needs a narrowly-scoped NOPASSWD sudoers rule (the service runs as the
+    unprivileged `control` user, same as every other app on this node) —
+    add once, as root:
+      /etc/sudoers.d/61-sandos-sm-restart:
+        control ALL=(root) NOPASSWD: /usr/bin/systemctl restart sandos-server-manager
+    Without it this 500s with a clear sudo/password error.
+
+    Fires the actual restart on a delayed background thread so this response
+    reaches the client BEFORE `systemctl restart` sends SIGTERM to this very
+    process — an immediate synchronous call would just drop the connection.
+    """
+    _require_admin(request)
+
+    def _do_restart() -> None:
+        time.sleep(0.5)
+        subprocess.run(["sudo", "-n", "systemctl", "restart", config.SM_SYSTEMD_UNIT], timeout=30)
+
+    threading.Thread(target=_do_restart, daemon=True, name="sm-restart").start()
+    return {"ok": True, "restarting": True}
 
 
 @app.get("/api/sm/processes")

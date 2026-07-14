@@ -67,6 +67,11 @@ NODE_NAME = os.environ.get("SM_NODE_NAME") or socket.gethostname()
 # Server Manager version (bumped as the fleet protocol evolves).
 SM_VERSION = "0.2.0"
 
+# The systemd unit name for THIS node's Server Manager — what the Fleet page's
+# per-node "Restart Server Manager" button actually restarts (main.py's
+# /api/sm/restart). Override if a node names its unit differently.
+SM_SYSTEMD_UNIT = os.environ.get("SM_SYSTEMD_UNIT", "sandos-server-manager")
+
 # Where the Server Manager UI/API itself listens.
 SM_HOST = os.environ.get("SM_HOST", "0.0.0.0")
 SM_PORT = int(os.environ.get("SM_PORT", "8170"))
