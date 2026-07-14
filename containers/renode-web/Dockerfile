@@ -8,6 +8,12 @@
 # (STM32/ESP32/etc.), read UART output, right from the app card.
 FROM antmicro/renode:latest
 
+# The base image's default user ("developer") can't write to /var/lib/apt or
+# /usr/local/bin — switch to root for the install, same as any other package
+# step; the ENTRYPOINT below runs as root too (fine for a single-tenant
+# homelab console tool, and simplest for writing into WORKDIR as any user).
+USER root
+
 ARG TTYD_VERSION=1.7.7
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && curl -fsSL -o /usr/local/bin/ttyd \
