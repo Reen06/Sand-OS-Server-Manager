@@ -107,6 +107,11 @@ APPS: dict[str, AppDef] = {
         # --rm container, so every (re)launch cold-installed for minutes — a warm
         # store makes that a fast relink (the post-SM-restart "not found" window).
         mounts=[Mount(name="webcad-pnpm-store", path="/pnpm-store", scope="shared")],
+        # vite build --watch binds the port instantly but serves a 404 until its
+        # first build finishes — a plain "responded at all" check falsely marks
+        # this ready mid-build, dropping the dashboard into that "not found"
+        # page (the exact window the comment above already named).
+        strict_ready=True,
     ),
     "helix": AppDef(
         id="helix",
@@ -136,6 +141,9 @@ APPS: dict[str, AppDef] = {
         ],
         # Subnets its Carvera discovery TCP-sweeps (home LAN + gateway-node LANs).
         env={"HELIX_SCAN_SUBNETS": config.HELIX_SCAN_SUBNETS},
+        # Same live-dev rebuild-on-launch window as WebCAD (vite build --watch) —
+        # see strict_ready's docstring in models.py.
+        strict_ready=True,
     ),
     "openmapper": AppDef(
         id="openmapper",
@@ -429,7 +437,8 @@ def status(app_id: str, user: str) -> str:
     inst = _instances.get((app_id, _eff(app_id, user)))
     if not inst or not docker_backend.running(inst.name, host=app_images.active_docker_host(app_id)):
         return "stopped"
-    if not docker_backend.web_ready(inst.web_port):
+    app = APPS.get(app_id)
+    if not docker_backend.web_ready(inst.web_port, strict=bool(app and app.strict_ready)):
         return "starting"
     return "active" if docker_backend.active_connections(inst.web_port) > 0 else "idle"
 

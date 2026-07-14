@@ -132,6 +132,14 @@ class AppDef:
     # Escape hatch: extra raw `docker run` flags for the PRIMARY container.
     # Empty for every existing app — opt-in only.
     docker_args: list[str] = field(default_factory=list)
+    # True for a live-dev app whose process binds its port immediately but
+    # keeps serving 4xx/5xx placeholders until its own first build/watch
+    # cycle finishes (webcad/helix's vite/tsx --watch dev servers) — a plain
+    # "did it answer at all" readiness check falsely reports ready during
+    # that window, so the dashboard opens straight into a "not found" page.
+    # False (default) for every app whose readiness genuinely IS "responded
+    # at all" (e.g. Nextcloud legitimately 401s/302s at "/" once fully up).
+    strict_ready: bool = False
 
     @property
     def streamed(self) -> bool:

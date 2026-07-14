@@ -23,12 +23,19 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _ready_opener = urllib.request.build_opener(_NoRedirect)
 
 
-def web_ready(port: int) -> bool:
-    """True once the instance's web server answers ANY HTTP status (200/302/401…)."""
+def web_ready(port: int, strict: bool = False) -> bool:
+    """True once the instance's web server answers ANY HTTP status (200/302/401…)
+    — that's enough for most apps (Nextcloud legitimately 401s/302s at "/" once
+    genuinely up). `strict=True` (AppDef.strict_ready) additionally requires a
+    real 2xx: a live-dev app (vite/webpack --watch) binds its port instantly
+    but serves a 4xx placeholder until its first build finishes, which the
+    lenient check above would wrongly call "ready"."""
     try:
-        _ready_opener.open(f"http://127.0.0.1:{port}/", timeout=2)
-        return True
-    except urllib.error.HTTPError:
+        resp = _ready_opener.open(f"http://127.0.0.1:{port}/", timeout=2)
+        return not strict or 200 <= resp.status < 300
+    except urllib.error.HTTPError as e:
+        if strict:
+            return False  # the whole point: a 404/500 mid-build must NOT count as ready
         return True  # 3xx redirect, 401 auth challenge, etc. — the server is up
     except Exception:
         return False
