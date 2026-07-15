@@ -53,11 +53,44 @@ def _git_sha() -> str:
 app = FastAPI(title="Sand-OS Server Manager")
 
 
+import logging as _logging
+_log = _logging.getLogger("sandos.main")
+
+
+def _autostart_apps() -> None:
+    """Launch the configured always-on apps (config.AUTOSTART_APPS) in the
+    background so a reboot doesn't leave a dead AI stack. Runs after
+    reconcile_from_docker so anything already running is skipped, not relaunched.
+    Shared apps map to the _shared key inside registry.launch."""
+    apps = config.AUTOSTART_APPS
+    if not apps:
+        return
+
+    def _run() -> None:
+        for app_id in apps:
+            if app_id not in registry.APPS:
+                _log.warning("autostart: unknown app %r — skipping", app_id)
+                continue
+            try:
+                # Already running (adopted by reconcile)? Don't relaunch.
+                if registry.status(app_id, "_shared") in ("idle", "active"):
+                    _log.info("autostart: %s already running", app_id)
+                    continue
+                registry.launch(app_id, "_shared")
+                _log.info("autostart: launched %s", app_id)
+            except Exception as e:  # noqa: BLE001
+                _log.warning("autostart: %s failed: %s", app_id, e)
+            time.sleep(3)   # stagger so several heavy containers don't start at once
+
+    threading.Thread(target=_run, daemon=True, name="sm-autostart").start()
+
+
 @app.on_event("startup")
 def _startup() -> None:
     usb_storage.start_poller()   # auto-mount marked USB drives
     registry.reconcile_from_docker()
     glances_svc.start()   # local Glances REST server for the Fleet monitor panel
+    _autostart_apps()            # bring the always-on AI stack up after a reboot
 
 
 @app.on_event("shutdown")

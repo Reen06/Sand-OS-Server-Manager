@@ -31,4 +31,8 @@ fi
 # be the same shared NAS location on every node: on the NAS host it's the real
 # dir; on other nodes it's that dir via the NFS mount. Default suits the NAS host.
 export SM_OLLAMA_NAS_TRANSFER="${SM_OLLAMA_NAS_TRANSFER:-/home/control/sandos-nas/shared/ollama-transfer}"
+# Apps to auto-launch on boot so the always-on AI stack survives reboots
+# (containers are --rm with no restart policy). Comma-separated ids; empty to
+# disable. Other apps stay on-demand (launched when clicked).
+export SM_AUTOSTART_APPS="${SM_AUTOSTART_APPS:-ollama,open-webui}"
 exec ./.venv/bin/uvicorn app.main:app --host "${SM_HOST:-0.0.0.0}" --port "${SM_PORT}"

@@ -254,6 +254,15 @@ HUB_VERIFY_TLS = os.environ.get("SM_HUB_VERIFY_TLS", "false").lower() == "true"
 # Where to send unauthenticated users to log in (the Hub dashboard).
 HUB_LOGIN_URL = os.environ.get("SM_HUB_LOGIN_URL", HUB_URL or "")
 
+# Apps to auto-launch on SM startup (comma-separated ids). Containers are --rm
+# with no restart policy, so a reboot leaves the box with nothing running and
+# opening an app shows the raw "no running instance" error until it's launched.
+# The AI stack should be always-on so it survives reboots; other apps stay
+# on-demand (launched when clicked). Empty string = launch nothing on boot.
+AUTOSTART_APPS = [a.strip() for a in
+                  os.environ.get("SM_AUTOSTART_APPS", "ollama,open-webui").split(",")
+                  if a.strip()]
+
 # ── Hub LLM Router ────────────────────────────────────────────────────────────
 # The Hub's OpenAI-compatible routing endpoint picks the best fleet node per
 # request. When the key is set, Open WebUI is seeded with the router as its
