@@ -20,4 +20,10 @@ export SM_HUB_URL="${SM_HUB_URL:-https://vpn1603.duckdns.org}"
 # Faster LAN path for the identity check; the cert name won't match the raw IP,
 # which is fine — SM_HUB_VERIFY_TLS defaults to false.
 export SM_HUB_INTERNAL_URL="${SM_HUB_INTERNAL_URL:-https://10.0.0.177}"
+# Hub LLM Router API key (must match the Hub's 'llm_api_key' setting). Kept in
+# an untracked file so it never lands in git; when set, Open WebUI is seeded
+# with the Hub router as its OpenAI connection (fleet-wide smart routing).
+if [ -z "${SM_LLM_API_KEY:-}" ] && [ -f "$HOME/.config/sandos/llm-api-key" ]; then
+  export SM_LLM_API_KEY="$(cat "$HOME/.config/sandos/llm-api-key")"
+fi
 exec ./.venv/bin/uvicorn app.main:app --host "${SM_HOST:-0.0.0.0}" --port "${SM_PORT}"

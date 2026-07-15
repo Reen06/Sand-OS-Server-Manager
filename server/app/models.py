@@ -140,6 +140,11 @@ class AppDef:
     # Escape hatch: extra raw `docker run` flags for the PRIMARY container.
     # Empty for every existing app — opt-in only.
     docker_args: list[str] = field(default_factory=list)
+    # Apps with auto_pull=True are pure upstream Docker Hub / registry images
+    # that don't need a local build step — Docker pulls them automatically on
+    # first `docker run`. The frontend shows "Start" (not "Install") for these
+    # even before the image is locally cached, since the pull is transparent.
+    auto_pull: bool = False
     # True for a live-dev app whose process binds its port immediately but
     # keeps serving 4xx/5xx placeholders until its own first build/watch
     # cycle finishes (webcad/helix's vite/tsx --watch dev servers) — a plain

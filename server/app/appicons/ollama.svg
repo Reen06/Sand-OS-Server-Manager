@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="112" fill="#0d0d0d"/>
+  <!-- Long neck — the most distinctive llama feature -->
+  <rect x="214" y="286" width="84" height="158" rx="42" fill="white"/>
+  <!-- Main head oval -->
+  <ellipse cx="268" cy="216" rx="128" ry="108" fill="white"/>
+  <!-- Muzzle protrusion (right side) -->
+  <ellipse cx="374" cy="234" rx="36" ry="26" fill="white"/>
+  <!-- Left ear outer -->
+  <ellipse cx="168" cy="122" rx="27" ry="50" fill="white" transform="rotate(-14 168 122)"/>
+  <!-- Left ear inner shadow -->
+  <ellipse cx="168" cy="123" rx="13" ry="31" fill="#0d0d0d" transform="rotate(-14 168 123)"/>
+  <!-- Right ear outer -->
+  <ellipse cx="290" cy="107" rx="26" ry="48" fill="white" transform="rotate(6 290 107)"/>
+  <!-- Right ear inner shadow -->
+  <ellipse cx="290" cy="108" rx="12" ry="30" fill="#0d0d0d" transform="rotate(6 290 108)"/>
+  <!-- Eye -->
+  <circle cx="318" cy="200" r="17" fill="#0d0d0d"/>
+  <circle cx="324" cy="194" r="6" fill="white"/>
+  <!-- Nostril -->
+  <circle cx="390" cy="237" r="8" fill="#0d0d0d"/>
+</svg>

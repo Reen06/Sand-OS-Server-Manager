@@ -417,8 +417,14 @@ APPS: dict[str, AppDef] = {
         auto_pull=True,   # public image — Docker pulls on first start
         # Inject Hub username → trusted-header auto-login (no separate login screen).
         sso_header="X-Forwarded-User",
-        # Same shared network as Ollama — reach it by container name, no fixed port needed.
-        docker_args=["--network", "sm-llm-net"],
+        # Same shared network as Ollama — reach it by container name, no fixed port
+        # needed. The --add-host pins the Hub's public hostname to its LAN IP so
+        # the OpenAI connection below reaches the Hub router with a valid TLS cert
+        # even though this node isn't a WireGuard peer.
+        docker_args=["--network", "sm-llm-net"] + (
+            ["--add-host", f"{config.HUB_HOST}:{config.HUB_INTERNAL_IP}"]
+            if config.HUB_HOST and config.HUB_INTERNAL_IP
+            and config.HUB_HOST != config.HUB_INTERNAL_IP else []),
         # NAS-backed: accounts/chats/uploads for ALL users live on the fleet NAS
         # (shared/open-webui-data), not this node's local Docker storage.
         # EXCEPT vector_db: Chroma hard-codes SQLite WAL mode, which deadlocks on
@@ -439,6 +445,12 @@ APPS: dict[str, AppDef] = {
             # lock). DELETE journal mode uses plain POSIX locks, which NFSv4
             # handles correctly.
             "DATABASE_ENABLE_SQLITE_WAL": "false",
+            # Hub LLM Router as an OpenAI connection: ONE endpoint that routes
+            # each request to the best fleet node that has the model (online →
+            # running → least loaded). New Ollama nodes join automatically.
+            **({"OPENAI_API_BASE_URL": f"{config.HUB_URL}/api/fleet/llm/v1",
+                "OPENAI_API_KEY": config.LLM_API_KEY}
+               if config.HUB_URL and config.LLM_API_KEY else {}),
         },
     ),
     # OnlyOffice Document Server — catalogued as an alternative to Collabora for

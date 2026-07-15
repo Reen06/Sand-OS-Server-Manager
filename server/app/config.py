@@ -253,3 +253,17 @@ HUB_SESSION_COOKIE = os.environ.get("SM_HUB_SESSION_COOKIE", "hub_session")
 HUB_VERIFY_TLS = os.environ.get("SM_HUB_VERIFY_TLS", "false").lower() == "true"
 # Where to send unauthenticated users to log in (the Hub dashboard).
 HUB_LOGIN_URL = os.environ.get("SM_HUB_LOGIN_URL", HUB_URL or "")
+
+# ── Hub LLM Router ────────────────────────────────────────────────────────────
+# The Hub's OpenAI-compatible routing endpoint picks the best fleet node per
+# request. When the key is set, Open WebUI is seeded with the router as its
+# OpenAI connection (OPENAI_API_BASE_URL/KEY env) so every fleet Ollama is
+# reachable through ONE connection — no per-node Connections edits.
+# The key value must match the Hub's `llm_api_key` setting (hub.db settings).
+LLM_API_KEY = os.environ.get("SM_LLM_API_KEY", "")
+# Hostname of HUB_URL + IP of HUB_INTERNAL_URL, for a container --add-host that
+# lets Open WebUI resolve the Hub's public name to its LAN IP (correct TLS cert,
+# no WireGuard hop) even when this node has no route to the Hub's WG address.
+from urllib.parse import urlparse as _urlparse
+HUB_HOST = _urlparse(HUB_URL).hostname or "" if HUB_URL else ""
+HUB_INTERNAL_IP = _urlparse(HUB_INTERNAL_URL).hostname or "" if HUB_INTERNAL_URL else ""

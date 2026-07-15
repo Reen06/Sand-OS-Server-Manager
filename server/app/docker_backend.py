@@ -360,6 +360,22 @@ def spawn(inst: Instance, app: AppDef) -> subprocess.CompletedProcess:
     from . import registry, app_images
     host = app_images.active_docker_host(app.id)
 
+    # For auto_pull apps, pre-pull the image separately with a generous timeout
+    # so the pull doesn't eat into the 120s docker-run timeout. docker run would
+    # pull implicitly, but a 2-4 GB image easily exceeds that window.
+    if getattr(app, "auto_pull", False):
+        from . import app_variants as _av
+        _img = _av.active_image(app)
+        if not app_images._image_exists(_img, host):
+            _docker(["pull", _img], timeout=600, host=host)
+
+    # Pre-create any custom shared networks declared in docker_args (e.g. sm-llm-net).
+    _extra = getattr(app, "docker_args", [])
+    _skip_nets = {"bridge", "host", "none"}
+    for _flag, _val in zip(_extra, _extra[1:]):
+        if _flag == "--network" and _val not in _skip_nets and not _val.startswith("container:"):
+            _ensure_network(_val, host=host)
+
     net = None
     if app.services:
         net = network_name(inst.name)

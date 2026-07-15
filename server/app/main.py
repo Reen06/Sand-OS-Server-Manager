@@ -14,11 +14,11 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import app_images, app_storage, app_variants, busy, config, docker_backend, files, glances_svc, hub_auth, metrics, nas, pending_imports, proxy, pwa, registry, snapshots, usb_storage
+from . import app_images, app_storage, app_variants, busy, config, docker_backend, files, glances_svc, hub_auth, metrics, nas, ollama_mgr, pending_imports, proxy, pwa, registry, snapshots, usb_storage
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -929,6 +929,144 @@ def app_restore(app_id: str, request: Request, body: _RestoreBody):
 @app.get("/api/apps/{app_id}/status")
 def status(app_id: str, request: Request):
     return {"status": registry.status(app_id, _require_app(request, app_id)["username"])}
+
+
+# ── Ollama model management + LLM proxy ──────────────────────────────────────
+# These routes are what the Hub LLM router calls — they proxy to the local
+# Ollama container (resolved by the SM slot registry, not a hardcoded port).
+
+class _PullBody(BaseModel):
+    model: str
+
+
+class _DeleteBody(BaseModel):
+    model: str
+
+
+class _InternetBody(BaseModel):
+    enabled: bool
+
+
+class _OllamaExportBody(BaseModel):
+    model: str
+
+
+class _OllamaImportBody(BaseModel):
+    model: str
+
+
+@app.get("/api/apps/ollama/models")
+def ollama_models(request: Request):
+    """Installed models — used by the Hub LLM router to build its model inventory."""
+    _require_identity(request)
+    return {"ok": True, "models": ollama_mgr.list_models(),
+            "ollama_running": ollama_mgr.ollama_running()}
+
+
+@app.get("/api/apps/ollama/llm-status")
+def ollama_llm_status(request: Request):
+    """Full LLM-node snapshot (running models, load score) for the Hub router poller.
+
+    NOT /api/apps/ollama/status: the generic /api/apps/{app_id}/status route is
+    registered earlier and would shadow it — FastAPI matches in definition order."""
+    _require_identity(request)
+    return {"ok": True, **ollama_mgr.node_llm_status()}
+
+
+@app.post("/api/apps/ollama/models/pull")
+def ollama_pull(request: Request, body: _PullBody):
+    """Start pulling a model in the background. Returns job_id to poll."""
+    _require_admin(request)
+    try:
+        job_id = ollama_mgr.start_pull(body.model)
+        return {"ok": True, "job_id": job_id}
+    except RuntimeError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.get("/api/apps/ollama/models/pull/status/{job_id}")
+def ollama_pull_status(job_id: str, request: Request):
+    _require_identity(request)
+    job = ollama_mgr.pull_job_status(job_id)
+    if job is None:
+        return JSONResponse({"ok": False, "error": "job not found"}, status_code=404)
+    return {"ok": True, **job}
+
+
+@app.delete("/api/apps/ollama/models/{model_name:path}")
+def ollama_delete(model_name: str, request: Request):
+    _require_admin(request)
+    try:
+        return ollama_mgr.delete_model(model_name)
+    except RuntimeError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.get("/api/apps/ollama/internet")
+def ollama_get_internet(request: Request):
+    _require_identity(request)
+    return {"ok": True, "internet_enabled": ollama_mgr.get_internet_access()}
+
+
+@app.post("/api/apps/ollama/internet")
+def ollama_set_internet(request: Request, body: _InternetBody):
+    _require_admin(request)
+    return ollama_mgr.set_internet_access(body.enabled)
+
+
+@app.post("/api/apps/ollama/models/export")
+def ollama_export(request: Request, body: _OllamaExportBody):
+    """Export a model to NAS staging for transfer to another node."""
+    _require_admin(request)
+    try:
+        job_id = ollama_mgr.start_export(body.model)
+        return {"ok": True, "job_id": job_id}
+    except (KeyError, ValueError, FileNotFoundError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.post("/api/apps/ollama/models/import")
+def ollama_import(request: Request, body: _OllamaImportBody):
+    """Import a model from NAS staging (placed there by export on another node)."""
+    _require_admin(request)
+    try:
+        job_id = ollama_mgr.start_import(body.model)
+        return {"ok": True, "job_id": job_id}
+    except (KeyError, ValueError, FileNotFoundError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.get("/api/apps/ollama/models/transfer/status/{job_id}")
+def ollama_transfer_status(job_id: str, request: Request):
+    _require_identity(request)
+    job = ollama_mgr.transfer_job_status(job_id)
+    if job is None:
+        return JSONResponse({"ok": False, "error": "job not found"}, status_code=404)
+    return {"ok": True, **job}
+
+
+@app.get("/api/apps/ollama/v1/models")
+async def ollama_v1_models(request: Request):
+    """OpenAI-compatible model listing — what the Hub LLM router exposes upstream."""
+    _require_identity(request)
+    return await ollama_mgr.fetch_models_openai()
+
+
+@app.post("/api/apps/ollama/v1/{path:path}")
+async def ollama_v1_proxy(path: str, request: Request):
+    """Streaming proxy to Ollama's OpenAI-compatible API (/v1/chat/completions etc).
+    The Hub LLM router calls this; the SM resolves the actual container port."""
+    _require_identity(request)
+    body = await request.json()
+    try:
+        gen = ollama_mgr.stream_to_ollama(f"/v1/{path}", body)
+    except RuntimeError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=503)
+    # Preserve the content-type the caller expects (JSON or text/event-stream).
+    ct = request.headers.get("accept", "application/json")
+    if "event-stream" not in ct:
+        ct = "application/json"
+    return StreamingResponse(gen, media_type=ct)
 
 
 # ── Session-gated reverse proxy to the user's instance (the secure viewer) ─────
