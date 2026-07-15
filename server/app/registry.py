@@ -387,10 +387,17 @@ APPS: dict[str, AppDef] = {
         gpu=config.HAS_GPU,
         mem_limit="",   # no hard cap — GPU VRAM is the real constraint
         proxy_subpath="root",
+        auto_pull=True,   # public image — Docker pulls on first start
         # Both Ollama and OpenWebUI join sm-llm-net so OpenWebUI can reach Ollama
         # by container name (sm-ollama:11434) without a fixed host-port binding.
         # The SM proxy still reaches Ollama via the slot port on 127.0.0.1.
-        docker_args=["--network", "sm-llm-net"],
+        # RESERVED FLEET PORT: 11434 is also published on the host so OTHER nodes'
+        # Open WebUI can reach this Ollama at the predictable http://<node-ip>:11434
+        # (slot ports change every launch; this one never does). Ports 11434-11443
+        # are reserved fleet-wide for Ollama — one per extra instance if a node
+        # ever runs more than one. NOTE: this exposes the unauthenticated Ollama
+        # API to the LAN/WireGuard — fine on the home network, do not port-forward.
+        docker_args=["--network", "sm-llm-net", "-p", "11434:11434"],
         mounts=[Mount(name="ollama-models", path="/root/.ollama", scope="shared")],
         env={"OLLAMA_HOST": "0.0.0.0"},
     ),
@@ -407,16 +414,31 @@ APPS: dict[str, AppDef] = {
         gpu=False,
         mem_limit="1g",
         proxy_subpath="root",
+        auto_pull=True,   # public image — Docker pulls on first start
         # Inject Hub username → trusted-header auto-login (no separate login screen).
         sso_header="X-Forwarded-User",
         # Same shared network as Ollama — reach it by container name, no fixed port needed.
         docker_args=["--network", "sm-llm-net"],
-        mounts=[Mount(name="open-webui-data", path="/app/backend/data", scope="shared")],
+        # NAS-backed: accounts/chats/uploads for ALL users live on the fleet NAS
+        # (shared/open-webui-data), not this node's local Docker storage.
+        # EXCEPT vector_db: Chroma hard-codes SQLite WAL mode, which deadlocks on
+        # NFS (WAL needs shared-memory mmap coherency network filesystems can't
+        # provide) — a local volume is nested over that one subdir. Docker mounts
+        # sort by path depth, so the nested mount reliably lands on top.
+        mounts=[Mount(name="open-webui-data", path="/app/backend/data", scope="shared",
+                      storage="nfs"),
+                Mount(name="open-webui-vectordb", path="/app/backend/data/vector_db",
+                      scope="shared")],
         env={
             "OLLAMA_BASE_URL": "http://sm-ollama:11434",
             "WEBUI_AUTH_TRUSTED_EMAIL_HEADER": "X-Forwarded-User",
             "WEBUI_AUTH": "True",
             "WEBUI_SECRET_KEY": config.OPEN_WEBUI_SECRET_KEY,
+            # webui.db lives on the NFS mount above: WAL mode would hang the app
+            # at boot (observed: PID 1 asleep in wait_woken acquiring the shm
+            # lock). DELETE journal mode uses plain POSIX locks, which NFSv4
+            # handles correctly.
+            "DATABASE_ENABLE_SQLITE_WAL": "false",
         },
     ),
     # OnlyOffice Document Server — catalogued as an alternative to Collabora for
@@ -652,7 +674,12 @@ def image_installed(app: AppDef) -> bool:
     catalogued-but-never-deployed app (e.g. OnlyOffice). Cached — this is
     called from endpoints polled every few seconds, and the underlying check
     is a subprocess `docker image inspect`, which only ever needs to be
-    re-checked right after an explicit build/pull/move."""
+    re-checked right after an explicit build/pull/move.
+
+    Apps with auto_pull=True are public upstream images; Docker pulls them
+    transparently on first `docker run`, so always report them as installed."""
+    if getattr(app, "auto_pull", False):
+        return True
     from . import app_images
     cached = _INSTALLED_CACHE.get(app.id)
     now = time.monotonic()

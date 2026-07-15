@@ -102,6 +102,11 @@ def _fwd_headers(app, request: Request, user: str) -> dict:
         fwd.pop(app.sso_header.lower(), None)    # never trust a client-sent copy
         fwd[app.sso_header] = user               # inject the authenticated identity
     fwd["X-Forwarded-Proto"] = "https"           # we terminate TLS at the Hub
+    # Force gzip-only: the proxy buffers and decompresses the full response for
+    # HTML injection. httpx handles gzip/deflate natively; Brotli requires an
+    # optional package that isn't installed, so forwarding "br" causes httpx to
+    # pass raw compressed bytes through and the browser renders binary garbage.
+    fwd["accept-encoding"] = "gzip, deflate"
     host = request.headers.get("host", "")
     fwd["X-Forwarded-Host"] = host
     # Web apps generate absolute URLs from the Host (Nextcloud redirects); forward
@@ -294,10 +299,13 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
     for k in list(out):
         if k.lower() == "location" and "index.php_saml" in out[k]:
             out[k] = out[k].replace("index.php_saml", "apps/user_saml")
-    # Streamed (Selkies) clients must never be cached — a stale copy with old
-    # paths broke the proxy. Web apps keep their own caching headers untouched.
-    if streamed:
-        out["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    # Never allow the proxy response to be cached. For streamed apps this was
+    # already required (stale paths broke the proxy). For web apps, passing
+    # through the upstream Cache-Control caused the browser to disk-cache a
+    # brotli-encoded response as "plain" HTML (SM stripped Content-Encoding but
+    # couldn't decompress without brotlicffi) — browser rendered binary garbage
+    # and kept serving it from cache indefinitely, bypassing all fixes.
+    out["Cache-Control"] = "no-store, no-cache, must-revalidate"
     content = r.content
     ct = (r.headers.get("content-type") or "").lower()
     if "text/html" in ct:
