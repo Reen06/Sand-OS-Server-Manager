@@ -375,7 +375,12 @@ def sm_info():
              "image_tag": app_images._image_tag(a),
              "binds": [list(b) for b in a.binds],
              "source_ready": registry.source_tree_ready(a),
-             "manual_install_hint": registry.manual_install_hint(a)}
+             "manual_install_hint": registry.manual_install_hint(a),
+             # Lets the Hub tell "real rebuild needed if uninstalled" apps
+             # from "plain re-pull, cheap to uninstall" apps for the
+             # uninstall risk-tiering feature, without string-sniffing
+             # manual_install_hint's build_cmd.
+             "has_build_context": bool(a.build_context)}
             for a in registry.APPS.values()
         ],
     }
@@ -734,6 +739,21 @@ def app_image_remove_usb_copy(app_id: str, request: Request):
     try:
         return {"ok": True, **app_images.remove_usb_copy(app_id)}
     except (KeyError, ValueError, RuntimeError) as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.post("/api/apps/{app_id}/uninstall")
+def app_uninstall(app_id: str, request: Request):
+    """Delete this app's currently-active image. Refused while any
+    container — running or stopped — still references it. Never touches a
+    `binds` app's host source-tree directory; image and source are
+    separate concerns, so rebuilding after this still needs that tree."""
+    _require_admin(request)
+    try:
+        return app_images.uninstall_app(app_id)
+    except KeyError as e:
+        return JSONResponse({"ok": False, "error": f"unknown app {e}"}, status_code=404)
+    except (ValueError, RuntimeError) as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 

@@ -508,3 +508,55 @@ def remove_usb_copy(app_id: str) -> dict:
     _save_state(state)
     _prune_docker(host)
     return {"ok": True, "removed": tag, "usb_uuid": usb_uuid}
+
+
+def _image_in_use_anywhere(app_id: str) -> bool:
+    """Stricter than _instance_running_anywhere: True if ANY container —
+    running OR merely stopped-but-present — on any active daemon still
+    references this app's image tag. Mirrors app_variants._image_in_use's
+    exact check (docker ps -a --filter ancestor=<tag>), generalized across
+    every daemon this app's image could be on, the same way
+    _instance_running_anywhere already generalizes the running-only check."""
+    from . import docker_backend
+    app = registry.APPS.get(app_id)
+    if not app:
+        return False
+    tag = _image_tag(app)
+    for host in docker_backend.all_docker_hosts():
+        r = subprocess.run(["docker"] + (["-H", host] if host else [])
+                           + ["ps", "-a", "--filter", f"ancestor={tag}", "-q"],
+                           capture_output=True, text=True, timeout=10)
+        if r.stdout.strip():
+            return True
+    return False
+
+
+def uninstall_app(app_id: str) -> dict:
+    """Delete this app's ACTIVE image — the intentional exception to
+    move_to_usb()/remove_usb_copy()'s refusal to ever touch the active copy;
+    uninstalling IS deleting the active copy, that's the whole point.
+
+    Never touches a `binds` app's host source-tree directory (e.g. WebCAD's
+    /home/control/webcadcam) — the image and the source tree are entirely
+    separate concerns. Rebuilding after this still needs that tree to
+    already exist; this function only ever runs `docker rmi`, nothing else."""
+    app = registry.APPS.get(app_id)
+    if app is None:
+        raise KeyError(app_id)
+    if _instance_running_anywhere(app_id):
+        raise ValueError(f"stop every running instance of {app.label} before uninstalling its image")
+    if _image_in_use_anywhere(app_id):
+        raise ValueError(f"a stopped container still references {app.label}'s image — remove it first")
+
+    host = active_docker_host(app_id)
+    tag = _image_tag(app)
+    if not _image_exists(tag, host):
+        return {"ok": True, "removed": False, "reason": "not installed"}
+
+    r = subprocess.run(["docker"] + (["-H", host] if host else []) + ["rmi", tag],
+                       capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.strip() or r.stdout.strip())
+
+    _prune_docker(host)   # reclaim now-orphaned base layers, same as every other rmi path
+    return {"ok": True, "removed": True}
