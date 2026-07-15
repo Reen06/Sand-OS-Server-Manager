@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import app_images, app_storage, app_variants, config, docker_backend, files, glances_svc, hub_auth, metrics, nas, pending_imports, proxy, pwa, registry, snapshots, usb_storage
+from . import app_images, app_storage, app_variants, busy, config, docker_backend, files, glances_svc, hub_auth, metrics, nas, pending_imports, proxy, pwa, registry, snapshots, usb_storage
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -103,6 +103,21 @@ def _require_admin(request: Request) -> dict:
     if ident.get("role") != "admin":
         raise HTTPException(403, detail={"error": "admin only"})
     return ident
+
+
+def _is_loopback(request: Request) -> bool:
+    return bool(request.client) and request.client.host in ("127.0.0.1", "::1")
+
+
+def _require_admin_or_local(request: Request) -> None:
+    """Busy mode's local control path: the owner's own machine (the Windows/
+    WSL launcher GUI talking to localhost — WSL2's automatic port-forwarding
+    makes this "just work") never needs a Hub login, since it's already
+    physically the same machine. Anything else falls back to a real admin
+    session, same as every other Fleet action."""
+    if _is_loopback(request):
+        return
+    _require_admin(request)
 
 
 # ── Fleet NAS: shared-folder management (admin-only) ──────────────────────────
@@ -393,6 +408,11 @@ def sm_info():
         # a path Hub-side (a different node can have a different home dir).
         "git_sha": _git_sha(),
         "repo_root": str(_REPO_ROOT),
+        # Busy mode: the Hub's Fleet tab mirrors these for the greyed-out
+        # card + override button, but this node's own local state (busy.py)
+        # is the real source of truth, not the Hub.
+        "busy": busy.is_busy(),
+        "busy_override_allowed": busy.override_allowed(),
         "node_name": config.NODE_NAME,
         "lan_ip": config.LAN_IP,
         "port": config.SM_PORT,
@@ -480,6 +500,58 @@ def sm_restart(request: Request):
 
     threading.Thread(target=_do_restart, daemon=True, name="sm-restart").start()
     return {"ok": True, "restarting": True}
+
+
+class _BusyBody(BaseModel):
+    enabled: bool
+
+
+@app.post("/api/sm/busy")
+def sm_set_busy(body: _BusyBody, request: Request):
+    """Busy mode: stop every running app instance on this node right now to
+    free up its resources (e.g. before playing a game), and refuse new
+    launches until it's back to Available (enforced in registry.launch()).
+
+    Local (loopback — the Windows/WSL launcher GUI, or curl on this box)
+    callers may set either state. Remote (Hub-proxied) callers may ONLY ever
+    request enabled=False — "override this node back to Available" — and
+    only when this node's own owner has opted into that via
+    /api/sm/busy/override-permission. A remote admin can never busy-lock a
+    node they don't own, and can never grant themselves override consent."""
+    if not _is_loopback(request):
+        _require_admin(request)
+        if body.enabled:
+            return JSONResponse(
+                {"ok": False, "error": "remote callers may only clear Busy, never set it"},
+                status_code=403)
+        if not busy.override_allowed():
+            return JSONResponse(
+                {"ok": False, "error": "this node hasn't allowed remote override"},
+                status_code=403)
+
+    result = {}
+    if body.enabled:
+        result = registry.stop_all()
+    busy.set_busy(body.enabled)
+    return {"ok": True, "busy": body.enabled, **result}
+
+
+class _BusyOverrideBody(BaseModel):
+    allowed: bool
+
+
+@app.post("/api/sm/busy/override-permission")
+def sm_set_busy_override_permission(body: _BusyOverrideBody, request: Request):
+    """The owner's own consent switch — may a remote Hub admin force this
+    node back to Available while it's Busy? Loopback-only, no remote path
+    at all, ever: granting this permission is a decision only the machine's
+    own owner can make for themselves."""
+    if not _is_loopback(request):
+        return JSONResponse(
+            {"ok": False, "error": "this setting can only be changed from this machine itself"},
+            status_code=403)
+    busy.set_override_allowed(body.allowed)
+    return {"ok": True, "override_allowed": body.allowed}
 
 
 @app.get("/api/sm/processes")

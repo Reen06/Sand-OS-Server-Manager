@@ -597,7 +597,9 @@ def status(app_id: str, user: str) -> str:
 
 
 def launch(app_id: str, user: str) -> Instance:
-    from . import app_images
+    from . import app_images, busy
+    if busy.is_busy():
+        raise RuntimeError("this node is set to Busy — apps are paused to free up resources")
     if app_id not in APPS:
         raise KeyError(app_id)
     app = APPS[app_id]
@@ -626,6 +628,23 @@ def stop(app_id: str, user: str) -> None:
         docker_backend.teardown(name, app, host=host)   # primary + any sidecars + network
     else:
         docker_backend.stop(name, host=host)
+
+
+def stop_all() -> dict:
+    """Tear down every currently-running instance across every app/user —
+    the Busy-mode "free up this machine right now" action. Best-effort: one
+    instance failing to stop doesn't block the rest, and doesn't stop the
+    node from being marked Busy — the errors are just reported back."""
+    stopped, errors = [], []
+    for entry in instances_summary():
+        if not entry["running"]:
+            continue
+        try:
+            stop(entry["app_id"], entry["user"])
+            stopped.append(entry["name"])
+        except Exception as e:  # noqa: BLE001
+            errors.append({"name": entry["name"], "error": str(e)})
+    return {"stopped": stopped, "errors": errors}
 
 
 def instances_summary() -> list[dict]:
