@@ -125,6 +125,31 @@ STIRLINGPDF_IMAGE = os.environ.get("SM_STIRLINGPDF_IMAGE", "stirlingtools/stirli
 # monitor console via ttyd; build from containers/renode-web.
 RENODE_IMAGE = os.environ.get("SM_RENODE_IMAGE", "sm-renode-web:latest")
 
+# EngineeringPaper.xyz — browser math-sheet editor (client-side Pyodide/SymPy),
+# a 'web' app. Static nginx build; build context is a local checkout of
+# github.com/mgreminger/EngineeringPaper.xyz, Dockerfile at
+# containers/engineeringpaper. Small — lives on local disk like most apps.
+ENGINEERINGPAPER_IMAGE = os.environ.get("SM_ENGINEERINGPAPER_IMAGE", "sm-engineeringpaper:latest")
+
+# OpenFOAM GUI — homegrown FastAPI case-manager UI for OpenFOAM (a 'web' app).
+# Built FROM the official opencfd/openfoam-run:2506 image (a full CFD toolchain,
+# several GB) + the app code from /home/control/OpenFOAM_GUI layered on top;
+# build context/Dockerfile at containers/openfoam-gui. Large — built directly
+# against the USB app-hosting drive's own dockerd, never touches local disk.
+OPENFOAM_GUI_IMAGE = os.environ.get("SM_OPENFOAM_GUI_IMAGE", "sm-openfoam-gui:latest")
+
+# ParaView (ParaViewWeb) — browser-based scientific visualizer, a 'web' app.
+# Official Kitware image (osmesa = software rendering, no GPU needed), no
+# local build — pulled straight from Docker Hub. This repo hasn't been
+# updated in years; the newer "pvw-v5.7.0-rc2-osmesa" tag was confirmed
+# BROKEN live (missing /opt/launcher/config-template.json, entrypoint
+# crashes on start) — "pvw-visualizer-osmesa-5.5.0" is the one confirmed
+# working end-to-end (serves the real Visualizer app at /visualizer/, not
+# just Apache's default page). Large (bundles a full OSMesa software-
+# rendering stack) — pulled directly onto the USB app-hosting drive's own
+# dockerd, never touches local disk.
+PARAVIEW_IMAGE = os.environ.get("SM_PARAVIEW_IMAGE", "kitware/paraviewweb:pvw-visualizer-osmesa-5.5.0")
+
 # OnlyOffice Document Server — catalogued as an alternative to Collabora, but
 # NOT deployed by default (needs ~4GB RAM headroom the box may not have —
 # nothing is pulled/built until someone actually presses Start on it).
@@ -155,6 +180,19 @@ NC_TRUSTED_DOMAINS = os.environ.get(
 # Host header — works once Caddy forwards Host on the /apps route. Set to your
 # Hub host (e.g. vpn1603.duckdns.org) if login redirects point at the wrong host.
 NC_OVERWRITE_HOST = os.environ.get("SM_NC_OVERWRITE_HOST", "")
+
+# Ollama — local LLM runner (OpenAI-compatible REST API at :11434).
+OLLAMA_IMAGE = os.environ.get("SM_OLLAMA_IMAGE", "ollama/ollama:latest")
+
+# Open WebUI — browser chat UI for Ollama (SSO via X-Forwarded-User header).
+OPEN_WEBUI_IMAGE = os.environ.get("SM_OPEN_WEBUI_IMAGE", "ghcr.io/open-webui/open-webui:main")
+# Secret used to sign Open WebUI JWT sessions — generate once, keep stable.
+OPEN_WEBUI_SECRET_KEY = os.environ.get("SM_OPEN_WEBUI_SECRET_KEY", "change-me-owui-secret")
+
+# NAS mount path for Ollama model transfers between nodes. Set this on each SM
+# node to where the shared NAS is mounted (e.g. /mnt/nas). Empty = NAS
+# transfer unavailable on this node.
+OLLAMA_NAS_TRANSFER_PATH = os.environ.get("SM_OLLAMA_NAS_TRANSFER", "")
 
 # Collabora Online — Nextcloud's real-time Docs/Sheets/Slides editor, run as a
 # sidecar Service of the nextcloud AppDef (never its own app card — see

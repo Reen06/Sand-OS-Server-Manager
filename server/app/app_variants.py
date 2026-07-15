@@ -237,6 +237,7 @@ def _run_install(app: AppDef, v: AppVariant, job: dict) -> None:
             job["log"].append(f"resolved: {resolved.get('_resolved_tag', '')}".strip())
             build_args.update({k: val for k, val in resolved.items() if not k.startswith("_")})
 
+        env = None
         if v.kind == "pull":
             cmd = ["docker", *_host_args(host), "pull", v.source or v.image_tag]
         else:
@@ -245,10 +246,21 @@ def _run_install(app: AppDef, v: AppVariant, job: dict) -> None:
             for k, val in build_args.items():
                 cmd += ["--build-arg", f"{k}={val}"]
             cmd.append(context)
+            if host:
+                # `docker build` is aliased to `docker buildx build`, and
+                # buildx's default builder targets its OWN docker CONTEXT —
+                # it silently ignores -H, so a "build directly on the USB
+                # drive" ends up on local disk instead (confirmed live: an
+                # OpenFOAM GUI image built with -H <usb-socket> landed on the
+                # default daemon regardless). DOCKER_BUILDKIT=0 forces the
+                # legacy builder, which does respect -H correctly. Only
+                # needed for `build`, not `pull` — plain pulls always target
+                # -H correctly regardless of buildx.
+                env = {**os.environ, "DOCKER_BUILDKIT": "0"}
 
         job["log"].append("$ " + " ".join(cmd))
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, bufsize=1)
+                                text=True, bufsize=1, env=env)
         for line in proc.stdout:
             job["log"].append(line.rstrip())
             job["log"][:] = job["log"][-500:]  # bounded

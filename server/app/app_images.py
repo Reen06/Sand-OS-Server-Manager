@@ -92,6 +92,19 @@ def location(app_id: str) -> dict:
             "last_usb_uuid": entry.get("last_usb_uuid")}
 
 
+def set_initial_location(app_id: str, usb_uuid: str) -> None:
+    """Register a BRAND-NEW app as already living on a USB drive from its very
+    first build — for an app built directly against the drive's secondary
+    dockerd (`docker -H <usb-socket> build/pull ...`) and never touching local
+    disk at all. Without this, `location()` defaults to "local" the instant
+    the app appears in the catalogue (no state entry yet), even though the
+    image genuinely only exists on the drive. One-off: run manually right
+    after the first successful build/pull, not exposed as an endpoint."""
+    state = _load_state()
+    state[app_id] = {"mode": "usb", "usb_uuid": usb_uuid}
+    _save_state(state)
+
+
 def list_image_options(app_id: str) -> dict:
     """Current image location + size, and every USB drive it could move/
     mirror to (with free space) — backs the Manage modal's 'Image location'

@@ -255,6 +255,14 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
         asset = _fb_theme_asset(path)
         if asset is not None:
             return asset
+    if app_id == "paraview" and not path:
+        # The upstream image's Apache vhost only aliases /visualizer to the
+        # real app — its actual DocumentRoot is just Apache's stock default
+        # page, not something we control without patching the image (which
+        # would defeat the point of using the ready-made upstream build at
+        # all). Same "small proxy-side nudge" shape as the Nextcloud
+        # user_saml fix below rather than a custom Dockerfile.
+        return Response(status_code=302, headers={"Location": "visualizer/"})
     touch = _touch_asset(path)
     if touch is not None:
         return touch

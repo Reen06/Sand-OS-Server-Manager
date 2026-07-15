@@ -6,8 +6,16 @@ reconciled from Docker on startup (single-node MVP)."""
 from __future__ import annotations
 import re
 import threading
+import time
 from .models import AppDef, AppVariant, Instance, Mount, Service
 from . import config, docker_backend
+
+# Cache for list_for_user()'s per-app "is the image installed" check — it only
+# ever changes right after an explicit build/pull/move, but list_for_user()
+# itself is polled every 5s by the dashboard, so a subprocess `docker image
+# inspect` per app per poll would be needless, recurring overhead.
+_INSTALLED_CACHE: dict[str, tuple[float, bool]] = {}
+_INSTALLED_TTL = 30.0
 
 # ── App catalogue (add more App Definitions here) ──────────────────────────────
 APPS: dict[str, AppDef] = {
@@ -196,6 +204,66 @@ APPS: dict[str, AppDef] = {
         proxy_subpath="root",     # ttyd serves its own root UI
         mounts=[Mount(name="renode-projects", path="/root/projects", scope="shared", storage="nfs")],
     ),
+    "engineeringpaper": AppDef(
+        id="engineeringpaper",
+        label="EngineeringPaper.xyz",
+        icon="cpu",          # whitelisted; closest sim/compute glyph the Hub ships
+        color="cyan",
+        desc="Browser math-sheet editor — live SymPy/numeric calculation as you type.",
+        # `docker build -f containers/engineeringpaper/Dockerfile -t
+        # sm-engineeringpaper:latest /home/control/EngineeringPaper.xyz` once,
+        # same manual-build pattern as Ray Optics/Renode (no variants).
+        image=config.ENGINEERINGPAPER_IMAGE,
+        kind="web",
+        mode="shared",       # one static site for everyone; no per-user accounts
+        internal_port=80,
+        gpu=False,
+        mem_limit="256m",
+        proxy_subpath="root",     # plain nginx static build, no baseURL awareness
+    ),
+    "openfoamgui": AppDef(
+        id="openfoamgui",
+        label="OpenFOAM GUI",
+        icon="cpu",
+        color="blue",
+        desc="Case manager + web UI for OpenFOAM CFD simulations (propeller, wind tunnel).",
+        # `docker build -f containers/openfoam-gui/Dockerfile -t
+        # sm-openfoam-gui:latest containers/openfoam-gui` once, run directly
+        # against the USB app-hosting drive's dockerd (-H <usb-socket>) — the
+        # opencfd/openfoam-run base is several GB, never touches local disk.
+        image=config.OPENFOAM_GUI_IMAGE,
+        kind="web",
+        mode="shared",
+        internal_port=6060,   # entrypoint.sh's own uvicorn bind, confirmed
+        gpu=False,
+        mem_limit="4g",       # CFD solves can be memory-hungry
+        proxy_subpath="root",
+        # DEV: run live from the bind-mounted source tree (mirrors webcad/
+        # helix) — the entrypoint pip-installs from it on every start and the
+        # app's own case_manager.py resolves its case registry relative to its
+        # own script dir (i.e. /gui/cases), so this is a plain bind, not an
+        # NFS Mount — no host-editing workflow needed here, but the app was
+        # already built expecting /gui to be the live repo, not baked-in code.
+        binds=[("/home/control/OpenFOAM_GUI", "/gui")],
+    ),
+    "paraview": AppDef(
+        id="paraview",
+        label="ParaView",
+        icon="globe",         # whitelisted; visualizer glyph
+        color="green",
+        desc="Scientific data visualizer (ParaViewWeb) — view and analyze simulation results.",
+        # `docker pull kitware/paraviewweb:pvw-v5.7.0-rc2-osmesa` once, directly
+        # against the USB app-hosting drive's dockerd (-H <usb-socket>) — the
+        # OSMesa software-rendering stack is large, never touches local disk.
+        # No local build; official upstream image, no GPU needed.
+        image=config.PARAVIEW_IMAGE,
+        kind="web",
+        mode="shared",
+        internal_port=80,     # confirmed via upstream Dockerfile's own ENTRYPOINT
+        gpu=False,
+        mem_limit="2g",
+        proxy_subpath="root",
+    ),
     "stirlingpdf": AppDef(
         id="stirlingpdf",
         label="Stirling PDF",
@@ -287,6 +355,52 @@ APPS: dict[str, AppDef] = {
                 docker_args=["--cap-add", "MKNOD"],
             ),
         ],
+    ),
+    "ollama": AppDef(
+        id="ollama",
+        label="Ollama",
+        icon="cpu",
+        color="violet",
+        desc="Local LLM runner — pull and serve models via OpenAI-compatible API.",
+        image=config.OLLAMA_IMAGE,
+        kind="web",
+        mode="shared",
+        internal_port=11434,
+        gpu=config.HAS_GPU,
+        mem_limit="",   # no hard cap — GPU VRAM is the real constraint
+        proxy_subpath="root",
+        # Publish on fixed port 11434 in ADDITION to the slot port, so OpenWebUI
+        # and the Hub LLM router can reach Ollama at a stable address without
+        # going through the SM slot pool.
+        docker_args=["-p", "11434:11434"],
+        mounts=[Mount(name="ollama-models", path="/root/.ollama", scope="shared")],
+        env={"OLLAMA_HOST": "0.0.0.0"},
+    ),
+    "open-webui": AppDef(
+        id="open-webui",
+        label="Open WebUI",
+        icon="globe",
+        color="purple",
+        desc="Browser chat interface for your local AI models — SSO'd, auto-connects to Ollama.",
+        image=config.OPEN_WEBUI_IMAGE,
+        kind="web",
+        mode="shared",
+        internal_port=8080,
+        gpu=False,
+        mem_limit="1g",
+        proxy_subpath="root",
+        # Inject Hub username → trusted-header auto-login (no separate login screen).
+        sso_header="X-Forwarded-User",
+        # host.docker.internal → host IP on the Docker bridge, letting OpenWebUI reach
+        # Ollama's fixed :11434 publish without knowing the container's internal IP.
+        docker_args=["--add-host=host.docker.internal:host-gateway"],
+        mounts=[Mount(name="open-webui-data", path="/app/backend/data", scope="shared")],
+        env={
+            "OLLAMA_BASE_URL": "http://host.docker.internal:11434",
+            "WEBUI_AUTH_TRUSTED_EMAIL_HEADER": "X-Forwarded-User",
+            "WEBUI_AUTH": "True",
+            "WEBUI_SECRET_KEY": config.OPEN_WEBUI_SECRET_KEY,
+        },
     ),
     # OnlyOffice Document Server — catalogued as an alternative to Collabora for
     # Docs/Sheets/Slides, but intentionally NOT deployed yet: this stack needs
@@ -457,6 +571,10 @@ def launch(app_id: str, user: str) -> Instance:
                 if app.services:
                     docker_backend.teardown(inst.name, app, host=host)  # clean a partial stack
                 raise RuntimeError(res.stderr.strip() or "docker run failed")
+            # spawn() implicitly pulls a not-yet-local upstream image (e.g.
+            # OnlyOffice's "Install" button) — bust the cache so the very
+            # next poll reflects "installed" instead of waiting out the TTL.
+            _INSTALLED_CACHE.pop(app_id, None)
         return inst
 
 
@@ -485,14 +603,29 @@ def instances_summary() -> list[dict]:
 
 def list_for_user(user: str) -> list[dict]:
     """App catalogue with this user's per-app status + URL (if running)."""
+    from . import app_images
     out = []
     for app in APPS.values():
         st = status(app.id, user)
         inst = get_instance(app.id, user)
+        # Distinguishes "genuinely never pulled/built" (e.g. OnlyOffice,
+        # catalogued but not deployed by default) from a normal ready-to-
+        # launch stopped app — status() alone can't tell these apart, since
+        # both report "stopped". Lets the frontend show "Uninstalled"/
+        # "Install" instead of the misleading "Available"/"Start". Cached —
+        # see _INSTALLED_CACHE above.
+        cached = _INSTALLED_CACHE.get(app.id)
+        now = time.monotonic()
+        if cached and now - cached[0] < _INSTALLED_TTL:
+            installed = cached[1]
+        else:
+            installed = app_images._image_exists(
+                app_images._image_tag(app), app_images.active_docker_host(app.id))
+            _INSTALLED_CACHE[app.id] = (now, installed)
         out.append({
             "id": app.id, "label": app.label, "icon": app.icon,
             "color": app.color, "desc": app.desc, "kind": app.kind,
-            "status": st,
+            "status": st, "image_installed": installed,
             "url": url_for(inst) if (inst and st != "stopped") else None,
         })
     return out
