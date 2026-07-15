@@ -22,6 +22,34 @@ from . import app_images, app_storage, app_variants, config, docker_backend, fil
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
+# server/app/main.py -> repo root, for the fleet-wide auto-update feature (the
+# Hub SSHes in and runs `git -C <repo_root> ...` directly — never hardcoded
+# Hub-side, since a different node could have a different home dir).
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+_GIT_SHA_CACHE: tuple[float, str] = (0.0, "")
+_GIT_SHA_TTL = 60.0
+
+
+def _git_sha() -> str:
+    """This node's current git HEAD — cached briefly since sm_info() is on a
+    hot polling path and a subprocess call per poll would be needless
+    overhead (mirrors registry._INSTALLED_CACHE's shape)."""
+    global _GIT_SHA_CACHE
+    ts, sha = _GIT_SHA_CACHE
+    now = time.monotonic()
+    if now - ts < _GIT_SHA_TTL:
+        return sha
+    try:
+        r = subprocess.run(["git", "-C", str(_REPO_ROOT), "rev-parse", "HEAD"],
+                           capture_output=True, text=True, timeout=10)
+        sha = r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        sha = ""
+    _GIT_SHA_CACHE = (now, sha)
+    return sha
+
+
 app = FastAPI(title="Sand-OS Server Manager")
 
 
@@ -359,6 +387,12 @@ def sm_info():
     return {
         "sm": True,
         "version": config.SM_VERSION,
+        # Fleet-wide auto-update: lets the Hub tell "this node is behind
+        # origin/main" apart from a hand-bumped SM_VERSION string, and know
+        # exactly where to `git pull` on this node without ever hardcoding
+        # a path Hub-side (a different node can have a different home dir).
+        "git_sha": _git_sha(),
+        "repo_root": str(_REPO_ROOT),
         "node_name": config.NODE_NAME,
         "lan_ip": config.LAN_IP,
         "port": config.SM_PORT,
