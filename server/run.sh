@@ -26,4 +26,9 @@ export SM_HUB_INTERNAL_URL="${SM_HUB_INTERNAL_URL:-https://10.0.0.177}"
 if [ -z "${SM_LLM_API_KEY:-}" ] && [ -f "$HOME/.config/sandos/llm-api-key" ]; then
   export SM_LLM_API_KEY="$(cat "$HOME/.config/sandos/llm-api-key")"
 fi
+# Shared NAS staging dir for model copy/move between servers (export here on the
+# source, import from here on the target — no re-download from ollama.com). MUST
+# be the same shared NAS location on every node: on the NAS host it's the real
+# dir; on other nodes it's that dir via the NFS mount. Default suits the NAS host.
+export SM_OLLAMA_NAS_TRANSFER="${SM_OLLAMA_NAS_TRANSFER:-/home/control/sandos-nas/shared/ollama-transfer}"
 exec ./.venv/bin/uvicorn app.main:app --host "${SM_HOST:-0.0.0.0}" --port "${SM_PORT}"
