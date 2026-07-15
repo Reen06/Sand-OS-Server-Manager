@@ -368,7 +368,14 @@ def sm_info():
         "apps": [
             {"id": a.id, "label": a.label, "kind": a.kind, "mode": a.mode,
              "gpu": a.gpu, "icon": a.icon, "color": a.color, "desc": a.desc,
-             "image_installed": registry.image_installed(a)}
+             "image_installed": registry.image_installed(a),
+             # Everything a peer-install flow (Hub-brokered) needs to know
+             # about this node's copy of the app, so it can be offered as a
+             # transfer source to a fresh node that doesn't have it yet.
+             "image_tag": app_images._image_tag(a),
+             "binds": [list(b) for b in a.binds],
+             "source_ready": registry.source_tree_ready(a),
+             "manual_install_hint": registry.manual_install_hint(a)}
             for a in registry.APPS.values()
         ],
     }

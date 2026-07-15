@@ -122,9 +122,17 @@ class AppDef:
     binds: list[tuple[str, str]] = field(default_factory=list)
     # Installable versions this app offers (empty = no version manager UI; the
     # app just always runs `image` as today). build_context is the Dockerfile
-    # directory for "build"-kind variants, relative to the SM repo root.
+    # directory for "build"-kind variants, relative to the SM repo root — an
+    # ABSOLUTE path is also fine (app_variants.py's os.path.join keeps it
+    # unchanged) for an app whose source lives outside this repo entirely.
     variants: list[AppVariant] = field(default_factory=list)
     build_context: str = ""
+    # Only set when the Dockerfile does NOT live inside build_context itself
+    # (e.g. EngineeringPaper.xyz: the Dockerfile lives in THIS repo's
+    # containers/, but the build context is the separate source checkout) —
+    # passed as `docker build -f <this>`. Empty = Dockerfile is the plain
+    # "<build_context>/Dockerfile" default, which covers every other app.
+    build_dockerfile: str = ""
     # docker repo name (no tag) covering all this app's variant images, for
     # disk-usage listing — e.g. "freecad-streamer" for both "dev" and
     # "weekly-dev" tags.

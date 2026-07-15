@@ -4,6 +4,7 @@ Holds the App Definitions, allocates per-instance ports/volumes, and resolves
 launch/stop/status against the Docker backend. State is in-memory and
 reconciled from Docker on startup (single-node MVP)."""
 from __future__ import annotations
+import os
 import re
 import threading
 import time
@@ -73,6 +74,7 @@ APPS: dict[str, AppDef] = {
         color="amber",
         desc="Browse & manage your files — private home + the shared library.",
         image=config.FILEBROWSER_IMAGE,
+        build_context="containers/filebrowser",
         kind="web",
         mode="per-user",
         internal_port=8080,
@@ -99,6 +101,11 @@ APPS: dict[str, AppDef] = {
         color="blue",
         desc="Browser CAD/CAM for the Carvera — model right in your dashboard.",
         image=config.WEBCAD_IMAGE,
+        # Dockerfile lives INSIDE the sibling source repo (self-contained —
+        # entrypoint.sh is right there too), not in this repo. Absolute path
+        # is fine here (app_variants.py's os.path.join keeps an absolute
+        # build_context as-is), even though this app has no variants today.
+        build_context="/home/control/webcadcam/containers/webcad",
         kind="web",
         mode="shared",              # one host; per-connection sessions isolate users
         internal_port=8137,         # the Node host serves client + WebSocket here
@@ -128,6 +135,8 @@ APPS: dict[str, AppDef] = {
         color="green",
         desc="CNC control for the Carvera Air — jog, run jobs, resume, 3D view.",
         image=config.HELIX_IMAGE,
+        # Same "Dockerfile lives inside the sibling repo" shape as webcad.
+        build_context="/home/control/CNC_Controller/containers/helix",
         kind="web",
         mode="shared",              # one machine, one controller connection
         internal_port=8556,         # FastAPI serves dashboard + API + WebSocket
@@ -159,7 +168,10 @@ APPS: dict[str, AppDef] = {
         icon="zap",
         color="cyan",
         desc="Touch-first lighting and projection controller with simulated lights.",
+        # Build from /home/control/OpenMapper/app/Dockerfile (source is COPYed
+        # in at build time here, not bind-mounted — no `binds` on this app).
         image=config.OPENMAPPER_IMAGE,
+        build_context="/home/control/OpenMapper/app",
         kind="web",
         mode="shared",
         internal_port=8080,
@@ -175,6 +187,7 @@ APPS: dict[str, AppDef] = {
         color="cyan",
         desc="2D geometric optics simulator — draw rays, lenses and mirrors.",
         image=config.RAYOPTICS_IMAGE,
+        build_context="containers/rayoptics",
         kind="web",
         mode="shared",       # one static site for everyone; saving is per-user via /api/files
         internal_port=80,
@@ -196,6 +209,7 @@ APPS: dict[str, AppDef] = {
         # `docker build -t sm-renode-web:latest containers/renode-web` once,
         # same manual-build pattern as WebCAD/HeliX/OpenMapper (no variants).
         image=config.RENODE_IMAGE,
+        build_context="containers/renode-web",
         kind="web",
         mode="shared",
         internal_port=8080,
@@ -214,6 +228,8 @@ APPS: dict[str, AppDef] = {
         # sm-engineeringpaper:latest /home/control/EngineeringPaper.xyz` once,
         # same manual-build pattern as Ray Optics/Renode (no variants).
         image=config.ENGINEERINGPAPER_IMAGE,
+        build_context="/home/control/EngineeringPaper.xyz",
+        build_dockerfile="containers/engineeringpaper/Dockerfile",
         kind="web",
         mode="shared",       # one static site for everyone; no per-user accounts
         internal_port=80,
@@ -232,6 +248,7 @@ APPS: dict[str, AppDef] = {
         # against the USB app-hosting drive's dockerd (-H <usb-socket>) — the
         # opencfd/openfoam-run base is several GB, never touches local disk.
         image=config.OPENFOAM_GUI_IMAGE,
+        build_context="containers/openfoam-gui",
         kind="web",
         mode="shared",
         internal_port=6060,   # entrypoint.sh's own uvicorn bind, confirmed
@@ -289,6 +306,7 @@ APPS: dict[str, AppDef] = {
         color="blue",
         desc="Your private cloud — files, Photos, sharing. One account, SSO'd.",
         image=config.NEXTCLOUD_IMAGE,
+        build_context="containers/nextcloud",
         kind="web",
         mode="shared",              # ONE Nextcloud, per-user accounts inside it
         internal_port=80,
@@ -598,6 +616,32 @@ def instances_summary() -> list[dict]:
          "running": docker_backend.running(inst.name, host=app_images.active_docker_host(app_id))}
         for (app_id, user), inst in _instances.items()
     ]
+
+
+def source_tree_ready(app: AppDef) -> bool:
+    """True if this app has no binds, or every bind's host_path exists and is
+    non-empty. False = the image alone isn't enough to actually run this app —
+    a bind-mount 'live source tree' app (webcad/helix/openfoamgui) needs its
+    real code checked out at that host path too, not baked into the image."""
+    return all(os.path.isdir(p) and os.listdir(p) for p, _ in app.binds)
+
+
+def manual_install_hint(app: AppDef) -> dict:
+    """The honest manual fallback shown when no peer node has this app yet —
+    e.g. the very first node in the mesh to ever want it. Never a silent
+    dead end: always names the exact command to run by hand."""
+    from . import app_images
+    hint: dict = {}
+    if app.build_context:
+        dockerfile = f"-f {app.build_dockerfile} " if app.build_dockerfile else ""
+        hint["build_cmd"] = f"docker build {dockerfile}-t {app_images._image_tag(app)} {app.build_context}"
+    elif not getattr(app, "auto_pull", False):
+        hint["build_cmd"] = f"docker pull {app.image}"
+    if app.binds:
+        hint["source_note"] = (
+            "Source tree must also exist at: " + ", ".join(p for p, _ in app.binds) +
+            " — no automated fallback for this; copy it there manually.")
+    return hint
 
 
 def image_installed(app: AppDef) -> bool:
