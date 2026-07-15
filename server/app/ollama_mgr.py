@@ -188,7 +188,13 @@ def start_pull(model_name: str) -> str:
 def delete_model(model_name: str) -> dict:
     if not ollama_running():
         raise RuntimeError("Ollama is not running")
-    r = httpx.delete(f"{ollama_url()}/api/delete", json={"name": model_name}, timeout=30.0)
+    # httpx.delete() has no `json=` parameter (unlike post/put) — passing one
+    # raised TypeError before the request was ever sent, so every delete 500'd
+    # without touching Ollama at all (the model was never actually removed).
+    # Ollama's DELETE /api/delete still expects a JSON body, so build the
+    # request explicitly instead of using the delete() shortcut.
+    r = httpx.request("DELETE", f"{ollama_url()}/api/delete",
+                      json={"name": model_name}, timeout=30.0)
     if r.status_code not in (200, 204):
         raise RuntimeError(r.text[:200] or f"HTTP {r.status_code}")
     return {"ok": True, "deleted": model_name}
