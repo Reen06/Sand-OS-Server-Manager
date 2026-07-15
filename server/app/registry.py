@@ -369,10 +369,10 @@ APPS: dict[str, AppDef] = {
         gpu=config.HAS_GPU,
         mem_limit="",   # no hard cap — GPU VRAM is the real constraint
         proxy_subpath="root",
-        # Publish on fixed port 11434 in ADDITION to the slot port, so OpenWebUI
-        # and the Hub LLM router can reach Ollama at a stable address without
-        # going through the SM slot pool.
-        docker_args=["-p", "11434:11434"],
+        # Both Ollama and OpenWebUI join sm-llm-net so OpenWebUI can reach Ollama
+        # by container name (sm-ollama:11434) without a fixed host-port binding.
+        # The SM proxy still reaches Ollama via the slot port on 127.0.0.1.
+        docker_args=["--network", "sm-llm-net"],
         mounts=[Mount(name="ollama-models", path="/root/.ollama", scope="shared")],
         env={"OLLAMA_HOST": "0.0.0.0"},
     ),
@@ -391,12 +391,11 @@ APPS: dict[str, AppDef] = {
         proxy_subpath="root",
         # Inject Hub username → trusted-header auto-login (no separate login screen).
         sso_header="X-Forwarded-User",
-        # host.docker.internal → host IP on the Docker bridge, letting OpenWebUI reach
-        # Ollama's fixed :11434 publish without knowing the container's internal IP.
-        docker_args=["--add-host=host.docker.internal:host-gateway"],
+        # Same shared network as Ollama — reach it by container name, no fixed port needed.
+        docker_args=["--network", "sm-llm-net"],
         mounts=[Mount(name="open-webui-data", path="/app/backend/data", scope="shared")],
         env={
-            "OLLAMA_BASE_URL": "http://host.docker.internal:11434",
+            "OLLAMA_BASE_URL": "http://sm-ollama:11434",
             "WEBUI_AUTH_TRUSTED_EMAIL_HEADER": "X-Forwarded-User",
             "WEBUI_AUTH": "True",
             "WEBUI_SECRET_KEY": config.OPEN_WEBUI_SECRET_KEY,
@@ -601,31 +600,36 @@ def instances_summary() -> list[dict]:
     ]
 
 
+def image_installed(app: AppDef) -> bool:
+    """Whether this app's image has ever actually been pulled/built —
+    distinguishes that from a normal ready-to-launch stopped app (both
+    report status() == "stopped"). Lets the frontend show "Uninstalled"/
+    "Install" instead of the misleading "Available"/"Start" for a
+    catalogued-but-never-deployed app (e.g. OnlyOffice). Cached — this is
+    called from endpoints polled every few seconds, and the underlying check
+    is a subprocess `docker image inspect`, which only ever needs to be
+    re-checked right after an explicit build/pull/move."""
+    from . import app_images
+    cached = _INSTALLED_CACHE.get(app.id)
+    now = time.monotonic()
+    if cached and now - cached[0] < _INSTALLED_TTL:
+        return cached[1]
+    installed = app_images._image_exists(
+        app_images._image_tag(app), app_images.active_docker_host(app.id))
+    _INSTALLED_CACHE[app.id] = (now, installed)
+    return installed
+
+
 def list_for_user(user: str) -> list[dict]:
     """App catalogue with this user's per-app status + URL (if running)."""
-    from . import app_images
     out = []
     for app in APPS.values():
         st = status(app.id, user)
         inst = get_instance(app.id, user)
-        # Distinguishes "genuinely never pulled/built" (e.g. OnlyOffice,
-        # catalogued but not deployed by default) from a normal ready-to-
-        # launch stopped app — status() alone can't tell these apart, since
-        # both report "stopped". Lets the frontend show "Uninstalled"/
-        # "Install" instead of the misleading "Available"/"Start". Cached —
-        # see _INSTALLED_CACHE above.
-        cached = _INSTALLED_CACHE.get(app.id)
-        now = time.monotonic()
-        if cached and now - cached[0] < _INSTALLED_TTL:
-            installed = cached[1]
-        else:
-            installed = app_images._image_exists(
-                app_images._image_tag(app), app_images.active_docker_host(app.id))
-            _INSTALLED_CACHE[app.id] = (now, installed)
         out.append({
             "id": app.id, "label": app.label, "icon": app.icon,
             "color": app.color, "desc": app.desc, "kind": app.kind,
-            "status": st, "image_installed": installed,
+            "status": st, "image_installed": image_installed(app),
             "url": url_for(inst) if (inst and st != "stopped") else None,
         })
     return out

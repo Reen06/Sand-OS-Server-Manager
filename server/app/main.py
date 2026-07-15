@@ -367,7 +367,8 @@ def sm_info():
         "metrics": metrics.collect(),
         "apps": [
             {"id": a.id, "label": a.label, "kind": a.kind, "mode": a.mode,
-             "gpu": a.gpu, "icon": a.icon, "color": a.color, "desc": a.desc}
+             "gpu": a.gpu, "icon": a.icon, "color": a.color, "desc": a.desc,
+             "image_installed": registry.image_installed(a)}
             for a in registry.APPS.values()
         ],
     }
