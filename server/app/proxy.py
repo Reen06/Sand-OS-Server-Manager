@@ -142,6 +142,27 @@ def _rewrite_base_href(content: bytes, app_id: str) -> bytes:
     return _BASE_HREF_RE.sub(b'<base href="' + prefix + b'">', content)
 
 
+# ParaView's wslink launcher returns its session JSON with a literally
+# hardcoded "ws://localhost/proxy?sessionId=...&path=ws" (baked into the
+# image's launcher.json, meant for same-machine testing) — the app's own JS
+# passes this straight into `new WebSocket(url)` with no rewriting of its
+# own, and the native WebSocket constructor requires a fully-qualified URL
+# (no relative-URL resolution against the page origin like fetch() gets).
+# Confirmed live 2026-07-16: without this, the app gets a real session but
+# then tries to open a WebSocket to the BROWSER's OWN "localhost", which
+# obviously isn't the server — surfaces as "Server disconnected" right
+# after the loading spinner appears. Caddy always terminates TLS in front
+# in this whole system, so wss:// is always the right scheme.
+_PARAVIEW_WS_RE = re.compile(rb"ws://localhost(/proxy\?[^\"]*)")
+
+
+def _rewrite_paraview_session(content: bytes, request: Request) -> bytes:
+    host = request.headers.get("host", "")
+    if not host:
+        return content
+    return _PARAVIEW_WS_RE.sub(f"wss://{host}".encode() + rb"\1", content)
+
+
 def _inject_extra_turn(content: bytes) -> bytes:
     """If SM_TURN_EXTRA_HOST is set, clone each iceServer entry in the /turn
     JSON response with the extra host swapped in. This lets VPN/mobile clients
@@ -358,6 +379,13 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
             content = _inject_touch(content)  # mobile gestures for the stream
     if streamed and path.rstrip("/") == "turn" and "json" in ct:
         content = _inject_extra_turn(content)
+    if app_id == "paraview" and path.rstrip("/") == "paraview":
+        # The launcher mislabels its own JSON response as text/html (an old
+        # Twisted-library quirk) — confirmed live, so this can't be gated on
+        # content-type; gate on the exact launcher endpoint path instead.
+        # The regex only matches the one literal string it's looking for, so
+        # this is a harmless no-op on any response that isn't what we expect.
+        content = _rewrite_paraview_session(content, request)
     resp = Response(content=content, status_code=r.status_code, headers=out,
                     media_type=r.headers.get("content-type"))
     # Forward EACH Set-Cookie separately — Nextcloud sets several session cookies
