@@ -124,6 +124,23 @@ _MANIFEST_LINK_RE = re.compile(rb"<link[^>]+rel=[\"']?manifest[\"']?[^>]*>", re.
 
 _TURN_URL_HOST_RE = re.compile(r"^(turns?:)[^:?/]+")
 
+# Some SPA builds (Stirling PDF's React frontend, at least) bake a hard
+# <base href="/"> into their index.html — fine deployed unproxied at a
+# domain root, but under our /stream/{app}/ prefix it makes the BROWSER
+# resolve every relative asset/API path against the site's real root
+# instead of the app's subpath, so every request the page makes 404s
+# against SM/Hub's own routes (surfaced as their literal {"detail":"Not
+# Found"}) rather than reaching the proxied app at all. Rewrite it to the
+# app's real external prefix. Harmless no-op for apps that don't emit this
+# tag (Nextcloud rewrites its own via OVERWRITEWEBROOT; most simple web
+# builds have no <base> tag at all).
+_BASE_HREF_RE = re.compile(rb'<base\s+href=["\']/["\']\s*/?>', re.IGNORECASE)
+
+
+def _rewrite_base_href(content: bytes, app_id: str) -> bytes:
+    prefix = f"{config.EXTERNAL_BASE}/stream/{app_id}/".encode()
+    return _BASE_HREF_RE.sub(b'<base href="' + prefix + b'">', content)
+
 
 def _inject_extra_turn(content: bytes) -> bytes:
     """If SM_TURN_EXTRA_HOST is set, clone each iceServer entry in the /turn
@@ -328,6 +345,7 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
     content = r.content
     ct = (r.headers.get("content-type") or "").lower()
     if "text/html" in ct:
+        content = _rewrite_base_href(content, app_id)
         if app and app.native_pwa:
             if app.native_pwa_apple_icon:
                 content = _inject_apple_touch_icon(content, app.native_pwa_apple_icon)
