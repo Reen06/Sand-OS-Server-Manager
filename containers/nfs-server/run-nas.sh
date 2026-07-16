@@ -7,6 +7,13 @@
 # FreeCAD (root), Nextcloud (www-data) and Filebrowser all read/write the SAME
 # files with consistent ownership. NFSv4 = single port 2049 → tunnels cleanly
 # over WireGuard for an off-LAN NAS later.
+#
+# sandos-nfs-server (NOT the bare erichough/nfs-server image): a thin local
+# layer that also starts nfsdcld before nfsd — the base image never does,
+# which silently degrades NFSv4 client-recovery tracking and causes new
+# per-user home directories (any app's first launch) to hang on creation
+# while reads keep working fine. Rebuild after ever bumping the base image:
+#   cd containers/nfs-server && docker build -t sandos-nfs-server:latest .
 set -e
 NAS_ROOT="${NAS_ROOT:-/home/control/sandos-nas}"
 NAS_UID="${NAS_UID:-1000}"       # owner all files map to (this host's storage user)
@@ -21,5 +28,5 @@ docker run -d --name sandos-nfs --privileged --restart unless-stopped \
   -v /lib/modules:/lib/modules:ro \
   -e NFS_EXPORT_0="/nfs *(rw,fsid=0,crossmnt,sync,no_subtree_check,insecure,all_squash,anonuid=${NAS_UID},anongid=${NAS_GID})" \
   -p 2049:2049 \
-  erichough/nfs-server:latest
+  sandos-nfs-server:latest
 echo "sandos-nfs started — exporting $NAS_ROOT over NFSv4 (:2049), all_squash -> ${NAS_UID}:${NAS_GID}"
