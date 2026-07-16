@@ -302,6 +302,17 @@ APPS: dict[str, AppDef] = {
         # actually designed for; confirmed live this boots clean and stays up.
         mem_limit="2g",
         proxy_subpath="root",     # not baseURL-aware, like WebCAD/Ray Optics
+        # Stirling ships its own login (security.enableLogin: true by default) —
+        # separate from and unaware of our SM/Hub SSO. Direct requests correctly
+        # 401 "Full authentication is required", but its React frontend then
+        # redirects to Stirling's OWN /login using an absolute path, which
+        # escapes our /stream/stirlingpdf/ proxy prefix entirely and 404s
+        # against SM/Hub's own routes instead — the literal {"detail":"Not
+        # Found"} the user saw is FastAPI's own default 404, not anything
+        # Stirling returned. Since our proxy already gates access to this app,
+        # disable Stirling's redundant native login rather than try to wire up
+        # a second SSO integration for it.
+        env={"SECURITY_ENABLELOGIN": "false"},
         mounts=[
             Mount(name="stirlingpdf-config", path="/configs", scope="shared"),
             Mount(name="stirlingpdf-logs", path="/logs", scope="shared"),
