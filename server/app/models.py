@@ -196,6 +196,17 @@ class AppDef:
     # False (default) for every app whose readiness genuinely IS "responded
     # at all" (e.g. Nextcloud legitimately 401s/302s at "/" once fully up).
     strict_ready: bool = False
+    # Which path web_ready() polls — "" (default) means container root. Some
+    # apps front a fast-starting web server (root answers near-instantly) in
+    # front of a slower-starting REAL backend the actual app needs (ParaView:
+    # Apache itself is up in ~1s, but its own JS immediately POSTs to
+    # /paraview/, proxied to a separate wslink launcher process that isn't
+    # always listening yet). Checking "/" alone reports ready before the app
+    # can actually do anything, so the one-shot POST ParaViewWeb's own JS
+    # fires on page load can land in that gap with no retry — "quick flash
+    # then blank white" (confirmed live 2026-07-16). Set this to the path
+    # that actually depends on the slow-starting piece.
+    ready_path: str = ""
 
     @property
     def streamed(self) -> bool:

@@ -23,15 +23,23 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _ready_opener = urllib.request.build_opener(_NoRedirect)
 
 
-def web_ready(port: int, strict: bool = False) -> bool:
+def web_ready(port: int, strict: bool = False, path: str = "") -> bool:
     """True once the instance's web server answers ANY HTTP status (200/302/401…)
     — that's enough for most apps (Nextcloud legitimately 401s/302s at "/" once
     genuinely up). `strict=True` (AppDef.strict_ready) additionally requires a
     real 2xx: a live-dev app (vite/webpack --watch) binds its port instantly
     but serves a 4xx placeholder until its first build finishes, which the
-    lenient check above would wrongly call "ready"."""
+    lenient check above would wrongly call "ready".
+
+    `path` (AppDef.ready_path) overrides which path gets probed — for an app
+    whose root is served instantly by a fast front-end web server sitting in
+    front of a slower-starting real backend (ParaView's Apache vs. its
+    wslink launcher), root alone reports ready long before the app can
+    actually do anything. Any response at all still counts as ready here
+    (same as the root-path case) — only a connection failure (nothing
+    listening yet) counts as not-ready."""
     try:
-        resp = _ready_opener.open(f"http://127.0.0.1:{port}/", timeout=2)
+        resp = _ready_opener.open(f"http://127.0.0.1:{port}/{path}", timeout=2)
         return not strict or 200 <= resp.status < 300
     except urllib.error.HTTPError as e:
         if strict:

@@ -318,6 +318,15 @@ APPS: dict[str, AppDef] = {
         # the bare "/ws" correctly becomes "/stream/paraview/ws" before it ever
         # reaches the Hub's routing.
         own_subdomain=True,       # served at pv.<domain>
+        # Apache (fronting the container) answers "/" in ~1s, but ParaViewWeb's
+        # own JS immediately POSTs to "/paraview/" on page load — proxied by
+        # Apache to a SEPARATE wslink launcher process. If that launcher isn't
+        # listening yet when the one-shot POST fires (no retry in the app's
+        # own code), Apache's mod_proxy 503s and the page goes blank right
+        # after its first paint. Checking readiness against "/paraview/"
+        # itself (not root) means the dashboard won't report "ready" — and
+        # won't load the iframe — until the actual dependency is up.
+        ready_path="paraview/",
     ),
     "stirlingpdf": AppDef(
         id="stirlingpdf",
@@ -683,7 +692,8 @@ def status(app_id: str, user: str) -> str:
     if not inst or not docker_backend.running(inst.name, host=app_images.active_docker_host(app_id)):
         return "stopped"
     app = APPS.get(app_id)
-    if not docker_backend.web_ready(inst.web_port, strict=bool(app and app.strict_ready)):
+    if not docker_backend.web_ready(inst.web_port, strict=bool(app and app.strict_ready),
+                                     path=(app.ready_path if app else "")):
         return "starting"
     return "active" if docker_backend.active_connections(inst.web_port) > 0 else "idle"
 

@@ -100,15 +100,20 @@ def icon_png_180(app: AppDef) -> bytes | None:
 
 def _scope(app: AppDef, external_base: str) -> str:
     # An app with own_subdomain is reached via a dedicated Caddy host
-    # (calc.<domain>, pdf.<domain>, ...) whose rewrite already lands
-    # requests at /stream/{app}/... directly — the /apps prefix only
-    # exists for the ordinary dashboard-hosted /apps/stream/ subpath, which
-    # doesn't apply on that separate origin. Using the normal prefix here
-    # would point the manifest's own start_url/scope, and every injected
-    # <link>, at a path that 404s on that host — the same class of bug
-    # own_subdomain's proxy.py check already fixes for the base-href case.
-    base = "" if app.own_subdomain else external_base
-    return f"{base}/stream/{app.id}/"
+    # (calc.<domain>, pdf.<domain>, ...) whose `rewrite * /stream/{app}{uri}`
+    # unconditionally PREPENDS /stream/{app} to every request that arrives —
+    # including a request for this very manifest/icon. So the browser must
+    # request a bare root-relative path ("/sm-icon.svg") for Caddy's rewrite
+    # to land it at the real route ("/stream/{app}/sm-icon.svg"); using
+    # "/stream/{app}/" here as the scope DOUBLE-counts that prefix, producing
+    # a request for "/stream/{app}/sm-icon.svg" that Caddy then rewrites to
+    # "/stream/{app}/stream/{app}/sm-icon.svg" — confirmed live 2026-07-16
+    # (ParaView's manifest/icon links 404ing this exact way, visible in the
+    # Hub's access log). The ordinary /apps/stream/ subpath has no such
+    # rewrite in front of it, so it still needs the real prefix.
+    if app.own_subdomain:
+        return "/"
+    return f"{external_base}/stream/{app.id}/"
 
 
 def manifest(app: AppDef, external_base: str) -> dict:
