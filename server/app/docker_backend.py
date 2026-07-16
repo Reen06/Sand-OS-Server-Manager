@@ -56,7 +56,12 @@ def exists(name: str, host: str | None = None) -> bool:
 
 
 def stop(name: str, host: str | None = None) -> None:
-    _docker(["rm", "-f", name], timeout=30, host=host)
+    # A container with an NFS-backed volume can take well over 30s to remove
+    # if the mount is momentarily slow (observed live: sm-nextcloud-db's
+    # removal alone timed out at 30s during ordinary use, no error on the NFS
+    # side at all — just NFS occasionally being slower than a short timeout
+    # allows for). Same reasoning as _ensure_nfs's mkdir timeout above.
+    _docker(["rm", "-f", name], timeout=90, host=host)
 
 
 def list_sm_containers(host: str | None = None) -> list[str]:
@@ -281,8 +286,17 @@ def _ensure_nfs(user: str, m, host: str | None = None) -> str:
     need not be the NAS)."""
     subpath, vol = _nfs_target(user, m)
     _nfs_volume_create("sm-nfs-root", ":/", host=host)       # NFSv4 pseudo-root
+    # A brand-new NFSv4 client establishing its first session/lease against the
+    # NAS can occasionally take well over 45s under load (observed live, not
+    # theoretical) — a fixed 45s Python subprocess timeout can't actually kill
+    # a process stuck on NFS I/O (uninterruptible D-state), so it just gives up
+    # and reports failure while the real `docker run` keeps going orphaned in
+    # the background, competing with the NEXT retry's own attempt at the exact
+    # same path. That pile-up of orphaned concurrent mkdirs is what made this
+    # look like a hard deadlock rather than occasional slowness. Give it real
+    # room instead of walking away early.
     _docker(["run", "--rm", "-v", "sm-nfs-root:/r", "alpine",
-             "mkdir", "-p", f"/r/{subpath}"], timeout=45, host=host)   # dir on the NAS
+             "mkdir", "-p", f"/r/{subpath}"], timeout=120, host=host)   # dir on the NAS
     _nfs_volume_create(vol, f":/{subpath}", host=host)
     return vol
 
@@ -310,7 +324,10 @@ def _mount_args(app_id: str, user: str, mounts, host: str | None = None) -> list
 def _spawn_service(inst: Instance, app: AppDef, svc, net: str, host: str | None = None) -> subprocess.CompletedProcess:
     """Start one sidecar on the app's network — internal only, no host ports."""
     name = f"{inst.name}-{svc.name}"
-    _docker(["rm", "-f", name], timeout=30, host=host)  # clear any stale copy
+    # See stop()'s comment above — this exact call (removing a stale sidecar
+    # like sm-nextcloud-db before respawning it) timed out live during ordinary
+    # use with the old 30s value; NFS-backed volumes need more room.
+    _docker(["rm", "-f", name], timeout=90, host=host)  # clear any stale copy
     args = ["run", "--name", name, "-d", "--rm", "-e", "TZ=UTC",
             "--network", net, "--network-alias", svc.name]
     for k, v in svc.env.items():
@@ -338,9 +355,9 @@ def _wait_service(inst: Instance, svc, timeout: int = 90, host: str | None = Non
 def teardown(name: str, app: AppDef, host: str | None = None) -> None:
     """Remove the primary, all sidecars, and the private network (if any),
     all on the daemon the app's image actually runs from."""
-    _docker(["rm", "-f", name], timeout=30, host=host)
+    _docker(["rm", "-f", name], timeout=90, host=host)
     for svc in app.services:
-        _docker(["rm", "-f", f"{name}-{svc.name}"], timeout=30, host=host)
+        _docker(["rm", "-f", f"{name}-{svc.name}"], timeout=90, host=host)
     if app.services:
         _docker(["network", "rm", network_name(name)], timeout=15, host=host)
 
