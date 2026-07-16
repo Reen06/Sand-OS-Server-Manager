@@ -16,17 +16,43 @@ Description=Sand-OS per-drive Docker daemon (USB app hosting) for drive %i
 # CONNECTS to an already-running containerd — it never spawns one at an
 # arbitrary path — so a real, separate containerd process is required too
 # (sandos-usb-containerd@%i.service, below), rooted entirely on the drive.
+#
+# --bridge is NOT optional either: without a distinct bridge name, dockerd's
+# default "bridge" network collides with the main docker.service's docker0
+# (both default to 172.17.0.0/16, and dockerd's bridge driver silently
+# ADOPTS an existing device named "docker0" rather than failing). Confirmed
+# live (2026-07-16): a container on this daemon got assigned 172.17.0.2 —
+# the exact address the sandos-nfs container already holds on the main
+# daemon's docker0 — a genuine duplicate-IP conflict on one L2 segment.
+# Symptom was intermittent (whichever ARP entry won at that moment): NFS
+# mkdir calls from this daemon's containers to sandos-nfs would sometimes
+# complete instantly and sometimes hang indefinitely in an unkillable
+# D-state kernel wait, with no correlation to invocation method or timeout
+# length — this is what actually blocked FreeCAD/OpenMapper/HeliX/RayOptics/
+# Renode/OpenFOAM-GUI/ParaView launches, even after the separate ufw-
+# ordering and nfsdcld fixes.
+#
+# dockerd's `-b/--bridge` and `--bip` are mutually exclusive, so the custom
+# bridge device (docker-usb0, 172.30.0.1/24 — unused by the main daemon's
+# networks: docker0=172.17, sm-llm-net and other custom bridges sit at
+# 172.18-172.28) must be pre-created on the HOST before this unit starts —
+# dockerd only auto-creates/configures a bridge under its default name
+# ("docker0" via --bip); a custom --bridge name must already exist with its
+# IP assigned, or startup fails with "You specified -b & --bip, mutually
+# exclusive options." See ExecStartPre below.
 Requires=sandos-usb-containerd@%i.service
 After=sandos-usb-containerd@%i.service network.target
 
 [Service]
 Type=notify
 EnvironmentFile=/run/sandos-usb-docker-%i.env
+ExecStartPre=/bin/sh -c 'ip link show docker-usb0 >/dev/null 2>&1 || (ip link add name docker-usb0 type bridge && ip addr add 172.30.0.1/24 dev docker-usb0); ip link set dev docker-usb0 up'
 ExecStart=/usr/bin/dockerd \
     --data-root ${SANDOS_USB_MOUNTPOINT}/SandOS/app-hosting/docker-data \
     --containerd ${SANDOS_USB_MOUNTPOINT}/SandOS/app-hosting/containerd.sock \
     --host unix:///run/sandos-usb-docker-%i.sock \
-    --pidfile /run/sandos-usb-docker-%i.pid
+    --pidfile /run/sandos-usb-docker-%i.pid \
+    --bridge docker-usb0
 # Same crash-resilience as the main docker.service.
 Restart=on-failure
 RestartSec=2
