@@ -1147,12 +1147,6 @@ def sm_app_icon(app_id: str):
                     headers={"Cache-Control": "public, max-age=3600"})
 
 
-# Includes WebDAV/CalDAV verbs — Nextcloud's Files/Photos/sync/calendar use them
-# (PROPFIND/REPORT/etc.); without these the proxy 405s and Photos "can't fetch files".
-@app.api_route("/stream/{app_id}/{path:path}",
-               methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
-                        "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE",
-                        "LOCK", "UNLOCK", "REPORT", "SEARCH", "MKCALENDAR"])
 def _is_native_pwa_public_asset(app_id: str, path: str) -> bool:
     """manifest.json + static/* for a native_pwa app (Open WebUI) — PUBLIC on
     purpose, same reasoning as _PWA_ASSETS above: browsers fetch a PWA's own
@@ -1164,6 +1158,12 @@ def _is_native_pwa_public_asset(app_id: str, path: str) -> bool:
                 and (path == "manifest.json" or path.startswith("static/")))
 
 
+# Includes WebDAV/CalDAV verbs — Nextcloud's Files/Photos/sync/calendar use them
+# (PROPFIND/REPORT/etc.); without these the proxy 405s and Photos "can't fetch files".
+@app.api_route("/stream/{app_id}/{path:path}",
+               methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
+                        "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE",
+                        "LOCK", "UNLOCK", "REPORT", "SEARCH", "MKCALENDAR"])
 async def stream_http(app_id: str, path: str, request: Request):
     if _is_native_pwa_public_asset(app_id, path):
         user = "_pwa"
