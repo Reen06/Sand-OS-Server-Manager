@@ -27,5 +27,14 @@ systemctl --no-pager --lines=6 status "$UNIT" || true
 # fresh/re-run install never needs a separate manual step. Safe to re-run.
 bash "$HERE/../containers/nfs-server/setup-usb-dockerd.sh"
 
+# docker0's NAT/FORWARD rules have been observed missing after dockerd
+# restarts (see the ensure script's own comment for the full story) —
+# install the oneshot fixer so every future boot self-heals instead of
+# silently losing container-initiated outbound internet access again.
+cp "$HERE/sandos-docker0-forward-fix.service" /etc/systemd/system/
+chmod +x "$HERE/ensure-docker0-forward-rules.sh"
+systemctl daemon-reload
+systemctl enable --now sandos-docker0-forward-fix.service
+
 echo
 echo "INSTALLED → http://10.0.0.164:8170   (logs: journalctl -u $UNIT -f)"

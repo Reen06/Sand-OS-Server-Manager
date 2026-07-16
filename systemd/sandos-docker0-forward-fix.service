@@ -1,0 +1,15 @@
+[Unit]
+Description=Restore docker0's NAT/FORWARD rules if the daemon didn't (re)program them
+# DOCKER-FORWARD/DOCKER-CT are chains dockerd itself creates — this must run
+# strictly after it's up, or the ensure script's `iptables -C` checks against
+# those chains fail outright (chain doesn't exist yet).
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash "/home/control/Sand OS Remote/Sand-OS-Server-Manager/systemd/ensure-docker0-forward-rules.sh"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
