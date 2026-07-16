@@ -23,7 +23,8 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _ready_opener = urllib.request.build_opener(_NoRedirect)
 
 
-def web_ready(port: int, strict: bool = False, path: str = "") -> bool:
+def web_ready(port: int, strict: bool = False, path: str = "",
+              bad_status: frozenset[int] = frozenset()) -> bool:
     """True once the instance's web server answers ANY HTTP status (200/302/401…)
     — that's enough for most apps (Nextcloud legitimately 401s/302s at "/" once
     genuinely up). `strict=True` (AppDef.strict_ready) additionally requires a
@@ -37,11 +38,25 @@ def web_ready(port: int, strict: bool = False, path: str = "") -> bool:
     wslink launcher), root alone reports ready long before the app can
     actually do anything. Any response at all still counts as ready here
     (same as the root-path case) — only a connection failure (nothing
-    listening yet) counts as not-ready."""
+    listening yet) counts as not-ready.
+
+    `bad_status` (AppDef.ready_bad_status) is for the awkward case neither
+    `strict` handles: a genuinely-ready endpoint whose steady-state
+    "answered" response ISN'T a 2xx (ParaView's launcher correctly 400s a
+    plain GET — wrong method — once it's really listening), but which also
+    has a SPECIFIC error status meaning "truly not ready yet" that must not
+    be waved through by the lenient default (its 503, from Apache's own
+    mod_proxy failing to reach the backend at all). `strict` can't express
+    this (it demands 2xx, which this endpoint never legitimately returns);
+    list the specific not-ready status(es) here instead."""
     try:
         resp = _ready_opener.open(f"http://127.0.0.1:{port}/{path}", timeout=2)
+        if resp.status in bad_status:
+            return False
         return not strict or 200 <= resp.status < 300
     except urllib.error.HTTPError as e:
+        if e.code in bad_status:
+            return False
         if strict:
             return False  # the whole point: a 404/500 mid-build must NOT count as ready
         return True  # 3xx redirect, 401 auth challenge, etc. — the server is up

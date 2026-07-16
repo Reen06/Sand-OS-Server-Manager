@@ -207,6 +207,19 @@ class AppDef:
     # then blank white" (confirmed live 2026-07-16). Set this to the path
     # that actually depends on the slow-starting piece.
     ready_path: str = ""
+    # Statuses at ready_path that mean "genuinely not ready", even in the
+    # lenient (non-strict) check. Exists because `strict` can't express
+    # ParaView's case: its launcher correctly answers a plain GET with 400
+    # (wrong method) once truly listening — never a 2xx, so `strict=True`
+    # would wrongly treat forever-ready as forever-not-ready — but ALSO has
+    # a specific status (503, from Apache's own mod_proxy failing to reach
+    # the backend at all) that genuinely does mean not-ready-yet. Confirmed
+    # live 2026-07-16: without this, the lenient check waved a 503 through
+    # as "the server answered, therefore ready", so the dashboard loaded the
+    # iframe before the app could do anything, sending the ONE-SHOT
+    # (no-retry) launcher POST straight into Apache's mod_proxy circuit
+    # breaker — the exact class of bug ready_path was meant to prevent.
+    ready_bad_status: tuple[int, ...] = ()
 
     @property
     def streamed(self) -> bool:

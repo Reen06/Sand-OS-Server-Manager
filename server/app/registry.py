@@ -331,6 +331,13 @@ APPS: dict[str, AppDef] = {
         # itself (not root) means the dashboard won't report "ready" — and
         # won't load the iframe — until the actual dependency is up.
         ready_path="paraview/",
+        # A GET to "/paraview/" correctly 400s (wrong method) once the
+        # launcher is genuinely listening — never a 2xx, so strict_ready
+        # can't be used here. 503 specifically means Apache's mod_proxy
+        # couldn't reach the backend at all — confirmed live: without this,
+        # the lenient check waved a 503 through as "answered, therefore
+        # ready", defeating the whole point of ready_path.
+        ready_bad_status=(503,),
     ),
     "stirlingpdf": AppDef(
         id="stirlingpdf",
@@ -697,7 +704,8 @@ def status(app_id: str, user: str) -> str:
         return "stopped"
     app = APPS.get(app_id)
     if not docker_backend.web_ready(inst.web_port, strict=bool(app and app.strict_ready),
-                                     path=(app.ready_path if app else "")):
+                                     path=(app.ready_path if app else ""),
+                                     bad_status=frozenset(app.ready_bad_status if app else ())):
         return "starting"
     return "active" if docker_backend.active_connections(inst.web_port) > 0 else "idle"
 
