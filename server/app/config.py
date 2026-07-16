@@ -195,7 +195,18 @@ NC_OVERWRITE_HOST = os.environ.get("SM_NC_OVERWRITE_HOST", "")
 OLLAMA_IMAGE = os.environ.get("SM_OLLAMA_IMAGE", "ollama/ollama:latest")
 
 # Open WebUI — browser chat UI for Ollama (SSO via X-Forwarded-User header).
-OPEN_WEBUI_IMAGE = os.environ.get("SM_OPEN_WEBUI_IMAGE", "ghcr.io/open-webui/open-webui:main")
+# Thin custom layer (containers/open-webui/Dockerfile) on the upstream image:
+# patches the code-interpreter's sandboxed iframe to add allow-same-origin.
+# Without it, running a code block fails with "loadPyodide is not defined"
+# (desktop) / an explicit CORS-policy script-load denial (mobile Safari) —
+# confirmed live 2026-07-16, not a proxy/CORS-header issue on our side (the
+# pyodide.js asset itself already serves with Access-Control-Allow-Origin: *
+# and loads fine directly; the failure is the sandboxed iframe's own
+# opaque-origin restriction on loading it). See the Dockerfile's own
+# comment for the accepted security tradeoff and why this is matched by
+# string pattern rather than the (content-hashed, unstable across rebuilds)
+# filename.
+OPEN_WEBUI_IMAGE = os.environ.get("SM_OPEN_WEBUI_IMAGE", "sandos-open-webui:latest")
 # Secret used to sign Open WebUI JWT sessions — generate once, keep stable.
 OPEN_WEBUI_SECRET_KEY = os.environ.get("SM_OPEN_WEBUI_SECRET_KEY", "change-me-owui-secret")
 

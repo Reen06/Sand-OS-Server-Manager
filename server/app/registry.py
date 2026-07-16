@@ -500,7 +500,12 @@ APPS: dict[str, AppDef] = {
         icon="globe",
         color="purple",
         desc="Browser chat interface for your local AI models — SSO'd, auto-connects to Ollama.",
+        # `docker build -t sandos-open-webui:latest containers/open-webui`
+        # once — a thin layer on the upstream image patching the code-
+        # interpreter's sandboxed iframe (see config.py's OPEN_WEBUI_IMAGE
+        # comment for why).
         image=config.OPEN_WEBUI_IMAGE,
+        build_context="containers/open-webui",
         kind="web",
         mode="shared",
         internal_port=8080,
