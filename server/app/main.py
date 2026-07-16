@@ -1147,6 +1147,20 @@ def sm_app_icon(app_id: str):
                     headers={"Cache-Control": "public, max-age=3600"})
 
 
+@app.get("/stream/{app_id}/sm-icon-180.png")
+def sm_app_icon_png(app_id: str):
+    """PNG rasterization for apple-touch-icon — iOS Safari's "Add to Home
+    Screen" doesn't accept SVG there (see pwa.icon_png_180)."""
+    app_def = registry.APPS.get(app_id)
+    if not app_def:
+        return Response("not found", status_code=404)
+    png = pwa.icon_png_180(app_def)
+    if png is None:
+        return Response("icon rendering unavailable", status_code=404)
+    return Response(png, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
 def _is_native_pwa_public_asset(app_id: str, path: str) -> bool:
     """manifest.json + static/* for a native_pwa app (Open WebUI) — PUBLIC on
     purpose, same reasoning as _PWA_ASSETS above: browsers fetch a PWA's own

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import html
 import os
+import threading
 
 from .models import AppDef
 
@@ -67,6 +68,36 @@ def icon_svg(app: AppDef) -> str:
     )
 
 
+# iOS Safari's "Add to Home Screen" specifically requires a PNG apple-touch-icon
+# — unlike the regular favicon <link>, it does NOT accept SVG (a WebKit
+# limitation, not a bug on our end), so icon_svg() above can't serve it
+# directly. Rasterized once per app then cached in memory: icons are static
+# for the process lifetime (derived only from app.id/color/label, none of
+# which change at runtime), and cairosvg's render cost (~tens of ms) isn't
+# worth paying on every request from every visitor's home-screen install.
+_png_cache: dict[str, bytes] = {}
+_png_lock = threading.Lock()
+
+
+def icon_png_180(app: AppDef) -> bytes | None:
+    """180x180 PNG rendering of icon_svg(app), Apple's recommended apple-touch-icon
+    size. None on any rendering failure (missing cairosvg, malformed SVG, etc.) —
+    callers fall back to the SVG link, which every OTHER consumer still uses fine."""
+    with _png_lock:
+        cached = _png_cache.get(app.id)
+    if cached is not None:
+        return cached
+    try:
+        import cairosvg
+        png = cairosvg.svg2png(bytestring=icon_svg(app).encode("utf-8"),
+                               output_width=180, output_height=180)
+    except Exception:  # noqa: BLE001 — best-effort; missing/broken cairosvg isn't fatal
+        return None
+    with _png_lock:
+        _png_cache[app.id] = png
+    return png
+
+
 def manifest(app: AppDef, external_base: str) -> dict:
     scope = f"{external_base}/stream/{app.id}/"
     icon_url = f"{scope}sm-icon.svg"
@@ -98,5 +129,15 @@ def head_tags(app: AppDef, external_base: str) -> str:
     return (
         f'<link rel="manifest" href="{scope}sm-app.webmanifest">'
         f'<link rel="icon" type="image/svg+xml" href="{scope}sm-icon.svg">'
+        # iOS Safari's "Add to Home Screen" mostly ignores the JSON manifest
+        # above and specifically wants this tag (PNG only — unlike the icon
+        # link above, Safari does not accept SVG here) — without it, Safari
+        # falls back to a low-res favicon or a page screenshot instead of the
+        # app's real icon. This was the actual fix that made Open WebUI's
+        # installed shortcut icon work; every OTHER app was missing it too,
+        # just unreported since fewer people had tried "Add to Home Screen"
+        # on them yet. Both routes are already public/unauthenticated
+        # (_PWA_ASSETS) so no extra auth-bypass plumbing is needed here.
+        f'<link rel="apple-touch-icon" href="{scope}sm-icon-180.png">'
         f'<meta name="theme-color" content="{color_hex(app)}">'
     )
