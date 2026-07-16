@@ -258,6 +258,22 @@ def _inject_pwa(body: bytes, app) -> bytes:
         return body
 
 
+def _inject_apple_touch_icon(body: bytes, href: str) -> bytes:
+    """Add ONLY an apple-touch-icon link — for a native_pwa app whose own real
+    manifest/icons are otherwise left completely untouched. iOS Safari's "Add
+    to Home Screen" mostly ignores the JSON manifest and specifically wants
+    this tag; without it Safari falls back to a low-res favicon or a page
+    screenshot. Nothing existing is stripped, unlike _inject_pwa above."""
+    if b"</head>" not in body.lower():
+        return body
+    try:
+        idx = body.lower().rfind(b"</head>")
+        tag = f'<link rel="apple-touch-icon" href="{href}">'.encode("utf-8")
+        return body[:idx] + tag + body[idx:]
+    except Exception:  # noqa: BLE001
+        return body
+
+
 async def http(app_id: str, path: str, request: Request, user: str) -> Response:
     if app_id == "filebrowser":
         asset = _fb_theme_asset(path)
@@ -312,7 +328,10 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
     content = r.content
     ct = (r.headers.get("content-type") or "").lower()
     if "text/html" in ct:
-        if not (app and app.native_pwa):
+        if app and app.native_pwa:
+            if app.native_pwa_apple_icon:
+                content = _inject_apple_touch_icon(content, app.native_pwa_apple_icon)
+        else:
             content = _inject_pwa(content, app)   # make the popped-out app its own PWA
         if app_id == "filebrowser":
             content = _inject_fb_theme_picker(content)

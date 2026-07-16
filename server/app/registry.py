@@ -431,6 +431,11 @@ APPS: dict[str, AppDef] = {
         # app uses. Skip our synthetic PWA injection so those real assets are
         # served untouched instead of being replaced by a generic placeholder.
         native_pwa=True,
+        # iOS Safari ignores the manifest.json icons above for "Add to Home
+        # Screen" — it specifically wants an apple-touch-icon tag, which Open
+        # WebUI's own HTML never emits. Point it at Open WebUI's own already-
+        # real logo (no duplicate hosting needed).
+        native_pwa_apple_icon="/static/logo.png",
         # Same shared network as Ollama — reach it by container name, no fixed port
         # needed. The --add-host pins the Hub's public hostname to its LAN IP so
         # the OpenAI connection below reaches the Hub router with a valid TLS cert

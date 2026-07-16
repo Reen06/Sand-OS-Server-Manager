@@ -128,6 +128,15 @@ class AppDef:
     # placeholder. True here skips the injection so the app's native PWA
     # assets are served untouched.
     native_pwa: bool = False
+    # iOS Safari's "Add to Home Screen" mostly ignores the JSON manifest and
+    # specifically wants a <link rel="apple-touch-icon">, which this app's own
+    # HTML doesn't emit — without it, Safari falls back to a low-res favicon
+    # or a screenshot, which is what showed up as a wrong/generic icon even
+    # after native_pwa above let the app's real manifest through untouched.
+    # A path on the APP's OWN origin (its already-existing real icon, no need
+    # to host a duplicate copy ourselves); only the one tag is added, nothing
+    # about the app's existing manifest/icon links is touched or stripped.
+    native_pwa_apple_icon: str | None = None
     # keep-alive after disconnect before the instance is stopped; 0 = close right away
     keepalive_seconds: int = 600
     # docker --memory hard cap (e.g. "3g"); "" = uncapped. Prevents one runaway
