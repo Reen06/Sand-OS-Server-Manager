@@ -92,7 +92,15 @@ APPS: dict[str, AppDef] = {
         # The wrapper image's entrypoint provisions noauth (the Hub session is the
         # real gate) and binds 0.0.0.0:8080 serving /srv. We only inject the
         # baseURL so its SPA assets resolve under the proxy subpath.
-        env={"FB_BASEURL": f"{config.EXTERNAL_BASE}/stream/filebrowser"},
+        # FB_PORT: the image's own /healthcheck.sh derives PORT/ADDRESS by
+        # parsing /config/settings.json — which never exists here (no config
+        # file is mounted; noauth mode runs off CLI flags only), so Docker
+        # reported this container permanently "unhealthy" (harmless — nothing
+        # in SM reads Docker's health status, and no restart policy reacts to
+        # it — but genuinely wrong). Setting FB_PORT makes the script skip the
+        # settings.json read entirely (its own `${FB_PORT:-...}` fallback).
+        env={"FB_BASEURL": f"{config.EXTERNAL_BASE}/stream/filebrowser",
+             "FB_PORT": "8080"},
     ),
     "webcad": AppDef(
         id="webcad",
