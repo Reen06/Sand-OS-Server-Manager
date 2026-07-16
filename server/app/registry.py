@@ -302,6 +302,7 @@ APPS: dict[str, AppDef] = {
         # actually designed for; confirmed live this boots clean and stays up.
         mem_limit="2g",
         proxy_subpath="root",     # not baseURL-aware, like WebCAD/Ray Optics
+        own_subdomain=True,       # served at pdf.<domain> — see models.py for why
         # Stirling ships its own login (security.enableLogin: true by default) —
         # separate from and unaware of our SM/Hub SSO. Direct requests correctly
         # 401 "Full authentication is required", but its React frontend then

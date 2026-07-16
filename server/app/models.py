@@ -137,6 +137,22 @@ class AppDef:
     # to host a duplicate copy ourselves); only the one tag is added, nothing
     # about the app's existing manifest/icon links is touched or stripped.
     native_pwa_apple_icon: str | None = None
+    # True for an app whose frontend hard-codes absolute paths it can't run
+    # under any subpath (Stirling PDF: fetch() calls to literal "/api/v1/..."
+    # strings baked into its compiled JS bundle — no <base href> or proxy-side
+    # rewrite can fix an absolute-path request, since browsers always resolve
+    # a leading-slash URL against the origin root). The Hub gives these apps
+    # their own dedicated subdomain (see streamUrl()'s _SUBDOMAIN_APPS map)
+    # so the app's root-relative asset/API paths are simply correct as-is.
+    # BUT: the Hub's subdomain Caddy block rewrites onto the exact same
+    # /stream/{id}/... route as the ordinary /apps/stream/ subpath fallback,
+    # so this SM proxy has no way to tell which route a request arrived
+    # through — it must pick ONE behavior. True here skips the
+    # _rewrite_base_href injection entirely, which is correct for subdomain
+    # access (root-relative resolution is already right) and moot for the
+    # subpath fallback (already broken regardless of the base tag, since the
+    # bundle's absolute-path fetch() calls would still 404 either way).
+    own_subdomain: bool = False
     # keep-alive after disconnect before the instance is stopped; 0 = close right away
     keepalive_seconds: int = 600
     # docker --memory hard cap (e.g. "3g"); "" = uncapped. Prevents one runaway

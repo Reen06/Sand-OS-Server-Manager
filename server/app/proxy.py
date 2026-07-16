@@ -345,7 +345,8 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
     content = r.content
     ct = (r.headers.get("content-type") or "").lower()
     if "text/html" in ct:
-        content = _rewrite_base_href(content, app_id)
+        if not (app and app.own_subdomain):
+            content = _rewrite_base_href(content, app_id)
         if app and app.native_pwa:
             if app.native_pwa_apple_icon:
                 content = _inject_apple_touch_icon(content, app.native_pwa_apple_icon)
