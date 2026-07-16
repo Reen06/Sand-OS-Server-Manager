@@ -118,6 +118,16 @@ class AppDef:
     # the account instead of leaving it pending.
     sso_role_header: str | None = None
     sso_role_value: str = "user"
+    # Apps under the shared /apps/stream/{id}/ subpath get OUR synthetic
+    # PWA manifest+icon injected (see proxy.py _inject_pwa) so "Open in
+    # window" installs each as its OWN distinctly-iconed app — most apps have
+    # no real manifest of their own at all under that subpath. An app given
+    # its own real subdomain (Open WebUI, via streamUrl() in the Hub
+    # frontend) already ships genuine, properly-branded manifest+icons at
+    # that origin; overriding them replaced the real logo with a generic
+    # placeholder. True here skips the injection so the app's native PWA
+    # assets are served untouched.
+    native_pwa: bool = False
     # keep-alive after disconnect before the instance is stopped; 0 = close right away
     keepalive_seconds: int = 600
     # docker --memory hard cap (e.g. "3g"); "" = uncapped. Prevents one runaway

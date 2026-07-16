@@ -312,7 +312,8 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
     content = r.content
     ct = (r.headers.get("content-type") or "").lower()
     if "text/html" in ct:
-        content = _inject_pwa(content, app)   # make the popped-out app its own PWA
+        if not (app and app.native_pwa):
+            content = _inject_pwa(content, app)   # make the popped-out app its own PWA
         if app_id == "filebrowser":
             content = _inject_fb_theme_picker(content)
         if streamed:

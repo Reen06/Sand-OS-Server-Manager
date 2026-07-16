@@ -425,6 +425,12 @@ APPS: dict[str, AppDef] = {
         # every other app on the fleet (no second gate).
         sso_role_header="X-Forwarded-Role",
         sso_role_value="user",
+        # Open WebUI has its own real, properly-branded PWA manifest+icons —
+        # it lives on its own subdomain (ai.<domain>, via streamUrl() in the
+        # Hub frontend), not the shared /apps/stream/ subpath every other web
+        # app uses. Skip our synthetic PWA injection so those real assets are
+        # served untouched instead of being replaced by a generic placeholder.
+        native_pwa=True,
         # Same shared network as Ollama — reach it by container name, no fixed port
         # needed. The --add-host pins the Hub's public hostname to its LAN IP so
         # the OpenAI connection below reaches the Hub router with a valid TLS cert
