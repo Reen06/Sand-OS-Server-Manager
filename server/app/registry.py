@@ -305,11 +305,26 @@ APPS: dict[str, AppDef] = {
         image=config.PARAVIEW_IMAGE,
         build_context="containers/paraview",
         kind="web",
-        mode="shared",
+        # per-user, not shared: each user gets their OWN instance/data — a
+        # single shared ParaView would mean every user's files landed in the
+        # same /data directory with no isolation at all. Matches FreeCAD's
+        # own per-user pattern for the same reason (a personal analysis tool,
+        # not a always-on shared service like Nextcloud).
+        mode="per-user",
         internal_port=80,     # confirmed via upstream Dockerfile's own ENTRYPOINT
         gpu=False,
         mem_limit="2g",
         proxy_subpath="root",
+        # The launcher's own launcher.json hardcodes "dataDir": "/data" (used
+        # as pvw-visualizer.py's --data argument) — without a real mount
+        # there, that path doesn't exist at all, so the app's file browser
+        # panel has nowhere to open/save anything (confirmed live
+        # 2026-07-16: the toolbar/panels render fine — session, WS, and
+        # rendering pipeline all genuinely work — the 3D view is just
+        # legitimately blank until a dataset is loaded, which was
+        # impossible with no /data). Same NAS home (users/{user}) already
+        # shared across FreeCAD/Filebrowser/Nextcloud.
+        mounts=[Mount(name="home", path="/data", scope="per-user", storage="nfs")],
         # ParaViewWeb's own JS bundle builds its wslink WebSocket URL as
         # (location.protocol==='https:'?'wss':'ws') + '://' + host + ':' + port
         # + '/ws' — an ABSOLUTE path with no awareness of any subpath prefix.
