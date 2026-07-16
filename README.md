@@ -128,6 +128,51 @@ The installer is a guided TUI — it asks a few questions and then writes
 
 ---
 
+## Windows / WSL
+
+There's no native Windows build — the Server Manager needs Docker + systemd, so on
+Windows it runs inside WSL2. `windows/sandos_launcher.py` handles the whole thing (Python
+standard library only — nothing to `pip install` first):
+
+```powershell
+python windows\sandos_launcher.py --setup
+```
+
+This provisions a WSL2 distro if you don't have one, clones this repo into it, runs the
+same `install.sh` used on native Linux (unmodified — WSL2 supports systemd once enabled),
+and sets up a Scheduled Task so WSL wakes at Windows logon (systemd then starts the
+already-`enable`d service on its own — nothing further to start by hand).
+
+Run the script again afterward, with no arguments, for day-to-day use — it opens a small
+window that's the [Busy/Available](#busyavailable-mode) toggle for that machine.
+
+---
+
+## Busy/Available mode
+
+If this machine also does other things (gaming PC, workstation), you can pause every app
+running here to free up its CPU/RAM/GPU, without uninstalling anything — flip it back to
+Available and relaunch what you need.
+
+- From the **Hub's Fleet tab**: a busy node shows greyed out; if its owner has opted in
+  (see below), an admin gets a "Force Available" button to clear it remotely.
+- From **this machine directly** — no Hub login needed either way, both talk to the SM's
+  own local API:
+  - Windows/WSL: `windows/sandos_launcher.py` (see above) — same script, just run it with
+    no arguments once setup is done.
+  - Native Linux desktop: `python3 linux/sandos_busy_toggle.py` (same standard-library-only
+    script, no WSL steps — this machine already runs the SM directly).
+  - Or plain `curl` from either loopback path:
+    ```bash
+    curl -X POST http://localhost:8170/api/sm/busy -d '{"enabled": true}'
+    curl -X POST http://localhost:8170/api/sm/busy/override-permission -d '{"allowed": true}'
+    ```
+
+The "allow Hub admins to override" checkbox/setting is your own consent — a Hub admin can
+never grant themselves that permission for your node; only this machine can turn it on.
+
+---
+
 ## Deployment modes
 
 The installer asks which of three modes applies to your setup.
@@ -253,7 +298,7 @@ installer). You can edit this file directly and restart the service.
 | `SM_EXTERNAL_BASE` | `/apps` | URL path the Hub mounts the SM under |
 | `SM_NAS_ENABLED` | `false` | Enable NFSv4-backed shared storage |
 | `SM_NAS_HOST` | `$SM_LAN_IP` | IP of the NFS server |
-| `SM_NAS_ROOT` | `/home/control/sandos-nas` | Path exported as the NFS pseudo-root (fsid=0) |
+| `SM_NAS_ROOT` | `/home/<user>/sandos-nas` | Path exported as the NFS pseudo-root (fsid=0) |
 | `SM_GPU` | auto-detected | Override GPU detection (`true`/`false`) |
 | `SM_SLOT_COUNT` | `8` | Max concurrent app instances across all users |
 
@@ -291,11 +336,11 @@ If you enabled the NAS layer and this machine is the NFS host:
 ```bash
 sudo apt install nfs-kernel-server
 
-# Create the NAS root
-sudo mkdir -p /home/control/sandos-nas
+# Create the NAS root (replace <user> with the account running the Server Manager)
+sudo mkdir -p /home/<user>/sandos-nas
 
 # Export it — edit /etc/exports and add:
-/home/control/sandos-nas  10.0.0.0/8(rw,fsid=0,no_subtree_check,all_squash,anonuid=1000,anongid=1000)
+/home/<user>/sandos-nas  10.0.0.0/8(rw,fsid=0,no_subtree_check,all_squash,anonuid=1000,anongid=1000)
 
 # Apply
 sudo exportfs -ra

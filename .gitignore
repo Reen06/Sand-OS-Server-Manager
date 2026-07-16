@@ -10,5 +10,8 @@ containers/freecad-streamer/build*.log
 # os/editor
 .DS_Store
 
+# Runtime state, node-local — never committed (a different value per node/checkout)
+server/.busy_state.json
+
 # Vendored third-party Nextcloud app — fetched at container-build time, not committed
 containers/nextcloud/apps/user_saml/

@@ -306,17 +306,13 @@ cat << 'DESC'
 DESC
 
 SM_NAS_ENABLED="false"
-SM_NAS_ROOT="/home/control/sandos-nas"
+SM_NAS_ROOT="/home/$(whoami)/sandos-nas"
 SM_NAS_HOST="$SM_LAN_IP"
 
 if confirm "Enable the NAS layer?"; then
   SM_NAS_ENABLED="true"
 
-  case "$MODE" in
-    colocated) _nas_root_default="/home/$(whoami)/sandos-nas" ;;
-    *)         _nas_root_default="/home/control/sandos-nas" ;;
-  esac
-
+  _nas_root_default="/home/$(whoami)/sandos-nas"
   SM_NAS_ROOT=$(read_val "Local path to the NAS export root (on the NAS host)" "$_nas_root_default")
   SM_NAS_HOST=$(read_val "IP of the NFS server host" "$SM_LAN_IP")
 
