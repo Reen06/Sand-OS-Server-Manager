@@ -139,16 +139,26 @@ ENGINEERINGPAPER_IMAGE = os.environ.get("SM_ENGINEERINGPAPER_IMAGE", "sm-enginee
 OPENFOAM_GUI_IMAGE = os.environ.get("SM_OPENFOAM_GUI_IMAGE", "sm-openfoam-gui:latest")
 
 # ParaView (ParaViewWeb) — browser-based scientific visualizer, a 'web' app.
-# Official Kitware image (osmesa = software rendering, no GPU needed), no
-# local build — pulled straight from Docker Hub. This repo hasn't been
-# updated in years; the newer "pvw-v5.7.0-rc2-osmesa" tag was confirmed
-# BROKEN live (missing /opt/launcher/config-template.json, entrypoint
-# crashes on start) — "pvw-visualizer-osmesa-5.5.0" is the one confirmed
-# working end-to-end (serves the real Visualizer app at /visualizer/, not
-# just Apache's default page). Large (bundles a full OSMesa software-
-# rendering stack) — pulled directly onto the USB app-hosting drive's own
-# dockerd, never touches local disk.
-PARAVIEW_IMAGE = os.environ.get("SM_PARAVIEW_IMAGE", "kitware/paraviewweb:pvw-visualizer-osmesa-5.5.0")
+# Official Kitware image (osmesa = software rendering, no GPU needed). This
+# repo hasn't been updated in years; the newer "pvw-v5.7.0-rc2-osmesa" tag
+# was confirmed BROKEN live (missing /opt/launcher/config-template.json,
+# entrypoint crashes on start) — "pvw-visualizer-osmesa-5.5.0" is the one
+# confirmed working end-to-end (serves the real Visualizer app at
+# /visualizer/, not just Apache's default page).
+#
+# Thin custom layer (containers/paraview/Dockerfile) on top of the upstream
+# image: patches Apache's ProxyPass for the wslink launcher to add
+# `retry=0`. Without it, Apache's mod_proxy circuit breaker disables that
+# backend for a 60s cooldown after the FIRST failed connection (a real race
+# on container startup — Apache comes up before the launcher's own socket
+# does) — every request in that window 503s immediately with no further
+# connection attempt, regardless of the launcher being back up seconds
+# later. Confirmed live 2026-07-16: `AH00940: HTTP: disabled connection for
+# (localhost)` in the container's own error log, and a real POST 503ing for
+# 40+ straight seconds. The backend is a same-container sibling process,
+# not a flaky remote service, so the retry-delay protects against nothing
+# real here.
+PARAVIEW_IMAGE = os.environ.get("SM_PARAVIEW_IMAGE", "sandos-paraview:latest")
 
 # OnlyOffice Document Server — catalogued as an alternative to Collabora, but
 # NOT deployed by default (needs ~4GB RAM headroom the box may not have —

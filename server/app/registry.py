@@ -295,11 +295,15 @@ APPS: dict[str, AppDef] = {
         icon="globe",         # whitelisted; visualizer glyph
         color="green",
         desc="Scientific data visualizer (ParaViewWeb) — view and analyze simulation results.",
-        # `docker pull kitware/paraviewweb:pvw-v5.7.0-rc2-osmesa` once, directly
-        # against the USB app-hosting drive's dockerd (-H <usb-socket>) — the
-        # OSMesa software-rendering stack is large, never touches local disk.
-        # No local build; official upstream image, no GPU needed.
+        # `docker build -t sandos-paraview:latest containers/paraview` once,
+        # directly against the USB app-hosting drive's dockerd (-H <usb-socket>)
+        # — the OSMesa software-rendering stack is large, never touches local
+        # disk. Thin layer on the official Kitware image; see config.py's
+        # PARAVIEW_IMAGE comment for why the custom build exists (retry=0 on
+        # the launcher's ProxyPass — an Apache mod_proxy circuit-breaker bug,
+        # not anything GPU/rendering-related).
         image=config.PARAVIEW_IMAGE,
+        build_context="containers/paraview",
         kind="web",
         mode="shared",
         internal_port=80,     # confirmed via upstream Dockerfile's own ENTRYPOINT
