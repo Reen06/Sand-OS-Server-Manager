@@ -292,7 +292,15 @@ APPS: dict[str, AppDef] = {
         mode="shared",       # one shared tool instance; no per-user accounts of its own
         internal_port=8080,
         gpu=False,
-        mem_limit="1g",
+        # 1g used to crash reliably ~20s into boot: java.lang.OutOfMemoryError:
+        # Metaspace. The image's own entrypoint (init-without-ocr.sh) scales
+        # -XX:MaxMetaspaceSize by detected container memory — 128m at <=1024MB,
+        # 192m at <=2048MB — and its own comments say the 1024MB tier is already
+        # tight (heap% + metaspace + ~200MB native/LibreOffice overhead). 2.14.2
+        # loads enough classes (VeraPDF, FontForge, PdfJson, cluster backplane)
+        # to blow the 128m cap in practice. 2g puts it in the tier upstream
+        # actually designed for; confirmed live this boots clean and stays up.
+        mem_limit="2g",
         proxy_subpath="root",     # not baseURL-aware, like WebCAD/Ray Optics
         mounts=[
             Mount(name="stirlingpdf-config", path="/configs", scope="shared"),
