@@ -456,6 +456,12 @@ def sm_info():
             {"id": a.id, "label": a.label, "kind": a.kind, "mode": a.mode,
              "gpu": a.gpu, "icon": a.icon, "color": a.color, "desc": a.desc,
              "image_installed": registry.image_installed(a),
+             # Lets the Hub's proxy know this app's own manifest.json/static/*
+             # (icons, favicons) are safe to serve WITHOUT the hub_session
+             # cookie — browsers fetch a PWA's install assets unauthenticated
+             # by design, so gating them 401s the icon fetch during "Add to
+             # Home Screen" and the OS falls back to a generic/blank icon.
+             "native_pwa": a.native_pwa,
              # Everything a peer-install flow (Hub-brokered) needs to know
              # about this node's copy of the app, so it can be offered as a
              # transfer source to a fresh node that doesn't have it yet.
@@ -1147,8 +1153,22 @@ def sm_app_icon(app_id: str):
                methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
                         "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE",
                         "LOCK", "UNLOCK", "REPORT", "SEARCH", "MKCALENDAR"])
+def _is_native_pwa_public_asset(app_id: str, path: str) -> bool:
+    """manifest.json + static/* for a native_pwa app (Open WebUI) — PUBLIC on
+    purpose, same reasoning as _PWA_ASSETS above: browsers fetch a PWA's own
+    manifest/icons WITHOUT cookies while installing "Add to Home Screen", so
+    gating them 401s the icon fetch and the OS falls back to a generic/blank
+    icon instead of the app's real branding."""
+    app = registry.APPS.get(app_id)
+    return bool(app and app.native_pwa
+                and (path == "manifest.json" or path.startswith("static/")))
+
+
 async def stream_http(app_id: str, path: str, request: Request):
-    user = _require_app(request, app_id)["username"]
+    if _is_native_pwa_public_asset(app_id, path):
+        user = "_pwa"
+    else:
+        user = _require_app(request, app_id)["username"]
     return await proxy.http(app_id, path, request, user)
 
 
