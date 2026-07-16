@@ -306,6 +306,18 @@ APPS: dict[str, AppDef] = {
         gpu=False,
         mem_limit="2g",
         proxy_subpath="root",
+        # ParaViewWeb's own JS bundle builds its wslink WebSocket URL as
+        # (location.protocol==='https:'?'wss':'ws') + '://' + host + ':' + port
+        # + '/ws' — an ABSOLUTE path with no awareness of any subpath prefix.
+        # Symptom: page renders once (a "quick flash"), then the WS connect to
+        # a bare "/ws" (instead of "/apps/stream/paraview/ws") 404s/never
+        # matches any route, and the app's own error handling blanks the page.
+        # Same fix as Stirling PDF/EngineeringPaper/OpenFOAM GUI — own
+        # subdomain, where the Caddy rewrite (`rewrite * /stream/paraview{uri}`)
+        # prepends the app scope to EVERY request including the WS upgrade, so
+        # the bare "/ws" correctly becomes "/stream/paraview/ws" before it ever
+        # reaches the Hub's routing.
+        own_subdomain=True,       # served at pv.<domain>
     ),
     "stirlingpdf": AppDef(
         id="stirlingpdf",
