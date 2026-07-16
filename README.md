@@ -21,13 +21,80 @@ VM, or co-located alongside the Hub on the same device.
 | **OpenMapper** | Web app | — |
 | **Ray Optics** | Web app | — |
 | **Renode** | Web app | — |
+| **EngineeringPaper.xyz** | Web app | — |
+| **OpenFOAM GUI** | Web app | — |
+| **ParaView** (ParaViewWeb) | Web app | — |
 | **Stirling PDF** | Web app | — |
+| **OnlyOffice** | Web app | — |
 | **Nextcloud** (+MariaDB, Redis, Collabora) | Web app | — |
+| **Ollama** | Web app | ✓ (optional) |
+| **Open WebUI** | Web app | — |
 
 GPU-accelerated apps require an NVIDIA GPU with
 [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
 installed and CDI configured. Without a GPU, only web apps are available
 (they work on any hardware, including ARM).
+
+---
+
+## Self-hosting landscape — what we build vs. what we adopt
+
+Periodically reviewed against the wider self-hosted-app ecosystem, to decide whether a
+popular tool should replace custom Sand-OS code, get added alongside it, or be skipped.
+Recorded here so this analysis doesn't have to be redone from scratch each time.
+
+**Already deeply integrated — no reason to switch:**
+- **Caddy** is the reverse proxy everywhere (SM + Hub) — Nginx Proxy Manager would be a pure
+  downgrade (GUI/DB-stored config vs. Caddy's git-trackable Caddyfile + on-demand TLS).
+- **Pi-hole** runs natively on both the Hub and the Roku-E8C3 field node, with a full
+  lifecycle wrapper (`SandOS Hub/scripts/sandhub-pihole`) and an embedded, RBAC-gated UI
+  (`pihole_proxy.py`) — AdGuard Home would mean rebuilding all of that for no net gain.
+  Pi-hole's own **Local DNS Records** feature already covers "internal DNS" for mesh
+  hostnames — no separate tool needed there.
+- **WireGuard** (`wg0` node-facing + `wg1` hub-mesh, with buddy-hub federation) is the
+  entire VPN/mesh layer. Tailscale/Twingate would trade this self-hosted, fully custom
+  federation model for a third-party coordination service — not worth it unless NAT
+  traversal becomes a real recurring problem self-hosted WireGuard can't solve.
+- **The Hub's own RBAC** (cookie sessions, per-app grants, scrypt, CSRF) is small and
+  purpose-built for Sand-OS's specific per-node/per-app permission model (e.g. this
+  session's node-owner-consent flags). Authentik is a much larger, more opinionated system
+  that would mean ripping out that tailored logic for a generic IdP — only worth it if we
+  start fronting many unrelated third-party apps that need real OIDC/SAML.
+- **Fleet/Overview pages** already do live node monitoring + status alerts
+  (`node_registry.py`, `sm_metrics_history.py`, `glances_svc.py`) more deeply integrated
+  with Sand-OS's own node/app model than a generic tool could be from outside. **Homarr /
+  Heimdall / Homepage** (dashboard-aggregators) and **Beszel**/**Uptime Kuma** (generic
+  monitoring) would all be a step backward here — skip unless a specific gap shows up
+  (e.g. wanting a public status page, or monitoring non-Sand-OS services).
+- **Nextcloud** already covers files/Photos/sharing.
+
+**Not applicable to this infrastructure:**
+- **Proxmox Backup Server** and **Active Backup for Business** are vendor-locked to
+  Proxmox VE and Synology respectively — neither matches this stack (bare-metal Docker
+  hosts + a custom NFS NAS).
+- **OpenVPN** — strictly worse than the WireGuard already in place.
+
+**Genuine gap — worth adding:**
+- **Automated/scheduled backups.** Today `snapshots.py` only covers manual, per-app
+  `.appdata` snapshots (config, not user files) triggered by hand from the gear menu — there
+  is no scheduled backup of the NAS itself anywhere. **UrBackup** is the best fit found: it's
+  a real client/server backup tool, not vendor-locked, and fills a gap nothing here covers
+  today, rather than replacing something that already works well. This is infrastructure-
+  level, not an app-catalogue entry.
+
+**Worth adding as new catalogued apps — pure upside, nothing to lose:**
+- **Jellyfin** — `registry.py`'s filebrowser mount comment already anticipated this
+  ("'media' resolves to sm-shared-media, also mounted by a future Jellyfin") and
+  `models.py`'s `AppDef.kind` docstring already lists it as an example `web`-kind app. No
+  custom media-server code exists to lose by adopting it — plain win. Prefer it over Plex
+  (FOSS, no phone-home account, fits the project's self-hosted ethos).
+- **Immich** — Nextcloud's Photos app is fine for general file sharing, but Immich is
+  purpose-built for phone auto-backup + ML search and is meaningfully better at that one
+  job. Additive, not a replacement for Nextcloud.
+- **Home Assistant** — a different domain entirely (smart-home/IoT), not competing with
+  anything here. Worth catalogueing only if smart-home control is actually wanted — it
+  typically needs USB device passthrough (Zigbee/Z-Wave dongles), more involved than a
+  typical web app here.
 
 ---
 
