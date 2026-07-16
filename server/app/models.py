@@ -110,6 +110,14 @@ class AppDef:
     # and strips any client-supplied copy — trusted-header SSO (Nextcloud:
     # "Remote-User" → user_saml environment-variable backend).
     sso_header: str | None = None
+    # Paired with sso_header: some apps (Open WebUI) create every trusted-header
+    # user in a locked "pending" state needing manual per-account admin approval
+    # — anyone the Hub already let through this proxy should just be able to use
+    # the app, not hit a second approval gate app-side. When set, the proxy also
+    # injects sso_role_value under this header name so the app auto-activates
+    # the account instead of leaving it pending.
+    sso_role_header: str | None = None
+    sso_role_value: str = "user"
     # keep-alive after disconnect before the instance is stopped; 0 = close right away
     keepalive_seconds: int = 600
     # docker --memory hard cap (e.g. "3g"); "" = uncapped. Prevents one runaway

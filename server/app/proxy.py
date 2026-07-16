@@ -101,6 +101,9 @@ def _fwd_headers(app, request: Request, user: str) -> dict:
     if app and app.sso_header:
         fwd.pop(app.sso_header.lower(), None)    # never trust a client-sent copy
         fwd[app.sso_header] = user               # inject the authenticated identity
+    if app and app.sso_role_header:
+        fwd.pop(app.sso_role_header.lower(), None)
+        fwd[app.sso_role_header] = app.sso_role_value
     fwd["X-Forwarded-Proto"] = "https"           # we terminate TLS at the Hub
     # Force gzip-only: the proxy buffers and decompresses the full response for
     # HTML injection. httpx handles gzip/deflate natively; Brotli requires an

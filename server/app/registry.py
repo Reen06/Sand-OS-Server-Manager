@@ -417,6 +417,14 @@ APPS: dict[str, AppDef] = {
         auto_pull=True,   # public image — Docker pulls on first start
         # Inject Hub username → trusted-header auto-login (no separate login screen).
         sso_header="X-Forwarded-User",
+        # Open WebUI creates every FIRST-seen trusted-header user in a locked
+        # "pending" state needing a second, separate per-account approval inside
+        # Open WebUI's own admin panel — on top of already being Hub-authenticated
+        # to even reach this proxy. Force every new account straight to "user" so
+        # anyone who can already reach this app can use it immediately, matching
+        # every other app on the fleet (no second gate).
+        sso_role_header="X-Forwarded-Role",
+        sso_role_value="user",
         # Same shared network as Ollama — reach it by container name, no fixed port
         # needed. The --add-host pins the Hub's public hostname to its LAN IP so
         # the OpenAI connection below reaches the Hub router with a valid TLS cert
@@ -438,6 +446,9 @@ APPS: dict[str, AppDef] = {
         env={
             "OLLAMA_BASE_URL": "http://sm-ollama:11434",
             "WEBUI_AUTH_TRUSTED_EMAIL_HEADER": "X-Forwarded-User",
+            # Auto-activates every trusted-header account as role=user (never
+            # left "pending") — see sso_role_header above.
+            "WEBUI_AUTH_TRUSTED_ROLE_HEADER": "X-Forwarded-Role",
             "WEBUI_AUTH": "True",
             "WEBUI_SECRET_KEY": config.OPEN_WEBUI_SECRET_KEY,
             # webui.db lives on the NFS mount above: WAL mode would hang the app
