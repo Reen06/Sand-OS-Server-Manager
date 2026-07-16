@@ -236,6 +236,14 @@ APPS: dict[str, AppDef] = {
         gpu=False,
         mem_limit="256m",
         proxy_subpath="root",     # plain nginx static build, no baseURL awareness
+        # Vite build emits absolute-path asset tags (src="/assets/index-*.js",
+        # no leading "./") — a leading-slash URL always resolves against the
+        # browser's origin root, ignoring whatever subpath the page itself
+        # was served under. Confirmed live (2026-07-16): 404s against SM/Hub's
+        # own routes under /apps/stream/, surfacing as their literal
+        # {"detail":"Not Found"}. Same class of bug, same fix, as Stirling
+        # PDF — see own_subdomain's docstring in models.py.
+        own_subdomain=True,       # served at calc.<domain>
     ),
     "openfoamgui": AppDef(
         id="openfoamgui",
@@ -255,6 +263,16 @@ APPS: dict[str, AppDef] = {
         gpu=False,
         mem_limit="4g",       # CFD solves can be memory-hungry
         proxy_subpath="root",
+        # Even more absolute-path usage than Stirling PDF: hardcoded CSS/JS
+        # tags (/static/landing/...), a fetch('/api/lan-info') call, AND a
+        # service worker registered at absolute scope '/' (navigator.
+        # serviceWorker.register('/sw.js', {scope: '/'})) — a SW claiming
+        # root scope from inside a subpath either fails outright or, worse,
+        # tries to control the WHOLE origin (every other app under
+        # /apps/stream/) depending on the Service-Worker-Allowed header.
+        # Confirmed live (2026-07-16): 404s under /apps/stream/ the same way
+        # Stirling PDF did. Same fix — own_subdomain, see models.py.
+        own_subdomain=True,       # served at cfd.<domain>
         # DEV: run live from the bind-mounted source tree (mirrors webcad/
         # helix) — the entrypoint pip-installs from it on every start and the
         # app's own case_manager.py resolves its case registry relative to its

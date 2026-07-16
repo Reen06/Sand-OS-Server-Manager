@@ -98,8 +98,21 @@ def icon_png_180(app: AppDef) -> bytes | None:
     return png
 
 
+def _scope(app: AppDef, external_base: str) -> str:
+    # An app with own_subdomain is reached via a dedicated Caddy host
+    # (calc.<domain>, pdf.<domain>, ...) whose rewrite already lands
+    # requests at /stream/{app}/... directly — the /apps prefix only
+    # exists for the ordinary dashboard-hosted /apps/stream/ subpath, which
+    # doesn't apply on that separate origin. Using the normal prefix here
+    # would point the manifest's own start_url/scope, and every injected
+    # <link>, at a path that 404s on that host — the same class of bug
+    # own_subdomain's proxy.py check already fixes for the base-href case.
+    base = "" if app.own_subdomain else external_base
+    return f"{base}/stream/{app.id}/"
+
+
 def manifest(app: AppDef, external_base: str) -> dict:
-    scope = f"{external_base}/stream/{app.id}/"
+    scope = _scope(app, external_base)
     icon_url = f"{scope}sm-icon.svg"
     return {
         "id": scope,
@@ -125,7 +138,7 @@ def manifest(app: AppDef, external_base: str) -> dict:
 def head_tags(app: AppDef, external_base: str) -> str:
     """The <head> tags injected into an app's entry page so the browser installs
     THIS app (its manifest/icon/scope), not the whole dashboard."""
-    scope = f"{external_base}/stream/{app.id}/"
+    scope = _scope(app, external_base)
     return (
         f'<link rel="manifest" href="{scope}sm-app.webmanifest">'
         f'<link rel="icon" type="image/svg+xml" href="{scope}sm-icon.svg">'
