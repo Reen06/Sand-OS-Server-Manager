@@ -5,7 +5,19 @@
 set -euo pipefail
 
 # ── Colour / terminal helpers ─────────────────────────────────────────────────
-if [ -t 1 ] && command -v tput &>/dev/null && tput setaf 1 &>/dev/null 2>&1; then
+# A real interactive terminal on BOTH ends, not just this process's own stdout —
+# `[ -t 1 ]` alone can be true even when piped through something like
+# `python subprocess.run(["wsl", ...])` (WSL's own console bridging), where a raw
+# `clear` escape sequence can visually wipe or garble the display without this
+# actually being a terminal a human is looking at directly. TERM being unset/
+# "dumb" is the other reliable tell for that same situation.
+if [ -t 1 ] && [ -n "${TERM:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
+  IS_TTY=1
+else
+  IS_TTY=0
+fi
+
+if [ "$IS_TTY" = "1" ] && command -v tput &>/dev/null && tput setaf 1 &>/dev/null 2>&1; then
   BOLD=$(tput bold);  RST=$(tput sgr0)
   RED=$(tput setaf 1); GRN=$(tput setaf 2); YLW=$(tput setaf 3)
   BLU=$(tput setaf 4); CYN=$(tput setaf 6); WHT=$(tput setaf 7)
@@ -17,7 +29,11 @@ fi
 HR="${DIM}$(printf '─%.0s' $(seq 1 64))${RST}"
 
 header() {
-  clear 2>/dev/null || true
+  # Only actually clear on a real terminal — see IS_TTY above. Every step's
+  # content still prints either way; this just controls whether the PREVIOUS
+  # step's text is wiped first, so nothing risks disappearing where a clear
+  # might not render the way it does on a native terminal.
+  [ "$IS_TTY" = "1" ] && { clear 2>/dev/null || true; }
   echo
   printf "  %s%sSand-OS Server Manager%s  ·  Installer\n" "$BOLD" "$CYN" "$RST"
   printf "  %s%s\n" "$DIM" "$RST"
@@ -63,9 +79,9 @@ pick() {               # pick "prompt" default  val1 "label1"  val2 "label2"  ..
   done
   blank
   while true; do
-    ask "${prompt} [1-${#vals[@]}]:"
+    ask "${prompt} — type a number 1-${#vals[@]} and press Enter (or just Enter for the default):"
     read -r _sel
-    [[ -z "$_sel" ]] && { echo "${vals[0]}"; return; }
+    [[ -z "$_sel" ]] && { echo "$default"; return; }
     if [[ "$_sel" =~ ^[0-9]+$ ]] && (( _sel >= 1 && _sel <= ${#vals[@]} )); then
       echo "${vals[$(( _sel - 1 ))]}"; return
     fi
