@@ -4,6 +4,76 @@ A running log of problems encountered and how they were resolved. Newest at top.
 
 ---
 
+## 2026-07-16 (post-checkpoint) — Open WebUI: model invisible to non-admin users, code interpreter broken, and a SECOND bridge missing FORWARD rules
+
+Three separate issues found in follow-up testing after the "everything
+works" checkpoint — a good reminder that a checkpoint means "verified at
+that moment," not "nothing left to find."
+
+**Issue 1 — an installed/running Ollama model didn't show up for a
+non-admin user (Braeden), only for admin.** Not a bug: confirmed straight
+from Open WebUI's own source (`utils/models.py`'s `get_filtered_models`) —
+`elif user.role == 'admin': # No DB entry means no access control
+configured yet; only admins can see unconfigured models.` A model synced
+live from Ollama with no explicit Open WebUI-side visibility setting
+defaults to admin-only. **Fix:** in Open WebUI, Admin Panel/Workspace →
+Models → open the model → set Visibility to Public (or a specific group).
+Creates the missing access-control DB row; no infra change needed.
+
+**Issue 2 — running a code block gives `STDOUT/STDERR: loadPyodide is not
+defined` (desktop) or an explicit `Cross-origin script load denied by
+Cross-Origin Resource Sharing policy` (mobile Safari).** Same root cause,
+different browsers surfacing it with different verbosity. Traced through
+Open WebUI's own bundled JS: the default (non-worker) Pyodide loader
+creates a hidden iframe with `sandbox="allow-scripts"` — deliberately
+WITHOUT `allow-same-origin`, to isolate arbitrary user-executed Python
+from the main page's cookies/storage. That gives the iframe an opaque/null
+origin, and browsers then treat loading `pyodide.js` into it as genuinely
+cross-origin even though the URL baked into the iframe's `srcdoc` is
+same-origin-looking (computed correctly, in the real page's scope, before
+the opaque iframe context exists). Confirmed this is NOT a proxy/CORS-
+header issue on our side — `pyodide.js` already serves with
+`Access-Control-Allow-Origin: *` from Open WebUI's own server and loads
+fine via direct fetch; the failure is specifically the sandboxed iframe's
+own script-loading restriction. **Fix:** `containers/open-webui/
+Dockerfile`, a thin layer on the upstream image adding `allow-same-origin`
+to that one sandbox attribute — matched by STRING PATTERN across all built
+JS chunks (grep, not a hardcoded filename, since the actual file is
+content-hashed and changes on every upstream rebuild), with a build-time
+grep-after-sed so the build fails loudly if the pattern ever stops
+matching. Accepted tradeoff, confirmed with the user before implementing:
+the code-interpreter iframe now shares origin with the main page instead
+of being fully isolated — still a hidden, non-navigable, script-only
+iframe that only ever runs Python the user explicitly asked to run.
+
+**Issue 3 — deploying the fix above surfaced the SAME missing-FORWARD-
+rules bug from the checkpoint entry below, but on a SECOND, different
+bridge.** Rebuilding pulled a fresh `:main` (v0.10.2, notably newer than
+whatever was previously cached) and the new container hung indefinitely
+during its own startup — 0% CPU, unchanging memory, no log progress past
+the first line — on a plain HTTPS call to huggingface.co for its embedding
+model. (A `mem_limit` bump 1g→2g was tried first since the symptom
+superficially resembled Stirling PDF's Metaspace OOM — wrong diagnosis
+this time, memory sat at a comfortable 32% of the new limit while still
+fully stuck; kept the bump anyway since this version does seem to need
+more than 1g regardless.) Actual cause: `sm-llm-net` (Open WebUI +
+Ollama's shared custom network, `br-9aa1d98a084c`, `172.18.0.0/16`) had
+its NAT masquerade rule but NONE of `DOCKER-FORWARD`/`DOCKER-CT` — the
+exact same gap the earlier docker0 fix addressed, just a different bridge.
+**This is exactly why that fix needed to be generalized rather than
+staying docker0-specific:** `ensure-docker0-forward-rules.sh` (filename
+kept to avoid re-plumbing the already-deployed systemd unit) now
+discovers EVERY bridge network on both the main daemon and the USB
+app-hosting daemon and asserts the same rules for all of them, instead of
+one hardcoded bridge name. Verified: healthy in 30s after the fix, logs
+showing the huggingface.co call actually completing.
+
+**Files:** `Sand-OS-Server-Manager/containers/open-webui/Dockerfile`,
+`server/app/{config,registry}.py`, `systemd/ensure-docker0-forward-rules.sh`,
+`systemd/sandos-docker0-forward-fix.service`.
+
+---
+
 ## 2026-07-16 (still later) — Logging back in from a PWA shortcut lands on the dashboard, not the app
 
 **Symptom:** FreeCAD installed as a mobile home-screen PWA shortcut. Its
