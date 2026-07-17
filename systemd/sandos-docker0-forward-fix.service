@@ -1,10 +1,23 @@
 [Unit]
-Description=Restore docker0's NAT/FORWARD rules if the daemon didn't (re)program them
+Description=Restore every Docker bridge's NAT/FORWARD rules if a daemon didn't (re)program them
 # DOCKER-FORWARD/DOCKER-CT are chains dockerd itself creates — this must run
 # strictly after it's up, or the ensure script's `iptables -C` checks against
-# those chains fail outright (chain doesn't exist yet).
+# those chains fail outright (chain doesn't exist yet). Covers docker0,
+# every custom network on the main daemon (confirmed live 2026-07-16: this
+# hit sm-llm-net, not just docker0 — the fix generalized to every bridge
+# after the second bite), AND the USB app-hosting daemon's bridges, if that
+# daemon happens to be up yet at boot (After=, not Requires= — the USB
+# dockerd is only started on-demand when a drive is assigned, so this must
+# NOT block on it).
 After=docker.service
 Requires=docker.service
+# NOT ordered after sandos-usb-dockerd@ (a template unit instantiated with a
+# dynamic per-drive UUID unknown at boot, so it can't be named here anyway,
+# and it's only started on-demand when a drive is assigned, not at boot) —
+# the script itself checks for that daemon's socket at runtime and skips it
+# gracefully if absent. If a drive gets assigned well after boot and later
+# grows its own custom bridge networks, re-run this unit manually
+# (systemctl restart sandos-docker0-forward-fix.service) to pick them up.
 
 [Service]
 Type=oneshot

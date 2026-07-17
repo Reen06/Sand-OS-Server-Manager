@@ -510,7 +510,16 @@ APPS: dict[str, AppDef] = {
         mode="shared",
         internal_port=8080,
         gpu=False,
-        mem_limit="1g",
+        # Bumped 1g→2g: rebuilding containers/open-webui/Dockerfile pulled a
+        # fresh ":main" (v0.10.2, notably newer than whatever was previously
+        # cached/running) — confirmed live 2026-07-16 this version gets
+        # stuck at ~92% of a 1g limit during startup with 0% CPU (a genuine
+        # cgroup-memory-pressure stall, not slow work: verified across
+        # multiple samples with unchanging memory and no progress in the
+        # logs past the initial log-level line), same class of issue as
+        # Stirling PDF's Metaspace OOM. Same fix: give it the memory upstream
+        # actually needs now.
+        mem_limit="2g",
         proxy_subpath="root",
         auto_pull=True,   # public image — Docker pulls on first start
         # Inject Hub username → trusted-header auto-login (no separate login screen).
