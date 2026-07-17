@@ -551,20 +551,13 @@ fi
 if [ -n "$SM_HUB_URL" ]; then
   echo "  ${BOLD}Hub Caddy integration${RST}"
   echo "  $HR"
-  echo "  Add these lines inside your Hub's  https://…  site block"
-  echo "  (before the catch-all  handle { reverse_proxy … } ):"
-  blank
-  if [[ "$MODE" == "colocated" ]]; then
-    _upstream="127.0.0.1:${SM_PORT}"
-  else
-    _upstream="${SM_LAN_IP}:${SM_PORT}"
-  fi
-  printf "  %s  redir /apps /apps/\n" "$DIM"
-  printf "  handle_path /apps/* {\n"
-  printf "      reverse_proxy %s\n" "$_upstream"
-  printf "  }%s\n" "$RST"
-  blank
-  echo "  Then reload Caddy:  sudo systemctl reload caddy"
+  echo "  Nothing to add here — the Hub's own backend already dynamically"
+  echo "  proxies app traffic to whichever node currently hosts each app"
+  echo "  (sm_proxy.py, resolved per-request from its live Fleet registry),"
+  echo "  and the Hub's Caddyfile already forwards every path to that"
+  echo "  backend with one generic block. Just register this node on the"
+  echo "  Hub's Fleet page (\"Add device\") and it's reachable immediately —"
+  echo "  no Caddy edit or reload needed."
   blank
 fi
 
