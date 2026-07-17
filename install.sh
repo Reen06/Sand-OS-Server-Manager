@@ -489,6 +489,16 @@ else
   warn "  journalctl -u ${UNIT_NAME} -n 30 --no-pager"
 fi
 
+# `server-manager` command: a terminal Busy/Available toggle for headless
+# boxes with no display (the curses twin of the GUI toggles) — stdlib only,
+# runs fine under the system python3, no venv needed (it only talks to the
+# already-running service's own local HTTP API).
+$SUDO tee /usr/local/bin/server-manager > /dev/null << EOF
+#!/usr/bin/env bash
+exec python3 "${REPO_ROOT}/cli/server_manager_tui.py" "\$@"
+EOF
+$SUDO chmod +x /usr/local/bin/server-manager
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # DONE
 # ═══════════════════════════════════════════════════════════════════════════════

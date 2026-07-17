@@ -132,16 +132,26 @@ The installer is a guided TUI — it asks a few questions and then writes
 
 There's no native Windows build — the Server Manager needs Docker + systemd, so on
 Windows it runs inside WSL2. `windows/sandos_launcher.py` handles the whole thing (Python
-standard library only — nothing to `pip install` first):
+standard library only — nothing to `pip install` first).
+
+**Don't clone this whole repo onto the Windows filesystem first** — you only need the one
+launcher script somewhere convenient (Downloads, Documents, wherever); it does the real
+`git clone` for you **inside WSL** (into the Linux distro's own home dir, not
+`/mnt/c/...`). That matters: WSL2's access to the Windows-side filesystem is noticeably
+slower than its native Linux filesystem, and Docker/systemd need to be Linux-native
+anyway — the actual install belongs entirely inside WSL, never on the Windows drive.
+
+Grab just that one file with PowerShell, no repo clone needed:
 
 ```powershell
-python windows\sandos_launcher.py --setup
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/Reen06/Sand-OS-Server-Manager/main/windows/sandos_launcher.py" -OutFile "sandos_launcher.py"
+python sandos_launcher.py --setup
 ```
 
-This provisions a WSL2 distro if you don't have one, clones this repo into it, runs the
-same `install.sh` used on native Linux (unmodified — WSL2 supports systemd once enabled),
-and sets up a Scheduled Task so WSL wakes at Windows logon (systemd then starts the
-already-`enable`d service on its own — nothing further to start by hand).
+This provisions a WSL2 distro if you don't have one, clones the real repo into it, runs
+the same `install.sh` used on native Linux (unmodified — WSL2 supports systemd once
+enabled), and sets up a Scheduled Task so WSL wakes at Windows logon (systemd then starts
+the already-`enable`d service on its own — nothing further to start by hand).
 
 Run the script again afterward, with no arguments, for day-to-day use — it opens a small
 window that's the [Busy/Available](#busyavailable-mode) toggle for that machine.
@@ -162,6 +172,11 @@ Available and relaunch what you need.
     no arguments once setup is done.
   - Native Linux desktop: `python3 linux/sandos_busy_toggle.py` (same standard-library-only
     script, no WSL steps — this machine already runs the SM directly).
+  - **Headless Linux server (no display)**: just run `server-manager` — `install.sh`
+    already set this up as a command on your `PATH`. It's a small curses-based terminal UI
+    (`cli/server_manager_tui.py`, standard library only) with the same status/toggle as the
+    GUI versions, just keyboard-driven: `Space`/`Enter` toggles Busy, `o` toggles remote
+    override, `q` quits.
   - Or plain `curl` from either loopback path:
     ```bash
     curl -X POST http://localhost:8170/api/sm/busy -d '{"enabled": true}'
