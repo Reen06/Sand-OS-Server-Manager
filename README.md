@@ -298,7 +298,7 @@ installer). You can edit this file directly and restart the service.
 | `SM_EXTERNAL_BASE` | `/apps` | URL path the Hub mounts the SM under |
 | `SM_NAS_ENABLED` | `false` | Enable NFSv4-backed shared storage |
 | `SM_NAS_HOST` | `$SM_LAN_IP` | IP of the NFS server |
-| `SM_NAS_ROOT` | `/home/<user>/sandos-nas` | Path exported as the NFS pseudo-root (fsid=0) |
+| `SM_NAS_ROOT` | `/home/$USER/sandos-nas` | Path exported as the NFS pseudo-root (fsid=0) |
 | `SM_GPU` | auto-detected | Override GPU detection (`true`/`false`) |
 | `SM_SLOT_COUNT` | `8` | Max concurrent app instances across all users |
 
@@ -336,11 +336,13 @@ If you enabled the NAS layer and this machine is the NFS host:
 ```bash
 sudo apt install nfs-kernel-server
 
-# Create the NAS root (replace <user> with the account running the Server Manager)
-sudo mkdir -p /home/<user>/sandos-nas
+# Create the NAS root — $USER already resolves to whoever's running this
+sudo mkdir -p "/home/$USER/sandos-nas"
 
-# Export it — edit /etc/exports and add:
-/home/<user>/sandos-nas  10.0.0.0/8(rw,fsid=0,no_subtree_check,all_squash,anonuid=1000,anongid=1000)
+# Export it (fsid=0) — appends the resolved path straight into /etc/exports,
+# no manual editing needed
+echo "/home/$USER/sandos-nas  10.0.0.0/8(rw,fsid=0,no_subtree_check,all_squash,anonuid=1000,anongid=1000)" \
+  | sudo tee -a /etc/exports
 
 # Apply
 sudo exportfs -ra
