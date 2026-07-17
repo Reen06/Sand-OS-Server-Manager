@@ -114,11 +114,18 @@ def setup() -> None:
           "before continuing — this script can't flip that toggle for you.")
     input("Press Enter once that's confirmed... ")
 
-    print("Cloning the repo and running the normal Linux installer inside WSL "
-          "(this is the SAME install.sh used on every other node — nothing "
-          "Windows-specific about it once you're inside the distro)...")
+    print("Cloning (or updating) the repo and running the normal Linux installer "
+          "inside WSL (this is the SAME install.sh used on every other node — "
+          "nothing Windows-specific about it once you're inside the distro)...")
+    # Always pull latest on an existing checkout — silently reusing whatever
+    # was cloned on a previous, possibly-failed --setup run means any fix
+    # pushed since then would never actually reach this machine.
     clone_and_install = (
-        f"test -d {CLONE_DIR}/.git || git clone {REPO_URL} {CLONE_DIR}; "
+        f"if [ -d {CLONE_DIR}/.git ]; then "
+        f"  git -C {CLONE_DIR} pull --ff-only; "
+        f"else "
+        f"  git clone {REPO_URL} {CLONE_DIR}; "
+        f"fi; "
         f"cd {CLONE_DIR} && bash install.sh"
     )
     r = subprocess.run(["wsl", "-d", distro, "--", "bash", "-lc", clone_and_install])
