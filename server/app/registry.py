@@ -560,7 +560,16 @@ APPS: dict[str, AppDef] = {
         mounts=[Mount(name="open-webui-data", path="/app/backend/data", scope="shared",
                       storage="nfs"),
                 Mount(name="open-webui-vectordb", path="/app/backend/data/vector_db",
-                      scope="shared")],
+                      scope="shared"),
+                # The WHOLE fleet NAS export, same pattern Nextcloud already uses
+                # (scope="root" — mount everything, let the app scope per-user
+                # itself) — since this is one shared container for every Hub
+                # user, there's no single "per-user" mount that would work here.
+                # The NAS Files tool (containers/open-webui/tools/nas_files.py)
+                # is what actually enforces per-user isolation at runtime, using
+                # Open WebUI's own authenticated __user__ context — nothing about
+                # this mount itself is user-scoped.
+                Mount(name="nas", path="/nas", scope="root", storage="nfs")],
         env={
             "OLLAMA_BASE_URL": "http://sm-ollama:11434",
             "WEBUI_AUTH_TRUSTED_EMAIL_HEADER": "X-Forwarded-User",
