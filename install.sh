@@ -49,7 +49,15 @@ err()     { echo "  ${RED}✗${RST}  $*" >&2; }
 die()     { err "$*"; exit 1; }
 blank()   { echo; }
 
-ask()     { printf "    %s " "$*"; }
+# Every interactive prompt goes to STDERR, never stdout — read_val()/pick()
+# are called as `x=$(read_val ...)`/`x=$(pick ...)` everywhere, and command
+# substitution captures a function's ENTIRE stdout, not just its final
+# return line. Printing the prompt to stdout meant it silently vanished
+# into the captured variable instead of ever reaching the screen — the
+# actual root cause of steps appearing to "show up with nothing" (this
+# was never Windows/WSL-specific; the same bug exists on native Linux, it
+# was just never faced squarely before now).
+ask()     { printf "    %s " "$*" >&2; }
 
 confirm() {
   ask "${BOLD}$1${RST} [Y/n]"
@@ -68,16 +76,20 @@ pick() {               # pick "prompt" default  val1 "label1"  val2 "label2"  ..
   local prompt="$1" default="$2"; shift 2
   local -a vals labels
   while (( $# >= 2 )); do vals+=("$1"); labels+=("$2"); shift 2; done
-  blank
-  for i in "${!vals[@]}"; do
-    local n=$(( i + 1 ))
-    if [[ "${vals[$i]}" == "$default" ]]; then
-      printf "    ${BOLD}${GRN}%s)${RST}  %s ${DIM}(default)${RST}\n" "$n" "${labels[$i]}"
-    else
-      printf "    ${BOLD}%s)${RST}  %s\n" "$n" "${labels[$i]}"
-    fi
-  done
-  blank
+  # The whole menu is display-only — same reasoning as ask() above, redirect
+  # it all to stderr so it can never be swallowed by `x=$(pick ...)`.
+  {
+    blank
+    for i in "${!vals[@]}"; do
+      local n=$(( i + 1 ))
+      if [[ "${vals[$i]}" == "$default" ]]; then
+        printf "    ${BOLD}${GRN}%s)${RST}  %s ${DIM}(default)${RST}\n" "$n" "${labels[$i]}"
+      else
+        printf "    ${BOLD}%s)${RST}  %s\n" "$n" "${labels[$i]}"
+      fi
+    done
+    blank
+  } >&2
   while true; do
     ask "${prompt} — type a number 1-${#vals[@]} and press Enter (or just Enter for the default):"
     read -r _sel
@@ -85,7 +97,7 @@ pick() {               # pick "prompt" default  val1 "label1"  val2 "label2"  ..
     if [[ "$_sel" =~ ^[0-9]+$ ]] && (( _sel >= 1 && _sel <= ${#vals[@]} )); then
       echo "${vals[$(( _sel - 1 ))]}"; return
     fi
-    warn "Enter a number between 1 and ${#vals[@]}"
+    warn "Enter a number between 1 and ${#vals[@]}" >&2
   done
 }
 
