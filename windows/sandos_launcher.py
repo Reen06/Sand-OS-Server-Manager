@@ -19,16 +19,20 @@ install` before this runs.
 """
 from __future__ import annotations
 import json
+import socket
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 SM_PORT = 8170
 SM_BASE = f"http://localhost:{SM_PORT}"
 REPO_URL = "https://github.com/Reen06/Sand-OS-Server-Manager.git"
 FRESH_INSTALL_DISTRO = "Ubuntu"   # what `wsl --install -d Ubuntu` actually registers
 CLONE_DIR = "~/Sand-OS-Server-Manager"
+FIREWALL_RULE_NAME = "SandOS Server Manager"
 
 
 # ── local SM API calls (loopback — no Hub login needed, see main.py's
@@ -86,6 +90,145 @@ def find_ubuntu_distro() -> str | None:
     return None
 
 
+# ── LAN reachability ──────────────────────────────────────────────────────────
+# WSL2's default network is NAT'd and isolated: something bound inside WSL is
+# reachable from THIS Windows machine via localhost (WSL's own automatic
+# forwarding), but NOT from other devices on the LAN hitting this machine's
+# real IP — nothing is actually listening there at all. Two fixes, tried in
+# order: mirrored networking (Windows 11 22H2+ / recent WSL — WSL shares the
+# host's real network directly, nothing else to maintain) and, if that isn't
+# available or doesn't verify, a netsh port-forward to WSL's current internal
+# IP (works on any WSL2 version, but that IP changes every restart, so it has
+# to be re-applied each time WSL wakes — wired into the same logon task that
+# already wakes WSL).
+def _wslconfig_path() -> Path:
+    return Path.home() / ".wslconfig"
+
+
+def _mirrored_networking_configured() -> bool:
+    path = _wslconfig_path()
+    if not path.exists():
+        return False
+    return "networkingmode" in path.read_text().lower() and "mirrored" in path.read_text().lower()
+
+
+def _enable_mirrored_networking() -> None:
+    path = _wslconfig_path()
+    lines = path.read_text().splitlines() if path.exists() else []
+    if "[wsl2]" not in lines:
+        lines.append("[wsl2]")
+    out: list[str] = []
+    in_wsl2 = False
+    written = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_wsl2 = stripped == "[wsl2]"
+        if in_wsl2 and stripped.lower().startswith("networkingmode"):
+            out.append("networkingMode=mirrored")
+            written = True
+            continue
+        out.append(line)
+    if not written:
+        idx = out.index("[wsl2]")
+        out.insert(idx + 1, "networkingMode=mirrored")
+    path.write_text("\n".join(out) + "\n")
+
+
+def _windows_lan_ip() -> str | None:
+    """Best-effort: this machine's own LAN IP, used only to self-test whether
+    mirrored networking actually took effect (imperfect proxy for "can
+    another machine reach me," but a reasonable signal from this same box)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return None
+
+
+def _restart_wsl(distro: str) -> None:
+    _run(["wsl", "--shutdown"])
+    time.sleep(2)
+    _run(["wsl", "-d", distro, "--", "true"])
+    time.sleep(3)
+
+
+def _wsl_internal_ip(distro: str) -> str | None:
+    r = _run(["wsl", "-d", distro, "--", "hostname", "-I"])
+    parts = (r.stdout or "").split()
+    return parts[0] if parts else None
+
+
+def _refresh_port_forward(distro: str) -> bool:
+    """Idempotent: delete any existing rule for this port, then re-add it
+    pointing at WSL's CURRENT internal IP (it changes every WSL restart in
+    NAT mode). Needs Administrator — netsh portproxy/firewall both do."""
+    wsl_ip = _wsl_internal_ip(distro)
+    if not wsl_ip:
+        print("Couldn't determine the WSL2 VM's internal IP — skipping port forwarding.")
+        return False
+    _run(["netsh", "interface", "portproxy", "delete", "v4tov4",
+         f"listenport={SM_PORT}", "listenaddress=0.0.0.0"])
+    r = _run(["netsh", "interface", "portproxy", "add", "v4tov4",
+             "listenaddress=0.0.0.0", f"listenport={SM_PORT}",
+             f"connectaddress={wsl_ip}", f"connectport={SM_PORT}"])
+    if r.returncode != 0:
+        print(f"Couldn't set up port forwarding (needs Administrator): {(r.stderr or '').strip()}")
+        print("Run this script as Administrator, or set it up yourself:")
+        print(f"  netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 "
+              f"listenport={SM_PORT} connectaddress={wsl_ip} connectport={SM_PORT}")
+        return False
+    _run(["netsh", "advfirewall", "firewall", "add", "rule",
+         f"name={FIREWALL_RULE_NAME}", "dir=in", "action=allow",
+         "protocol=TCP", f"localport={SM_PORT}"])
+    print(f"Port forwarding set: this machine's LAN IP:{SM_PORT} → WSL {wsl_ip}:{SM_PORT}")
+    return True
+
+
+def _verify_lan_reachable() -> bool:
+    ip = _windows_lan_ip()
+    if not ip:
+        return False
+    try:
+        with urllib.request.urlopen(f"http://{ip}:{SM_PORT}/api/sm/info", timeout=5) as r:
+            return r.status == 200
+    except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
+        return False
+
+
+def setup_lan_reachability(distro: str) -> None:
+    print("\nMaking this node reachable from other machines on your LAN "
+          "(not just from this Windows box itself)...")
+    print("Trying mirrored networking first (Windows 11 22H2+ / recent WSL only)...")
+    _enable_mirrored_networking()
+    _restart_wsl(distro)
+
+    if _verify_lan_reachable():
+        print("Confirmed reachable — mirrored networking is working, nothing else to do.")
+        return
+
+    print("Mirrored networking didn't verify as reachable (older Windows/WSL, or it "
+          "just needs a bit longer) — falling back to port forwarding instead.")
+    _refresh_port_forward(distro)
+
+
+def refresh_network() -> None:
+    """What the logon Scheduled Task actually runs: wake WSL, and if mirrored
+    networking ISN'T configured (meaning the port-forward fallback is in
+    use), redo the forward since WSL's internal IP may have changed since
+    last boot. Mirrored networking needs no per-boot refresh at all."""
+    distro = find_ubuntu_distro()
+    if not distro:
+        return
+    _run(["wsl", "-d", distro, "--", "true"])
+    if not _mirrored_networking_configured():
+        time.sleep(2)
+        _refresh_port_forward(distro)
+
+
 def setup() -> None:
     print("=== SandOS Server Manager — Windows/WSL setup ===")
     distro = find_ubuntu_distro()
@@ -135,10 +278,14 @@ def setup() -> None:
               "re-run this script; autostart was NOT configured yet.")
         return
 
+    setup_lan_reachability(distro)
+
     print("\nSetting up autostart: a Scheduled Task that wakes this WSL distro "
-          "at logon. Once WSL2 is up, systemd starts the already-enabled "
-          "sandos-server-manager service on its own — nothing further needed.")
-    task_cmd = f'wsl.exe -d {distro} -- true'
+          "(and keeps it reachable on the LAN) at logon. Once WSL2 is up, "
+          "systemd starts the already-enabled sandos-server-manager service "
+          "on its own — nothing further needed.")
+    script_path = Path(__file__).resolve()
+    task_cmd = f'python "{script_path}" --refresh-network'
     r = _run(["schtasks", "/create", "/tn", "SandOS Server Manager (WSL wake)",
              "/tr", task_cmd, "/sc", "onlogon", "/rl", "highest", "/f"])
     if r.returncode != 0:
@@ -211,6 +358,9 @@ def run_gui() -> None:
 
 
 def main() -> None:
+    if "--refresh-network" in sys.argv:
+        refresh_network()
+        return
     if "--setup" in sys.argv or not find_ubuntu_distro():
         setup()
         return
