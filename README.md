@@ -112,7 +112,7 @@ Recorded here so this analysis doesn't have to be redone from scratch each time.
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/<your-user>/Sand-OS-Server-Manager
+git clone https://github.com/Reen06/Sand-OS-Server-Manager
 cd Sand-OS-Server-Manager
 ```
 
