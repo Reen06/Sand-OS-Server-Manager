@@ -27,7 +27,7 @@ import urllib.request
 SM_PORT = 8170
 SM_BASE = f"http://localhost:{SM_PORT}"
 REPO_URL = "https://github.com/Reen06/Sand-OS-Server-Manager.git"
-DISTRO = "Ubuntu"
+FRESH_INSTALL_DISTRO = "Ubuntu"   # what `wsl --install -d Ubuntu` actually registers
 CLONE_DIR = "~/Sand-OS-Server-Manager"
 
 
@@ -64,33 +64,53 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
-def wsl_distro_exists(name: str = DISTRO) -> bool:
-    r = _run(["wsl", "-l", "-v"])
-    # wsl -l -v prints UTF-16 on some Windows builds; decode defensively.
+def _list_distros() -> list[str]:
+    """Exact registered distro names, one per line — `-l -q` (quiet) is the
+    documented script-parseable form; `-l -v`'s padded/asterisk'd table is
+    for humans, not for picking out a name to pass to `-d` later. Still
+    strips UTF-16 nulls some Windows builds emit either way."""
+    r = _run(["wsl", "-l", "-q"])
     out = (r.stdout or "").replace("\x00", "")
-    return name.lower() in out.lower()
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def find_ubuntu_distro() -> str | None:
+    """The real registered name of whatever Ubuntu-based distro exists, if
+    any — NOT a hardcoded "Ubuntu" assumption. A distro installed from the
+    Microsoft Store (e.g. "Ubuntu 24.04.1 LTS") registers as "Ubuntu-24.04",
+    not "Ubuntu" — passing the wrong literal name to `wsl -d <name>` fails
+    with WSL_E_DISTRO_NOT_FOUND even though a perfectly good distro exists."""
+    for name in _list_distros():
+        if "ubuntu" in name.lower():
+            return name
+    return None
 
 
 def setup() -> None:
     print("=== SandOS Server Manager — Windows/WSL setup ===")
-    if not wsl_distro_exists():
-        print(f"No {DISTRO} WSL distro found — installing one now.")
+    distro = find_ubuntu_distro()
+    if not distro:
+        print("No Ubuntu-based WSL distro found — installing one now.")
         print("Windows may require a reboot partway through this step; if so, "
               "just run this script again afterward to continue.")
-        _run(["wsl", "--install", "-d", DISTRO])
+        _run(["wsl", "--install", "-d", FRESH_INSTALL_DISTRO])
         print("If a reboot was requested, reboot now and re-run this script.")
         return
 
-    print(f"{DISTRO} found. Ensuring systemd is enabled (needed for the SM's "
-          "own service, and unmodified from how it runs on Linux)...")
-    _run(["wsl", "-d", DISTRO, "--", "bash", "-lc",
-          "grep -q '^systemd=true' /etc/wsl.conf 2>/dev/null || "
-          "(sudo mkdir -p /etc && printf '[boot]\\nsystemd=true\\n' | sudo tee -a /etc/wsl.conf)"])
+    print(f"Found WSL distro '{distro}'. Ensuring systemd is enabled (needed "
+          "for the SM's own service, and unmodified from how it runs on Linux)...")
+    r = _run(["wsl", "-d", distro, "--", "bash", "-lc",
+             "grep -q '^systemd=true' /etc/wsl.conf 2>/dev/null || "
+             "(sudo mkdir -p /etc && printf '[boot]\\nsystemd=true\\n' | sudo tee -a /etc/wsl.conf)"])
+    if r.returncode != 0:
+        print(f"\nCouldn't check/enable systemd in '{distro}': {(r.stderr or '').strip()}")
+        print("Setup stopped here — fix the error above and re-run this script.")
+        return
     print("If systemd was just enabled for the first time, WSL needs a restart: "
           "run `wsl --shutdown` in a terminal, then re-run this script.")
 
-    print("\nMake sure Docker Desktop's WSL2 integration is turned ON for "
-          f"'{DISTRO}' (Docker Desktop → Settings → Resources → WSL Integration) "
+    print(f"\nMake sure Docker Desktop's WSL2 integration is turned ON for "
+          f"'{distro}' (Docker Desktop → Settings → Resources → WSL Integration) "
           "before continuing — this script can't flip that toggle for you.")
     input("Press Enter once that's confirmed... ")
 
@@ -101,14 +121,24 @@ def setup() -> None:
         f"test -d {CLONE_DIR}/.git || git clone {REPO_URL} {CLONE_DIR}; "
         f"cd {CLONE_DIR} && bash install.sh"
     )
-    subprocess.run(["wsl", "-d", DISTRO, "--", "bash", "-lc", clone_and_install])
+    r = subprocess.run(["wsl", "-d", distro, "--", "bash", "-lc", clone_and_install])
+    if r.returncode != 0:
+        print(f"\nSetup did NOT finish — the clone/install step inside WSL failed "
+              f"(exit code {r.returncode}). See the error above, fix it, and "
+              "re-run this script; autostart was NOT configured yet.")
+        return
 
     print("\nSetting up autostart: a Scheduled Task that wakes this WSL distro "
           "at logon. Once WSL2 is up, systemd starts the already-enabled "
           "sandos-server-manager service on its own — nothing further needed.")
-    task_cmd = f'wsl.exe -d {DISTRO} -- true'
-    _run(["schtasks", "/create", "/tn", "SandOS Server Manager (WSL wake)",
-          "/tr", task_cmd, "/sc", "onlogon", "/rl", "highest", "/f"])
+    task_cmd = f'wsl.exe -d {distro} -- true'
+    r = _run(["schtasks", "/create", "/tn", "SandOS Server Manager (WSL wake)",
+             "/tr", task_cmd, "/sc", "onlogon", "/rl", "highest", "/f"])
+    if r.returncode != 0:
+        print(f"\nCouldn't create the logon Scheduled Task: {(r.stderr or '').strip()}")
+        print("The install itself succeeded — you'll just need to start WSL "
+              "yourself (or create the task manually) until this is fixed.")
+        return
 
     print("\nSetup complete. Run this script again with no arguments to open "
           "the Busy/Available control window.")
@@ -174,7 +204,7 @@ def run_gui() -> None:
 
 
 def main() -> None:
-    if "--setup" in sys.argv or not wsl_distro_exists():
+    if "--setup" in sys.argv or not find_ubuntu_distro():
         setup()
         return
     run_gui()
