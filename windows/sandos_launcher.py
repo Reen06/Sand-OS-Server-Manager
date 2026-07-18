@@ -23,6 +23,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -32,6 +33,7 @@ from urllib.parse import urlparse
 SM_PORT = 8170
 SM_BASE = f"http://localhost:{SM_PORT}"
 REPO_URL = "https://github.com/Reen06/Sand-OS-Server-Manager.git"
+RAW_SELF_URL = "https://raw.githubusercontent.com/Reen06/Sand-OS-Server-Manager/main/windows/sandos_launcher.py"
 FRESH_INSTALL_DISTRO = "Ubuntu"   # what `wsl --install -d Ubuntu` actually registers
 CLONE_DIR = "~/Sand-OS-Server-Manager"
 FIREWALL_RULE_NAME = "SandOS Server Manager"
@@ -414,36 +416,59 @@ def run_gui() -> None:
     override_cb.pack(pady=(12, 0))
 
     _state = {"busy": False}
+    _NET_ERRORS = (urllib.error.URLError, ConnectionError, TimeoutError, OSError)
+
+    # Every urllib call above is BLOCKING network I/O — calling any of them
+    # directly from a button handler or root.after() freezes the entire
+    # window (Tkinter's mainloop can't process anything, including redraws,
+    # while its own thread is stuck waiting on a socket) for up to that
+    # call's full timeout. Confirmed live: a slow/unreachable SM made every
+    # button appear completely unresponsive. Fixed by running the network
+    # call in a background thread and only ever touching widgets back on
+    # the main thread via root.after(0, ...) — Tkinter itself isn't
+    # thread-safe for direct widget access from a non-main thread.
+    def _run_async(work, on_done) -> None:
+        def _worker():
+            try:
+                result = work()
+            except _NET_ERRORS as e:
+                root.after(0, lambda: on_done(None, e))
+                return
+            root.after(0, lambda: on_done(result, None))
+        threading.Thread(target=_worker, daemon=True).start()
 
     def refresh() -> None:
-        try:
-            info = get_info()
-        except (urllib.error.URLError, ConnectionError, TimeoutError):
-            status_var.set("SM not reachable")
-            toggle_btn.config(text="…", state="disabled")
-            root.after(3000, refresh)
-            return
-        _state["busy"] = bool(info.get("busy"))
-        status_var.set("BUSY" if _state["busy"] else "Available")
-        status_label.config(fg="#c99640" if _state["busy"] else "#34d399")
-        toggle_btn.config(text="Set Available" if _state["busy"] else "Set Busy", state="normal")
-        override_var.set(bool(info.get("busy_override_allowed")))
-        root.after(5000, refresh)
+        def _done(info, err):
+            if err is not None:
+                status_var.set("SM not reachable")
+                toggle_btn.config(text="…", state="disabled")
+                root.after(3000, refresh)
+                return
+            _state["busy"] = bool(info.get("busy"))
+            status_var.set("BUSY" if _state["busy"] else "Available")
+            status_label.config(fg="#c99640" if _state["busy"] else "#34d399")
+            toggle_btn.config(text="Set Available" if _state["busy"] else "Set Busy", state="normal")
+            override_var.set(bool(info.get("busy_override_allowed")))
+            root.after(5000, refresh)
+        _run_async(get_info, _done)
 
     def on_toggle() -> None:
         toggle_btn.config(state="disabled")
-        try:
-            set_busy(not _state["busy"])
-        except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
-            messagebox.showerror("SandOS", f"Couldn't reach the Server Manager: {e}")
-        refresh()
+        def _done(_result, err):
+            if err is not None:
+                messagebox.showerror("SandOS", f"Couldn't reach the Server Manager: {err}")
+            refresh()
+        _run_async(lambda: set_busy(not _state["busy"]), _done)
 
     def on_override_toggle() -> None:
-        try:
-            set_override_allowed(override_var.get())
-        except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
-            messagebox.showerror("SandOS", f"Couldn't reach the Server Manager: {e}")
-            override_var.set(not override_var.get())
+        override_cb.config(state="disabled")
+        desired = override_var.get()
+        def _done(_result, err):
+            override_cb.config(state="normal")
+            if err is not None:
+                messagebox.showerror("SandOS", f"Couldn't reach the Server Manager: {err}")
+                override_var.set(not desired)
+        _run_async(lambda: set_override_allowed(desired), _done)
 
     toggle_btn.config(command=on_toggle)
     override_cb.config(command=on_override_toggle)
@@ -451,7 +476,33 @@ def run_gui() -> None:
     root.mainloop()
 
 
+# ── self-update ───────────────────────────────────────────────────────────────
+# Unlike the WSL-side checkout (git pull --ff-only on every --setup run), this
+# file itself just sits standalone wherever it was first downloaded to on the
+# Windows filesystem — nothing about running it ever re-fetches it. A real
+# user hit exactly this: ran a flag (--fix-hub-dns) that didn't exist yet in
+# their locally-saved copy, and it silently fell through to the GUI instead
+# of erroring, with no indication they were running a stale file at all.
+def _self_update() -> None:
+    try:
+        this_file = Path(__file__).resolve()
+        current = this_file.read_text(encoding="utf-8")
+        with urllib.request.urlopen(RAW_SELF_URL, timeout=5) as r:
+            latest = r.read().decode("utf-8")
+    except Exception:  # noqa: BLE001 — never block a real run over a failed update check
+        return
+    if latest == current or not latest.strip():
+        return
+    try:
+        this_file.write_text(latest, encoding="utf-8")
+    except OSError:
+        return
+    print("Updated to the latest version — restarting...")
+    os.execv(sys.executable, [sys.executable, str(this_file)] + sys.argv[1:])
+
+
 def main() -> None:
+    _self_update()
     if "--refresh-network" in sys.argv:
         refresh_network()
         return
