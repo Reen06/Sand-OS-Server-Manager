@@ -298,6 +298,16 @@ cat << 'DESC'
 DESC
 
 SM_HUB_URL=$(read_val "Hub URL  (e.g. https://10.0.0.177 — blank for standalone)" "$ENROLL_HUB_BASE")
+# A bare IP/hostname with no scheme (an easy slip — "just the IP" instead of
+# the full URL) doesn't fail here; it silently gets written into the env
+# file as-is and only crashes later, deep in an unrelated request handler,
+# with a confusing generic 500 (urllib refuses to build a request from a
+# schemeless URL). Auto-prepend https:// — the scheme this project always
+# assumes elsewhere anyway — rather than let a malformed value reach disk.
+if [ -n "$SM_HUB_URL" ] && [[ "$SM_HUB_URL" != http://* && "$SM_HUB_URL" != https://* ]]; then
+  warn "No http(s):// on that Hub URL — assuming https://${SM_HUB_URL}"
+  SM_HUB_URL="https://${SM_HUB_URL}"
+fi
 
 SM_HUB_VERIFY_TLS="false"
 SM_EXTERNAL_BASE="/apps"

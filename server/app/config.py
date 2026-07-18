@@ -253,12 +253,25 @@ TURN_EXTRA_HOST = os.environ.get("SM_TURN_EXTRA_HOST", "")
 INSTANCE_USER = os.environ.get("SM_INSTANCE_USER", "user")
 INSTANCE_PASSWD = os.environ.get("SM_INSTANCE_PASSWD", "freecad")
 
+def _with_scheme(url: str) -> str:
+    """A bare IP/hostname with no http(s):// scheme (an easy slip when typing
+    just an address) can't be turned into a request later — urllib refuses it
+    outright, and that failure surfaces as a confusing generic 500 deep in
+    an unrelated request handler, not a clear error at startup. Assume https
+    (what every other URL in this project already defaults to) rather than
+    let a malformed value reach the rest of the app."""
+    url = url.rstrip("/")
+    if url and not url.startswith(("http://", "https://")):
+        return f"https://{url}"
+    return url
+
+
 # ── Hub SSO ───────────────────────────────────────────────────────────────────
 # When SM_HUB_URL is set, the Server Manager trusts the Hub's session: it reads
 # the hub_session cookie and validates it against {HUB_URL}/api/auth/me, using the
 # returned username as the identity (per-user instances key off it). Empty =
 # standalone dev mode (an anonymous 'sm_user' cookie).
-HUB_URL = os.environ.get("SM_HUB_URL", "").rstrip("/")
+HUB_URL = _with_scheme(os.environ.get("SM_HUB_URL", ""))
 # Where the SM reaches the Hub for the *internal* per-request session check
 # (/api/auth/me). Defaults to HUB_URL — the public HTTPS address — which works for
 # every node, including an off-LAN node reaching the Hub over its WireGuard tunnel.
@@ -267,7 +280,7 @@ HUB_URL = os.environ.get("SM_HUB_URL", "").rstrip("/")
 # then travels the LAN in cleartext, so only set it on a network you trust and
 # where the Hub actually exposes that HTTP port. Per-node: set SM_HUB_INTERNAL_URL
 # only on the nodes where you want it; leave unset everywhere else (secure default).
-HUB_INTERNAL_URL = os.environ.get("SM_HUB_INTERNAL_URL", "").rstrip("/") or HUB_URL
+HUB_INTERNAL_URL = _with_scheme(os.environ.get("SM_HUB_INTERNAL_URL", "")) or HUB_URL
 HUB_SESSION_COOKIE = os.environ.get("SM_HUB_SESSION_COOKIE", "hub_session")
 # Verify the Hub's TLS cert. Off by default for LAN-internal calls to the Hub's
 # Caddy 'internal' CA; set true once the SM trusts the Hub CA / uses the real cert.
