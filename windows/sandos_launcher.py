@@ -19,6 +19,7 @@ install` before this runs.
 """
 from __future__ import annotations
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -26,6 +27,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 SM_PORT = 8170
 SM_BASE = f"http://localhost:{SM_PORT}"
@@ -33,6 +35,13 @@ REPO_URL = "https://github.com/Reen06/Sand-OS-Server-Manager.git"
 FRESH_INSTALL_DISTRO = "Ubuntu"   # what `wsl --install -d Ubuntu` actually registers
 CLONE_DIR = "~/Sand-OS-Server-Manager"
 FIREWALL_RULE_NAME = "SandOS Server Manager"
+# Per-app dedicated subdomains the Hub's own frontend uses (SandOS Hub's
+# frontend/js/pages/apps.js, _SUBDOMAIN_APPS) — duplicated here since the SM
+# has no reason to know about Hub frontend routing otherwise. Keep in sync
+# if the Hub ever adds/removes one.
+HUB_APP_SUBDOMAINS = ["pdf", "ai", "calc", "cfd", "pv"]
+_HOSTS_MARK_BEGIN = "# --- SandOS: DNS hairpin fix (sandos_launcher.py) ---"
+_HOSTS_MARK_END = "# --- end SandOS ---"
 
 
 # ── local SM API calls (loopback — no Hub login needed, see main.py's
@@ -229,6 +238,90 @@ def refresh_network() -> None:
         _refresh_port_forward(distro)
 
 
+# ── Hub DNS hairpin fix ──────────────────────────────────────────────────────
+# A Hub reached over a public domain (DuckDNS etc.) resolves to the router's
+# WAN IP — and most home routers refuse to loop a connection from inside the
+# LAN back out through their own public IP ("NAT hairpinning"). The main
+# dashboard is usually fine (often reached via the Hub's LAN IP directly),
+# but the Hub's own per-app dedicated subdomains (Stirling PDF, Open WebUI,
+# ...) always use the public domain, so a LAN client hits this every time —
+# confirmed live: DNS resolved correctly, the connection itself just hung.
+# Cheapest real fix: an explicit Windows hosts-file entry pointing straight
+# at the Hub's LAN IP, bypassing public DNS/the router entirely for these
+# specific names.
+def _windows_hosts_path() -> Path:
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    return Path(system_root) / "System32" / "drivers" / "etc" / "hosts"
+
+
+def _hub_hostname() -> str | None:
+    try:
+        hub_url = get_info().get("hub_url") or ""
+    except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
+        return None
+    if not hub_url:
+        return None
+    return urlparse(hub_url).hostname
+
+
+def _build_hosts_block(hostnames: list[str], lan_ip: str) -> list[str]:
+    return [_HOSTS_MARK_BEGIN] + [f"{lan_ip} {h}" for h in hostnames] + [_HOSTS_MARK_END]
+
+
+def _merge_hosts_file(existing: str, hostnames: list[str], lan_ip: str) -> str:
+    """Idempotent: strips any previous SandOS-managed block (so a re-run with
+    a changed IP replaces cleanly, not duplicates) before appending the
+    current one. Everything else in the file is left untouched."""
+    lines = existing.splitlines()
+    out: list[str] = []
+    skipping = False
+    for line in lines:
+        if line.strip() == _HOSTS_MARK_BEGIN:
+            skipping = True
+            continue
+        if line.strip() == _HOSTS_MARK_END:
+            skipping = False
+            continue
+        if not skipping:
+            out.append(line)
+    while out and not out[-1].strip():
+        out.pop()
+    out += [""] + _build_hosts_block(hostnames, lan_ip)
+    return "\n".join(out) + "\n"
+
+
+def fix_hub_dns_hairpin() -> None:
+    hostname = _hub_hostname()
+    if not hostname:
+        print("No Hub URL configured on this node (standalone mode) — nothing to fix.")
+        return
+
+    print(f"\nThe Hub ({hostname}) and its per-app subdomains "
+          f"({', '.join(f'{s}.{hostname}' for s in HUB_APP_SUBDOMAINS)}) resolve to "
+          "your router's public IP — most home routers won't loop a LAN connection "
+          "back through their own public address, so those specific addresses can "
+          "hang or fail from inside your own network.")
+    lan_ip = input(f"Enter the Hub's LAN IP (e.g. 10.0.0.177) to fix this, "
+                   "or press Enter to skip: ").strip()
+    if not lan_ip:
+        print("Skipped — you can re-run this anytime with --fix-hub-dns.")
+        return
+
+    hostnames = [hostname] + [f"{s}.{hostname}" for s in HUB_APP_SUBDOMAINS]
+    path = _windows_hosts_path()
+    try:
+        existing = path.read_text() if path.exists() else ""
+        path.write_text(_merge_hosts_file(existing, hostnames, lan_ip))
+    except PermissionError:
+        print(f"\nCouldn't write {path} (needs Administrator). Add these lines "
+              f"yourself (Notepad → Run as administrator → open that file):")
+        for line in _build_hosts_block(hostnames, lan_ip):
+            print(f"  {line}")
+        return
+    print(f"Done — {len(hostnames)} hostnames now resolve straight to {lan_ip}.")
+    _run(["ipconfig", "/flushdns"])
+
+
 def setup() -> None:
     print("=== SandOS Server Manager — Windows/WSL setup ===")
     distro = find_ubuntu_distro()
@@ -279,6 +372,7 @@ def setup() -> None:
         return
 
     setup_lan_reachability(distro)
+    fix_hub_dns_hairpin()
 
     print("\nSetting up autostart: a Scheduled Task that wakes this WSL distro "
           "(and keeps it reachable on the LAN) at logon. Once WSL2 is up, "
@@ -360,6 +454,9 @@ def run_gui() -> None:
 def main() -> None:
     if "--refresh-network" in sys.argv:
         refresh_network()
+        return
+    if "--fix-hub-dns" in sys.argv:
+        fix_hub_dns_hairpin()
         return
     if "--setup" in sys.argv or not find_ubuntu_distro():
         setup()

@@ -446,6 +446,11 @@ def sm_info():
         # is the real source of truth, not the Hub.
         "busy": busy.is_busy(),
         "busy_override_allowed": busy.override_allowed(),
+        # Lets a node's own local tooling (the Windows/WSL launcher's DNS-
+        # hairpin fix) find the Hub's configured URL without re-asking the
+        # owner something install.sh already collected. Same exposure level
+        # as the rest of this unauthenticated endpoint — a public domain.
+        "hub_url": config.HUB_URL,
         "node_name": config.NODE_NAME,
         "lan_ip": config.LAN_IP,
         "port": config.SM_PORT,
