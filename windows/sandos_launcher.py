@@ -256,14 +256,36 @@ def _windows_hosts_path() -> Path:
     return Path(system_root) / "System32" / "drivers" / "etc" / "hosts"
 
 
-def _hub_hostname() -> str | None:
+def _looks_like_ip(host: str) -> bool:
+    import ipaddress
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def _hub_hostname_hint() -> str | None:
+    """Best-effort DEFAULT only, never trusted blindly — this node's own
+    SM_HUB_URL is whatever THIS node happens to be configured with (e.g. a
+    LAN-fast-path IP, confirmed live: one real node had it set to a bare
+    LAN IP, not the public domain at all), which is NOT necessarily the
+    same domain the owner's own BROWSER actually uses to reach the Hub —
+    the subdomain redirect this is fixing runs client-side, keyed off
+    whatever the browser's address bar says, entirely independent of any
+    one node's own config. A bare IP is never useful here (nothing to
+    hairpin — connecting directly to an IP has no DNS involved at all), so
+    it's filtered out rather than offered as if it were a real domain."""
     try:
         hub_url = get_info().get("hub_url") or ""
     except (urllib.error.URLError, ConnectionError, TimeoutError, OSError):
         return None
     if not hub_url:
         return None
-    return urlparse(hub_url).hostname
+    host = urlparse(hub_url).hostname
+    if not host or _looks_like_ip(host):
+        return None
+    return host
 
 
 def _build_hosts_block(hostnames: list[str], lan_ip: str) -> list[str]:
@@ -293,17 +315,26 @@ def _merge_hosts_file(existing: str, hostnames: list[str], lan_ip: str) -> str:
 
 
 def fix_hub_dns_hairpin() -> None:
-    hostname = _hub_hostname()
+    hint = _hub_hostname_hint()
+    print("\nIf you reach the Hub through a public domain (e.g. something.duckdns.org) "
+          "rather than always typing its LAN IP, its per-app subdomains (Stirling PDF, "
+          "Open WebUI, ...) can hang or fail from inside your own network — most home "
+          "routers won't loop a LAN connection back through their own public address. "
+          "This only matters if you actually use that public domain from this network; "
+          "if you always reach the Hub by IP, press Enter to skip.")
+    prompt = "Hub's public domain (blank to skip)"
+    if hint:
+        prompt += f" [{hint}]"
+    hostname = input(f"{prompt}: ").strip() or hint
     if not hostname:
-        print("No Hub URL configured on this node (standalone mode) — nothing to fix.")
+        print("Skipped — you can re-run this anytime with --fix-hub-dns.")
+        return
+    if _looks_like_ip(hostname):
+        print(f"'{hostname}' is an IP address, not a domain — there's no DNS/hairpin "
+              "issue to fix for a bare IP. Skipping.")
         return
 
-    print(f"\nThe Hub ({hostname}) and its per-app subdomains "
-          f"({', '.join(f'{s}.{hostname}' for s in HUB_APP_SUBDOMAINS)}) resolve to "
-          "your router's public IP — most home routers won't loop a LAN connection "
-          "back through their own public address, so those specific addresses can "
-          "hang or fail from inside your own network.")
-    lan_ip = input(f"Enter the Hub's LAN IP (e.g. 10.0.0.177) to fix this, "
+    lan_ip = input(f"Enter the Hub's LAN IP (e.g. 10.0.0.177) to point {hostname} at, "
                    "or press Enter to skip: ").strip()
     if not lan_ip:
         print("Skipped — you can re-run this anytime with --fix-hub-dns.")
@@ -512,6 +543,16 @@ def _self_update() -> None:
 
 
 def main() -> None:
+    # cmd.exe's default codepage isn't UTF-8, so the em-dashes and other
+    # non-ASCII characters used throughout this script's own messages come
+    # out as "?" / mangled bytes — confirmed live. Reconfiguring the stream
+    # encoding here fixes every print()/input() prompt at once rather than
+    # rewriting each string to plain ASCII; falls back to replacing any
+    # truly unrenderable character instead of crashing if some console
+    # still can't cope even with the encoding set correctly.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     _self_update()
     if "--refresh-network" in sys.argv:
         refresh_network()
