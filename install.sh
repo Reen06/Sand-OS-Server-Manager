@@ -512,6 +512,28 @@ EOF
 $SUDO systemctl daemon-reload
 $SUDO systemctl enable "$UNIT_NAME"
 
+# Needed for the Hub's "Restart Server Manager" button (POST /api/sm/restart)
+# and the fleet-wide auto-update feature (both just shell out to `sudo -n
+# systemctl restart sandos-server-manager` as this same user) — documented
+# as a prerequisite in main.py's own restart endpoint for a while, but never
+# actually automated here, so it silently never existed on any real install
+# until now (confirmed directly: neither of two real nodes had it, despite
+# both features appearing to work off a coincidentally-still-warm cached
+# sudo credential rather than a real permanent rule).
+info "Granting passwordless restart permission (needed for the Hub restart button + auto-update)…"
+_sudoers_tmp=$(mktemp)
+echo "${CURRENT_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl restart ${UNIT_NAME}" > "$_sudoers_tmp"
+# Validate BEFORE it ever touches /etc/sudoers.d — a malformed file there can
+# break sudo system-wide, so a bad rule must never be written live even
+# briefly, not just cleaned up after the fact.
+if $SUDO visudo -cf "$_sudoers_tmp"; then
+  $SUDO install -m 440 "$_sudoers_tmp" /etc/sudoers.d/61-sandos-sm-restart
+else
+  warn "Generated sudoers rule failed validation — skipped, nothing written."
+  warn "The Hub's restart button / auto-update won't work until this is fixed by hand."
+fi
+rm -f "$_sudoers_tmp"
+
 # Stop any dev instance that might be holding the port
 pkill -f "uvicorn app.main" 2>/dev/null || true
 sleep 1
