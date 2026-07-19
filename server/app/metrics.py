@@ -40,9 +40,29 @@ def _mem() -> dict | None:
         return None
 
 
-def _disk(path: str = "/") -> dict | None:
+def _is_wsl() -> bool:
     try:
-        st = os.statvfs(path)
+        with open("/proc/version") as f:
+            return "microsoft" in f.read().lower()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _disk_path() -> str:
+    """`/` under WSL2 is its own dynamically-expanding VIRTUAL disk image,
+    not the real Windows drive underneath it — confirmed live: reported
+    ~1TB total/free on a node whose actual C: drive had only ~480GB free,
+    because the virtual disk itself happened to be provisioned at ~1TB.
+    /mnt/c is WSL2's passthrough mount of the real drive, so it reflects
+    genuine physical capacity instead."""
+    if _is_wsl() and os.path.isdir("/mnt/c"):
+        return "/mnt/c"
+    return "/"
+
+
+def _disk(path: str | None = None) -> dict | None:
+    try:
+        st = os.statvfs(path or _disk_path())
         total = st.f_blocks * st.f_frsize
         free = st.f_bavail * st.f_frsize
         used = total - free
@@ -52,12 +72,36 @@ def _disk(path: str = "/") -> dict | None:
         return None
 
 
+_NVIDIA_SMI_FALLBACKS = [
+    # WSL2's own NVIDIA driver shim lives here — added to PATH only by
+    # interactive shell startup files (.bashrc / /etc/profile.d), which a
+    # systemd service never inherits (confirmed live: `systemctl show
+    # sandos-server-manager --property=Environment` is empty). shutil.which()
+    # alone silently found nothing under the running service even though
+    # nvidia-smi worked fine and the GPU was correctly detected elsewhere
+    # (config.py's own detection has a PATH-independent /proc/driver/nvidia
+    # fallback for exactly this reason) — this one didn't, until now.
+    "/usr/lib/wsl/lib/nvidia-smi",
+]
+
+
+def _nvidia_smi_path() -> str | None:
+    found = shutil.which("nvidia-smi")
+    if found:
+        return found
+    for candidate in _NVIDIA_SMI_FALLBACKS:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
 def _gpu() -> dict | None:
-    if not shutil.which("nvidia-smi"):
+    nvidia_smi = _nvidia_smi_path()
+    if not nvidia_smi:
         return None
     try:
         r = subprocess.run(
-            ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total,name",
+            [nvidia_smi, "--query-gpu=utilization.gpu,memory.used,memory.total,name",
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=3)
         if r.returncode != 0 or not r.stdout.strip():
