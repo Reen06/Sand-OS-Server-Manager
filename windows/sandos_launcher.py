@@ -498,7 +498,17 @@ def _self_update() -> None:
     except OSError:
         return
     print("Updated to the latest version — restarting...")
-    os.execv(sys.executable, [sys.executable, str(this_file)] + sys.argv[1:])
+    # NOT os.execv(): confirmed live, it hung indefinitely on Windows when
+    # this script was invoked non-interactively (over SSH, with piped
+    # stdin) — Windows has no true POSIX exec, so CPython emulates it by
+    # spawning a brand-new process, and that spawn didn't inherit the
+    # piped stdin/stdout cleanly, leaving the "replaced" process stuck
+    # waiting on a handle that would never receive anything. subprocess.run
+    # has well-defined, predictable stream inheritance on every platform
+    # (it's what the rest of this script already uses everywhere else) —
+    # wait for the fresh instance to finish, then exit with its result.
+    result = subprocess.run([sys.executable, str(this_file)] + sys.argv[1:])
+    sys.exit(result.returncode)
 
 
 def main() -> None:
