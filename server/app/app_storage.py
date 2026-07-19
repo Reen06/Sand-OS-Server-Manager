@@ -149,9 +149,25 @@ def _current_volume(app_id: str, user: str, m: Mount) -> str:
     return registry.resolve_volume(app_id, user, m)
 
 
+def _docker_data_root() -> str:
+    """Wherever Docker actually stores images/volumes right now — install.sh's
+    Local Storage step can relocate this away from the OS default, so this
+    must never be a hardcoded literal or the free-space number silently
+    goes stale the moment that happens."""
+    try:
+        r = subprocess.run(["docker", "info", "--format", "{{.DockerRootDir}}"],
+                           capture_output=True, text=True, timeout=5)
+        root = r.stdout.strip()
+        if r.returncode == 0 and root:
+            return root
+    except Exception:  # noqa: BLE001
+        pass
+    return "/var/lib/docker"
+
+
 def _local_free_bytes() -> int | None:
     try:
-        return shutil.disk_usage("/var/lib/docker").free
+        return shutil.disk_usage(_docker_data_root()).free
     except OSError:
         return None
 

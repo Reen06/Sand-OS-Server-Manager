@@ -417,6 +417,68 @@ blank
 SM_SLOT_COUNT=$(read_val "Max concurrent app instances" "8")
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# STEP 6 — LOCAL STORAGE (Docker's own data-root — images/volumes/build cache)
+# ═══════════════════════════════════════════════════════════════════════════════
+header
+step 6 "Local Storage"
+
+cat << 'DESC'
+  Docker stores every image, volume, and container this node ever builds or
+  pulls somewhere on this machine's own disk — separate from the shared
+  Fleet NAS (that's per-user files, not app images) and from the per-app
+  "move to USB" feature (that relocates ONE app after the fact). This is
+  about where Docker itself defaults to for everything, from the start.
+
+DESC
+
+if grep -qi microsoft /proc/version 2>/dev/null; then
+  _docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "unknown")
+  info "Docker is running via Docker Desktop's WSL2 integration (reports its own"
+  info "internal path as ${_docker_root}, not a Windows drive letter)."
+  blank
+  echo "  Its real storage location is controlled entirely by Docker Desktop's"
+  echo "  own setting, not by this installer:"
+  blank
+  echo "    Docker Desktop → Settings → Resources → Advanced → Disk image location"
+  blank
+else
+  _docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo "/var/lib/docker")
+  _docker_free=$(df -h "$_docker_root" 2>/dev/null | awk 'NR==2{print $4}')
+  info "Docker currently stores data at ${_docker_root}$( [ -n "$_docker_free" ] && echo " (${_docker_free} free there)")."
+  blank
+  if confirm "Change where Docker stores images/volumes on this machine?"; then
+    warn "Anything Docker already has at ${_docker_root} becomes invisible to it"
+    warn "the moment this changes — NOT deleted, just no longer where Docker looks."
+    _new_root=$(read_val "New Docker data directory" "$_docker_root")
+    if [ "$_new_root" != "$_docker_root" ]; then
+      $SUDO mkdir -p "$_new_root"
+      _daemon_json="/etc/docker/daemon.json"
+      _tmp_json=$(mktemp)
+      if [ -f "$_daemon_json" ]; then
+        python3 -c "
+import json, sys
+with open('$_daemon_json') as f:
+    cfg = json.load(f)
+cfg['data-root'] = '$_new_root'
+json.dump(cfg, sys.stdout, indent=2)
+" > "$_tmp_json" 2>/dev/null || echo "{\"data-root\": \"$_new_root\"}" > "$_tmp_json"
+      else
+        echo "{\"data-root\": \"$_new_root\"}" > "$_tmp_json"
+      fi
+      $SUDO install -m 644 "$_tmp_json" "$_daemon_json"
+      rm -f "$_tmp_json"
+      info "Restarting Docker to apply…"
+      if $SUDO systemctl restart docker && $SUDO docker info &>/dev/null; then
+        ok "Docker now stores data at ${_new_root}"
+      else
+        warn "Docker restart or verification failed — ${_daemon_json} was written,"
+        warn "but check 'sudo systemctl status docker' and 'docker info' by hand."
+      fi
+    fi
+  fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # SUMMARY + CONFIRM
 # ═══════════════════════════════════════════════════════════════════════════════
 header
