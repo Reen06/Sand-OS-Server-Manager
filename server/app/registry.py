@@ -239,7 +239,16 @@ APPS: dict[str, AppDef] = {
         build_context="/home/control/EngineeringPaper.xyz",
         build_dockerfile="containers/engineeringpaper/Dockerfile",
         kind="web",
-        mode="shared",       # one static site for everyone; no per-user accounts
+        # Was "shared" (one static site for everyone, no accounts) until the
+        # NAS save/open feature needed to know whose NAS home to read/write.
+        # Rather than invent an identity-passing scheme for a plain nginx
+        # static site with no login of its own, switched to the same
+        # per-user-container pattern as FreeCAD/ParaView: one container per
+        # logged-in Hub user, with exactly that user's NAS home mounted at a
+        # fixed path — the container's sidecar API (sandos-nas-api/server.js
+        # in the EngineeringPaper.xyz checkout) never needs to check who's
+        # asking, because the mount itself is already scoped.
+        mode="per-user",
         internal_port=80,
         gpu=False,
         mem_limit="256m",
@@ -252,6 +261,7 @@ APPS: dict[str, AppDef] = {
         # {"detail":"Not Found"}. Same class of bug, same fix, as Stirling
         # PDF — see own_subdomain's docstring in models.py.
         own_subdomain=True,       # served at calc.<domain>
+        mounts=[Mount(name="home", path="/nas", scope="per-user", storage="nfs")],
     ),
     "openfoamgui": AppDef(
         id="openfoamgui",
