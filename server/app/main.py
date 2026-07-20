@@ -456,6 +456,13 @@ def sm_info():
         "port": config.SM_PORT,
         "gpu": config.HAS_GPU,
         "slots_total": config.SLOT_COUNT,
+        # Lets the Hub discover which node is the fleet's real shared NAS
+        # (nas_host == this node's own lan_ip means it's self-hosting the
+        # NFS export, not just pointing at one) and hand that address to
+        # every future install.sh run as the default, instead of each new
+        # node silently defaulting to itself and mounting nothing.
+        "nas_enabled": config.NAS_ENABLED,
+        "nas_host": config.NAS_HOST,
         "metrics": metrics.collect(),
         "apps": [
             {"id": a.id, "label": a.label, "kind": a.kind, "mode": a.mode,

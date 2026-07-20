@@ -345,14 +345,42 @@ DESC
 
 SM_NAS_ENABLED="false"
 SM_NAS_ROOT="/home/$(whoami)/sandos-nas"
-SM_NAS_HOST="$SM_LAN_IP"
+
+# Ask the Hub which node already self-hosts the fleet's real NFS export
+# (GET /api/fleet/nas-host — unauthenticated, exists precisely so a brand
+# new node can learn this before it has any Hub session). Without this, the
+# obvious-looking default was always "this machine" — which silently turns
+# a plain app node into its own (usually nonfunctional, e.g. WSL2 can't
+# reliably run an NFS server) NAS instead of pointing it at the real one.
+_discovered_nas_host=""
+if [ -n "$SM_HUB_URL" ] && command -v curl &>/dev/null; then
+  _nas_info=$(curl -fsS --max-time 5 "${SM_HUB_URL%/}/api/fleet/nas-host" 2>/dev/null || true)
+  if [ -n "$_nas_info" ]; then
+    _discovered_nas_host=$(python3 -c "
+import json, sys
+try:
+    print(json.loads(sys.argv[1]).get('host') or '')
+except Exception:
+    print('')
+" "$_nas_info" 2>/dev/null || true)
+  fi
+fi
+SM_NAS_HOST="${_discovered_nas_host:-$SM_LAN_IP}"
 
 if confirm "Enable the NAS layer?"; then
   SM_NAS_ENABLED="true"
 
   _nas_root_default="/home/$(whoami)/sandos-nas"
   SM_NAS_ROOT=$(read_val "Local path to the NAS export root (on the NAS host)" "$_nas_root_default")
-  SM_NAS_HOST=$(read_val "IP of the NFS server host" "$SM_LAN_IP")
+
+  blank
+  if [ -n "$_discovered_nas_host" ]; then
+    ok "Found this fleet's NAS already running at ${_discovered_nas_host} — defaulting to it."
+  else
+    warn "No existing fleet NAS found — defaulting to this machine (${SM_LAN_IP})."
+    warn "Only accept this if THIS node should be the shared NAS host."
+  fi
+  SM_NAS_HOST=$(read_val "IP of the NFS server host" "$SM_NAS_HOST")
 
   blank
   info "NFS: ${SM_NAS_HOST}:/ — containers mount sub-paths per user/app"
