@@ -515,7 +515,7 @@ def sm_ssh_authorize(request: Request, body: _SshAuthorizeBody):
                 f.write("\n")
             f.write(key + "\n")
         auth_file.chmod(0o600)
-    return {"ok": True, "user": getpass.getuser()}
+    return {"ok": True, "user": getpass.getuser(), "ssh_port": config.SSH_PORT}
 
 
 @app.post("/api/sm/restart")

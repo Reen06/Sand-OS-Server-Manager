@@ -76,6 +76,14 @@ SM_SYSTEMD_UNIT = os.environ.get("SM_SYSTEMD_UNIT", "sandos-server-manager")
 SM_HOST = os.environ.get("SM_HOST", "0.0.0.0")
 SM_PORT = int(os.environ.get("SM_PORT", "8170"))
 
+# The port THIS node's own sshd listens on — reported to the Hub via
+# /api/sm/ssh/authorize so peer-installs and auto-update connect to the
+# right place. 22 on every normal Linux install. On WSL, Windows' own
+# OpenSSH Server (not WSL's) answers port 22 on the LAN IP and only knows
+# Windows accounts, so install.sh's WSL branch stands up a separate sshd
+# inside WSL on an alternate port and sets SM_SSH_PORT to match.
+SSH_PORT = int(os.environ.get("SM_SSH_PORT", "22"))
+
 # The external path the Hub (Caddy) mounts the Server Manager under. Web apps are
 # served at {EXTERNAL_BASE}/stream/{app}/… in the browser; the proxy prepends this
 # base when talking upstream so an app's baseURL/asset links line up. (Streamed

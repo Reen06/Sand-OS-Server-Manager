@@ -479,6 +479,88 @@ json.dump(cfg, sys.stdout, indent=2)
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# STEP 7 — WSL SSH ACCESS (WSL-only; native Linux installs are untouched —
+# they keep the standard port 22 with zero code path exercised here)
+# ═══════════════════════════════════════════════════════════════════════════════
+SM_SSH_PORT="22"
+if grep -qi microsoft /proc/version 2>/dev/null; then
+  header
+  step 7 "WSL SSH Access (for peer-to-peer app installs)"
+  cat << 'DESC'
+  Windows' own OpenSSH Server (not WSL's) answers port 22 on this machine's
+  LAN IP — it only knows Windows accounts, never accounts inside WSL. The
+  Hub's peer-install feature (copying an app's image + files directly
+  between two nodes over SSH) needs to reach THIS WSL environment, so WSL
+  gets its own sshd on a separate port instead — set up automatically below.
+
+DESC
+  SM_SSH_PORT="2222"
+
+  if ! dpkg -s openssh-server &>/dev/null; then
+    info "Installing openssh-server inside WSL…"
+    $SUDO apt-get update -qq && $SUDO apt-get install -y -qq openssh-server
+  fi
+
+  _sshd_dropin="/etc/ssh/sshd_config.d/60-sandos-altport.conf"
+  if [ "$($SUDO cat "$_sshd_dropin" 2>/dev/null)" != "Port ${SM_SSH_PORT}" ]; then
+    echo "Port ${SM_SSH_PORT}" | $SUDO tee "$_sshd_dropin" > /dev/null
+  fi
+  $SUDO mkdir -p /run/sshd
+
+  # ssh.socket hardcodes port 22 in its own systemd unit and ignores
+  # sshd_config's Port drop-in entirely — a standalone sshd is required to
+  # actually honor the alternate port.
+  $SUDO systemctl disable --now ssh.socket &>/dev/null || true
+  $SUDO systemctl enable --now ssh.service &>/dev/null || true
+
+  if $SUDO ss -tlnp 2>/dev/null | grep -q ":${SM_SSH_PORT} "; then
+    ok "WSL sshd listening on port ${SM_SSH_PORT}"
+  else
+    warn "Couldn't confirm WSL sshd is listening on ${SM_SSH_PORT} — check"
+    warn "  sudo systemctl status ssh.service"
+  fi
+
+  # Forward the port from the Windows host into WSL and open it in the
+  # Windows Firewall, via WSL→Windows interop. No elevation is requested
+  # here — this runs with whatever privileges this WSL session's Windows
+  # account already has, same as install.sh's own sudo prompts on the
+  # Linux side. Each netsh call runs separately (a single batched/chained
+  # call to Windows was found to silently drop later commands). Best-
+  # effort: warns and prints the manual command rather than failing the
+  # whole install, since Windows-side admin rights aren't guaranteed from
+  # inside WSL.
+  _wsl_ip=$(hostname -I | awk '{print $1}')
+  if command -v netsh.exe &>/dev/null && [ -n "$_wsl_ip" ]; then
+    netsh.exe interface portproxy delete v4tov4 listenport=${SM_SSH_PORT} listenaddress=0.0.0.0 &>/dev/null || true
+    if netsh.exe interface portproxy add v4tov4 listenport=${SM_SSH_PORT} listenaddress=0.0.0.0 connectport=${SM_SSH_PORT} connectaddress="$_wsl_ip" &>/dev/null; then
+      ok "Windows portproxy: 0.0.0.0:${SM_SSH_PORT} -> ${_wsl_ip}:${SM_SSH_PORT}"
+    else
+      warn "Couldn't add the Windows portproxy rule automatically. Run this in"
+      warn "an elevated Windows PowerShell/cmd:"
+      warn "  netsh interface portproxy add v4tov4 listenport=${SM_SSH_PORT} listenaddress=0.0.0.0 connectport=${SM_SSH_PORT} connectaddress=${_wsl_ip}"
+    fi
+    if netsh.exe advfirewall firewall show rule name="SandOS SSH (WSL)" &>/dev/null; then
+      ok "Windows Firewall rule already present"
+    elif netsh.exe advfirewall firewall add rule name="SandOS SSH (WSL)" dir=in action=allow protocol=TCP localport=${SM_SSH_PORT} &>/dev/null; then
+      ok "Windows Firewall: allowed inbound TCP ${SM_SSH_PORT}"
+    else
+      warn "Couldn't add the Windows Firewall rule automatically. Run this in"
+      warn "an elevated Windows PowerShell/cmd:"
+      warn "  netsh advfirewall firewall add rule name=\"SandOS SSH (WSL)\" dir=in action=allow protocol=TCP localport=${SM_SSH_PORT}"
+    fi
+    blank
+    warn "Note: WSL's internal IP (${_wsl_ip}) can change after a Windows"
+    warn "reboot — if peer-installs to this node later fail, re-run this"
+    warn "installer to refresh the portproxy rule."
+  else
+    warn "netsh.exe not reachable from WSL — skipping Windows-side port"
+    warn "forwarding. Peer-installs to this node will fail until the"
+    warn "portproxy + firewall rule above are added by hand."
+  fi
+  blank
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # SUMMARY + CONFIRM
 # ═══════════════════════════════════════════════════════════════════════════════
 header
@@ -504,6 +586,7 @@ _row "NAS enabled"             "$SM_NAS_ENABLED"
 [[ "$SM_NAS_ENABLED" == "true" ]] && _row "NAS host" "$SM_NAS_HOST"
 _row "GPU support"             "$SM_GPU"
 _row "Instance slots"          "$SM_SLOT_COUNT"
+[ "$SM_SSH_PORT" != "22" ] && _row "SSH port (WSL)" "$SM_SSH_PORT"
 blank
 _row "Env file"                "$ENV_FILE"
 _row "Systemd unit"            "$UNIT_NAME"
@@ -556,6 +639,13 @@ SM_NAS_ROOT=${SM_NAS_ROOT}
 SM_GPU=${SM_GPU}
 # Maximum concurrent app instances across all users.
 SM_SLOT_COUNT=${SM_SLOT_COUNT}
+
+# ── SSH (Hub-relayed peer-installs / auto-update) ──────────────────────────────
+# Port THIS node's own sshd listens on. 22 on native Linux. On WSL, Windows'
+# own OpenSSH Server answers 22 on the LAN IP and knows nothing about WSL
+# accounts, so this installer stood up a separate sshd inside WSL — see
+# Step 7 above.
+SM_SSH_PORT=${SM_SSH_PORT}
 EOF
 ok "Wrote ${ENV_FILE}"
 
