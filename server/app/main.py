@@ -1044,6 +1044,21 @@ def ollama_pull_status(job_id: str, request: Request):
     return {"ok": True, **job}
 
 
+@app.get("/api/apps/ollama/models/pull/active")
+def ollama_pull_active(request: Request):
+    """The latest pull job on this node, if any — lets a client that just
+    (re)opened the model manager discover an in-progress (or just-finished)
+    download without already knowing its job_id. {"active": False} if this SM
+    process has never run a pull (nothing to resume — not the same as "none
+    running"; a genuinely-idle-but-previously-used node still returns the last
+    job here, with done=True)."""
+    _require_identity(request)
+    job = ollama_mgr.latest_pull_job()
+    if job is None:
+        return {"ok": True, "active": False}
+    return {"ok": True, "active": True, **job}
+
+
 @app.delete("/api/apps/ollama/models/{model_name:path}")
 def ollama_delete(model_name: str, request: Request):
     _require_admin(request)

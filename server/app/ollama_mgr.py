@@ -118,9 +118,16 @@ async def fetch_models_openai() -> dict:
 
 _pull_jobs: dict[str, dict] = {}
 _pull_jobs_lock = threading.Lock()
+# The most recently STARTED pull job's id — lets a client that doesn't (or no
+# longer) knows the job_id (e.g. the model manager was closed and reopened, or
+# opened on a different browser tab) find out "is something downloading right
+# now" without having to have remembered it. Only one pull realistically runs
+# at a time per node (the UI only ever starts one), so "the latest" is enough.
+_latest_job_id: str | None = None
 
 
 def _new_pull_job(model_name: str) -> tuple[str, dict]:
+    global _latest_job_id
     job_id = _uuid_mod.uuid4().hex
     job: dict = {
         "job_id": job_id, "model": model_name, "action": "pull",
@@ -129,6 +136,7 @@ def _new_pull_job(model_name: str) -> tuple[str, dict]:
     }
     with _pull_jobs_lock:
         _pull_jobs[job_id] = job
+        _latest_job_id = job_id
         done_ids = [k for k, v in _pull_jobs.items() if v["done"]]
         for k in done_ids[:-100]:
             del _pull_jobs[k]
@@ -137,6 +145,16 @@ def _new_pull_job(model_name: str) -> tuple[str, dict]:
 
 def pull_job_status(job_id: str) -> dict | None:
     return _pull_jobs.get(job_id)
+
+
+def latest_pull_job() -> dict | None:
+    """The most recent pull job on this node (running or, briefly, just
+    finished), or None if nothing's ever been pulled this SM process's
+    lifetime — lets a client resume watching progress after reopening the
+    model manager without needing to already have the job_id."""
+    if _latest_job_id is None:
+        return None
+    return _pull_jobs.get(_latest_job_id)
 
 
 def _run_pull(job: dict, model_name: str) -> None:
