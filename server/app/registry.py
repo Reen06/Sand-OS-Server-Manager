@@ -892,6 +892,34 @@ def dev_source_commit(app: AppDef) -> str | None:
         return None
 
 
+def dev_source_remote_commit(app: AppDef) -> str | None:
+    """Latest commit on the dev source's git `origin` remote (default
+    branch), via `git ls-remote` — read-only, never touches the local
+    checkout or working tree (safe even mid-edit). None if this node doesn't
+    have the checkout, the repo has no `origin` configured (e.g.
+    CNC_Controller/helix is local-only, no GitHub remote), or the remote is
+    unreachable. When a remote exists, THIS is the real source of truth for
+    staleness — the local checkout itself (dev_source_commit()) can lag
+    behind it, which is exactly the case the dev machine itself should be
+    flagged for."""
+    if not app.binds or not source_tree_ready(app):
+        return None
+    path = app.binds[0][0]
+    try:
+        r = subprocess.run(["git", "-C", path, "remote", "get-url", "origin"],
+                           capture_output=True, text=True, timeout=5)
+        if r.returncode != 0 or not r.stdout.strip():
+            return None
+        url = r.stdout.strip()
+        r = subprocess.run(["git", "ls-remote", url, "HEAD"],
+                           capture_output=True, text=True, timeout=15)
+        if r.returncode != 0 or not r.stdout.strip():
+            return None
+        return r.stdout.split()[0]
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def manual_install_hint(app: AppDef) -> dict:
     """The honest manual fallback shown when no peer node has this app yet —
     e.g. the very first node in the mesh to ever want it. Never a silent
