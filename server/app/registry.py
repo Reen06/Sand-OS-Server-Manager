@@ -581,7 +581,23 @@ APPS: dict[str, AppDef] = {
                 # this mount itself is user-scoped.
                 Mount(name="nas", path="/nas", scope="root", storage="nfs")],
         env={
-            "OLLAMA_BASE_URL": "http://sm-ollama:11434",
+            # NOT "OLLAMA_BASE_URL": "http://sm-ollama:11434" any more. That
+            # assumed Ollama always co-locates with Open WebUI on the same
+            # node/docker daemon (reachable by container name over
+            # sm-llm-net) — true when this was written, but Ollama is now a
+            # genuine multi-node app (see App Definition Standard §2) that
+            # can run on any capable node, not necessarily this one. Confirmed
+            # live: with Ollama actually running on a different node, Open
+            # WebUI's native Ollama connection tried "sm-ollama" and failed
+            # DNS resolution outright, then (worse) still routed some chat
+            # requests through that broken connection instead of the working
+            # OpenAI one below — "Model 'x' was not found" even though the
+            # Hub's own /v1/models correctly listed it. Disabling the native
+            # Ollama integration entirely removes the ambiguity — the OpenAI
+            # connection to the Hub's router is fleet-aware (any node, not
+            # just this one) and already does everything the native
+            # connection would, correctly.
+            "ENABLE_OLLAMA_API": "false",
             "WEBUI_AUTH_TRUSTED_EMAIL_HEADER": "X-Forwarded-User",
             # Auto-activates every trusted-header account as role=user (never
             # left "pending") — see sso_role_header above.
