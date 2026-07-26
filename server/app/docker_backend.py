@@ -480,4 +480,23 @@ def spawn(inst: Instance, app: AppDef) -> subprocess.CompletedProcess:
 
     from . import app_variants  # deferred: avoids a circular import at load time
     args.append(app_variants.active_image(app))
-    return _docker(args, timeout=120, host=host)
+    res = _docker(args, timeout=120, host=host)
+
+    # Docker Desktop (Windows/Mac) exposes GPU passthrough through its own
+    # bundled nvidia-container-runtime via the legacy `--gpus` flag, but —
+    # unlike native Linux + nvidia-container-toolkit — never generates an
+    # NVIDIA CDI spec, so `--device nvidia.com/gpu=all` has nothing to
+    # resolve there and every GPU app launch fails with "CDI device
+    # injection failed: unresolvable CDI devices nvidia.com/gpu=all"
+    # (confirmed live on a Docker-Desktop/WSL2 node with a real GPU and
+    # working `nvidia` runtime — just not CDI-registered). Retry once with
+    # the flag Docker Desktop actually supports instead of permanently
+    # failing GPU apps on those hosts.
+    if app.gpu and res.returncode != 0 and "CDI device injection failed" in (res.stderr or ""):
+        try:
+            i = args.index("--device")
+            args[i:i + 2] = ["--gpus", "all"]
+            res = _docker(args, timeout=120, host=host)
+        except ValueError:
+            pass
+    return res
