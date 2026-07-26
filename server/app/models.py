@@ -171,6 +171,13 @@ class AppDef:
     # this only changes behavior on a node that would otherwise run `image`
     # against an empty bind). None = no packaged build exists for this app yet.
     packaged_image: str | None = None
+    # Where/how to build packaged_image — the repo root (not build_context,
+    # which for these apps points at containers/<app>, too narrow to COPY
+    # the whole source tree) and the Dockerfile.packaged path relative to
+    # it. Both required together with packaged_image for the "Rebuild &
+    # deploy" flow (app_variants.build_packaged()); unused otherwise.
+    packaged_build_context: str = ""
+    packaged_dockerfile: str = ""
     # Installable versions this app offers (empty = no version manager UI; the
     # app just always runs `image` as today). build_context is the Dockerfile
     # directory for "build"-kind variants, relative to the SM repo root — an

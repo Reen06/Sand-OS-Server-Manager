@@ -324,3 +324,75 @@ def _run_install(app: AppDef, v: AppVariant, job: dict) -> None:
         job["error"] = str(e)
     finally:
         job["done"] = True
+
+
+# ── packaged builds (webcad/helix-style dev-source apps) ───────────────────
+# Separate from the variants system above on purpose — these two apps
+# deliberately have no `variants` list (see app_definition standard §8-10 /
+# docker_backend.spawn()'s bind-mount guard): giving them one risked the dev
+# machine's own default launch silently switching to a self-contained build
+# instead of the live bind-mounted source the moment one got built there too
+# (variants' _default_active() would pick it up with zero explicit
+# selection). This is a parallel, much narrower job type: only ever runs on
+# whichever node source_tree_ready() is true — the "Rebuild & deploy" flow
+# the Hub's fleet_rebuild_and_deploy orchestrates.
+_packaged_jobs: dict[str, dict] = {}
+
+
+def build_packaged(app: AppDef) -> dict:
+    """Kick off a background rebuild of app.packaged_image FROM THIS NODE's
+    live checkout, baking in its current commit as the sandos.source_commit
+    label (compared later by image_source_commit()/registry.dev_source_commit()
+    — see the Hub's fleet_source_check). Raises ValueError (never silently
+    no-ops) if this app has no packaged build configured, or this node isn't
+    the one with the checkout to build from."""
+    from . import registry
+    if not (app.packaged_image and app.packaged_build_context and app.packaged_dockerfile):
+        raise ValueError(f"{app.id} has no packaged build configured")
+    if not registry.source_tree_ready(app):
+        raise ValueError("this node doesn't have the dev source checkout to build from")
+    with _lock:
+        existing = _packaged_jobs.get(app.id)
+        if existing and not existing["done"]:
+            raise ValueError(f"{app.id} packaged build already in progress")
+        job = {"log": [], "started_at": time.time(), "done": False, "error": None}
+        _packaged_jobs[app.id] = job
+    threading.Thread(target=_run_packaged_build, args=(app, job), daemon=True,
+                     name=f"packaged-build-{app.id}").start()
+    return {"ok": True, "status": "building"}
+
+
+def _run_packaged_build(app: AppDef, job: dict) -> None:
+    from . import registry
+    try:
+        commit = registry.dev_source_commit(app)
+        dockerfile = os.path.join(app.packaged_build_context, app.packaged_dockerfile)
+        cmd = ["docker", "build", "-f", dockerfile, "-t", app.packaged_image]
+        if commit:
+            cmd += ["--label", f"sandos.source_commit={commit}"]
+            job["log"].append(f"building from source commit {commit[:12]}")
+        cmd.append(app.packaged_build_context)
+
+        job["log"].append("$ " + " ".join(cmd))
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1)
+        for line in proc.stdout:
+            job["log"].append(line.rstrip())
+            job["log"][:] = job["log"][-500:]
+        proc.wait(timeout=1800)
+
+        if proc.returncode != 0:
+            job["error"] = f"exit code {proc.returncode}"
+        elif not _docker_image_exists(app.packaged_image):
+            job["error"] = "build finished but the image tag wasn't produced"
+    except Exception as e:  # noqa: BLE001
+        job["error"] = str(e)
+    finally:
+        job["done"] = True
+
+
+def packaged_build_status(app_id: str) -> dict | None:
+    job = _packaged_jobs.get(app_id)
+    if not job:
+        return None
+    return {"done": job["done"], "error": job["error"], "log_tail": job["log"][-30:]}

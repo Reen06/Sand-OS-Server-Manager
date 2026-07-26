@@ -484,6 +484,7 @@ def sm_info():
              # the self-contained packaged build instead (see
              # app_variants.active_image()) — only flag it red when there's
              # neither the checkout NOR a packaged build installed here.
+             "packaged_image": a.packaged_image,   # static AppDef fact — same tag fleet-wide
              "packaged_image_installed": (
                  bool(a.packaged_image) and
                  app_variants._docker_image_exists(a.packaged_image, app_images.active_docker_host(a.id))
@@ -738,6 +739,36 @@ def app_source_check(app_id: str, request: Request):
         "image_commit": app_variants.image_source_commit(app, host=host),
         "image_installed": registry.image_installed(app),
     }
+
+
+@app.post("/api/apps/{app_id}/packaged-build")
+def app_packaged_build(app_id: str, request: Request):
+    """Rebuild this app's self-contained packaged image FROM THIS NODE's own
+    checkout — only succeeds on the dev machine itself (see
+    app_variants.build_packaged()). The Hub's fleet_rebuild_and_deploy is
+    what actually orchestrates finding the right node to call this on, then
+    transferring the result to wherever it should run — this endpoint just
+    does the build. Admin-only: it's a real build+label action, not a
+    read-only check."""
+    ident = _require_identity(request)
+    if ident.get("role") != "admin":
+        raise HTTPException(403, "admin only")
+    app = registry.APPS.get(app_id)
+    if app is None:
+        raise HTTPException(404, "unknown app")
+    try:
+        return app_variants.build_packaged(app)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/apps/{app_id}/packaged-build/status")
+def app_packaged_build_status(app_id: str, request: Request):
+    _require_identity(request)
+    status = app_variants.packaged_build_status(app_id)
+    if status is None:
+        raise HTTPException(404, "no packaged build in progress or completed on this node")
+    return status
 
 
 @app.get("/api/apps/{app_id}/variants")
