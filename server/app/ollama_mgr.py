@@ -31,6 +31,14 @@ import httpx
 
 from . import config, registry
 
+# How long a streamed response may go completely silent (no bytes at all)
+# before we give up on it — NOT a cap on total response duration; httpx's
+# `read` timeout resets on every chunk received, so a real generation that
+# keeps producing tokens runs as long as it needs to (20-30+ min is fine).
+# This only fires on genuine dead air, which a real hang should hit well
+# within two minutes even accounting for a slow model's first-token latency.
+STREAM_IDLE_TIMEOUT = 120.0
+
 # ── Ollama connection ─────────────────────────────────────────────────────────
 
 def ollama_url() -> str:
@@ -95,7 +103,14 @@ async def stream_to_ollama(path: str, body: dict) -> AsyncGenerator[bytes, None]
     async with httpx.AsyncClient() as client:
         async with client.stream(
             "POST", f"{url}{path}", json=body,
-            timeout=httpx.Timeout(connect=10.0, read=600.0, write=30.0, pool=10.0),
+            # httpx's `read` timeout is a per-chunk IDLE gap, not a cap on total
+            # duration — it resets on every byte received, so a real generation
+            # that keeps producing tokens sails through untouched no matter how
+            # long it runs (20-30+ min is fine). It only fires if the connection
+            # goes fully silent for longer than this — that's the actual hang
+            # this is meant to catch, tuned tighter than the old 600s so a
+            # genuine stall doesn't sit unnoticed for ten minutes.
+            timeout=httpx.Timeout(connect=10.0, read=STREAM_IDLE_TIMEOUT, write=30.0, pool=10.0),
         ) as resp:
             async for chunk in resp.aiter_bytes(65536):
                 yield chunk

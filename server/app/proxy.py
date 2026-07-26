@@ -43,10 +43,13 @@ def _get_client() -> "httpx.AsyncClient":
             # A flat 30s timeout applied to EVERY request through this proxy used to
             # cap read time too — fine for ordinary page/asset loads, but a long LLM
             # generation (Open WebUI chat, proxied through here) can easily run past
-            # that and get cut off mid-stream. Split out read specifically (mirrors
-            # the Hub's own _SM_TIMEOUT_STREAM in api/llm.py); connect/write/pool stay
-            # tight since those really should be fast regardless of what's requested.
-            timeout=httpx.Timeout(connect=10.0, read=600.0, write=30.0, pool=10.0),
+            # that and get cut off mid-stream. `read` here is a per-chunk IDLE gap,
+            # not a total-duration cap (it resets on every byte received) — mirrors
+            # the Hub's own _SM_TIMEOUT_STREAM in api/llm.py and ollama_mgr.py's
+            # STREAM_IDLE_TIMEOUT. A real generation runs as long as it needs to;
+            # this only cuts off genuine dead air. connect/write/pool stay tight
+            # since those really should be fast regardless of what's requested.
+            timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0),
             follow_redirects=False,
             limits=httpx.Limits(max_keepalive_connections=32, max_connections=128),
         )
