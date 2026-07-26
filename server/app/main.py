@@ -684,6 +684,16 @@ def stop(app_id: str, request: Request):
     return {"ok": True, "status": "stopped"}
 
 
+@app.post("/api/apps/{app_id}/stop-all")
+def stop_app_all(app_id: str, request: Request):
+    """Admin-only: stop EVERY running instance of this one app on this node,
+    regardless of which user owns it — see registry.stop_app()'s docstring
+    for why the plain per-user stop above isn't enough for this. Used by the
+    Hub Fleet page's toggle, not the per-user Apps page."""
+    _require_admin(request)
+    return registry.stop_app(app_id)
+
+
 # ── Per-user app state: factory reset + snapshots (NAS .appdata) ───────────────
 class _SnapBody(BaseModel):
     label: str = ""

@@ -825,6 +825,31 @@ def stop_all() -> dict:
     return {"stopped": stopped, "errors": errors}
 
 
+def stop_app(app_id: str) -> dict:
+    """Tear down every currently-running instance of ONE app on this node,
+    regardless of which user owns it. The plain stop(app_id, user) is scoped
+    to a single (app_id, user) instance — correct for a user stopping their
+    own copy, but wrong for the Fleet page's admin "stop whatever's running
+    here" toggle: an admin's own per-user placement can easily have nothing
+    to do with whichever user's instance is actually running (or the Hub's
+    separate placement bookkeeping can simply be stale/never set for it),
+    so the generic user-scoped stop silently finds nothing to act on even
+    though the container is genuinely running. This instead goes straight to
+    real docker state (instances_summary(), same source the Fleet page's own
+    "is it running" toggle reads) and stops every match, independent of any
+    placement pointer. Best-effort, same shape as stop_all()."""
+    stopped, errors = [], []
+    for entry in instances_summary():
+        if entry["app_id"] != app_id or not entry["running"]:
+            continue
+        try:
+            stop(app_id, entry["user"])
+            stopped.append(entry["name"])
+        except Exception as e:  # noqa: BLE001
+            errors.append({"name": entry["name"], "error": str(e)})
+    return {"stopped": stopped, "errors": errors}
+
+
 def instances_summary() -> list[dict]:
     """Every currently-tracked instance across all apps, with its container name
     and running state — used by /api/sm/apps/stats (Fleet page's per-app
