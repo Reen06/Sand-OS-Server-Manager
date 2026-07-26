@@ -85,7 +85,7 @@ def _upstream_path(app_id: str, path: str) -> str:
     return path
 
 
-def _fwd_headers(app, request: Request, user: str) -> dict:
+def _fwd_headers(app, request: Request, user: str, role: str | None = None) -> dict:
     """Build upstream request headers: drop hop/conditional headers, inject the
     Selkies basic-auth for streamed apps only, and set a TRUSTED SSO header
     (stripping any client-supplied copy) for apps that use header SSO."""
@@ -103,7 +103,13 @@ def _fwd_headers(app, request: Request, user: str) -> dict:
         fwd[app.sso_header] = user               # inject the authenticated identity
     if app and app.sso_role_header:
         fwd.pop(app.sso_role_header.lower(), None)
-        fwd[app.sso_role_header] = app.sso_role_value
+        # A Hub ADMIN gets promoted to the app's own admin role too (Open
+        # WebUI: "admin" instead of the AppDef's default "user") — otherwise
+        # every SSO-provisioned account was permanently stuck at the AppDef's
+        # one static sso_role_value with no way to ever reach that app's own
+        # admin settings, Hub-admin or not. Everyone else still gets the
+        # AppDef's configured default.
+        fwd[app.sso_role_header] = "admin" if role == "admin" else app.sso_role_value
     fwd["X-Forwarded-Proto"] = "https"           # we terminate TLS at the Hub
     # Force gzip-only: the proxy buffers and decompresses the full response for
     # HTML injection. httpx handles gzip/deflate natively; Brotli requires an
@@ -312,7 +318,7 @@ def _inject_apple_touch_icon(body: bytes, href: str) -> bytes:
         return body
 
 
-async def http(app_id: str, path: str, request: Request, user: str) -> Response:
+async def http(app_id: str, path: str, request: Request, user: str, role: str | None = None) -> Response:
     if app_id == "filebrowser":
         asset = _fb_theme_asset(path)
         if asset is not None:
@@ -333,7 +339,7 @@ async def http(app_id: str, path: str, request: Request, user: str) -> Response:
         log.warning("HTTP %s /%s user=%s → no running instance", request.method, path, user)
         return Response("app not running", status_code=502)
     target = f"http://127.0.0.1:{port}/{_upstream_path(app_id, path)}"
-    fwd = _fwd_headers(registry.APPS.get(app_id), request, user)
+    fwd = _fwd_headers(registry.APPS.get(app_id), request, user, role)
     try:
         r = await _get_client().request(request.method, target,
                                         params=dict(request.query_params),

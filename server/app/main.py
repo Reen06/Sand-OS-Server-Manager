@@ -1207,10 +1207,11 @@ def _is_native_pwa_public_asset(app_id: str, path: str) -> bool:
                         "LOCK", "UNLOCK", "REPORT", "SEARCH", "MKCALENDAR"])
 async def stream_http(app_id: str, path: str, request: Request):
     if _is_native_pwa_public_asset(app_id, path):
-        user = "_pwa"
+        user, role = "_pwa", None
     else:
-        user = _require_app(request, app_id)["username"]
-    return await proxy.http(app_id, path, request, user)
+        ident = _require_app(request, app_id)
+        user, role = ident["username"], ident.get("role")
+    return await proxy.http(app_id, path, request, user, role)
 
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
