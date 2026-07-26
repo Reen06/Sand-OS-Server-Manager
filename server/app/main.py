@@ -726,7 +726,7 @@ def app_source_check(app_id: str, request: Request):
     return {
         "has_dev_source_concept": True,
         "dev_source_commit": registry.dev_source_commit(app),   # non-None only if THIS node has the real checkout
-        "dev_source_remote_commit": registry.dev_source_remote_commit(app),  # GitHub HEAD, if a remote exists
+        "dev_source_remote_status": registry.dev_source_remote_status(app),  # vs GitHub, if a remote exists
         "image_commit": app_variants.image_source_commit(app, host=host),
         "image_installed": registry.image_installed(app),
     }

@@ -892,16 +892,16 @@ def dev_source_commit(app: AppDef) -> str | None:
         return None
 
 
-def dev_source_remote_commit(app: AppDef) -> str | None:
-    """Latest commit on the dev source's git `origin` remote (default
-    branch), via `git ls-remote` — read-only, never touches the local
-    checkout or working tree (safe even mid-edit). None if this node doesn't
-    have the checkout, the repo has no `origin` configured (e.g.
-    CNC_Controller/helix is local-only, no GitHub remote), or the remote is
-    unreachable. When a remote exists, THIS is the real source of truth for
-    staleness — the local checkout itself (dev_source_commit()) can lag
-    behind it, which is exactly the case the dev machine itself should be
-    flagged for."""
+def dev_source_remote_status(app: AppDef) -> dict | None:
+    """Compares this node's dev checkout against its GitHub `origin`
+    upstream branch. `git fetch` only updates remote-tracking refs, never
+    the working tree, so this is safe against a dirty/mid-edit repo. None if
+    there's no checkout here, no `origin` remote (e.g. CNC_Controller/helix
+    is local-only), or no upstream tracking branch configured.
+
+    Returns {"remote_commit", "ahead", "behind"} — `behind` is what counts
+    as staleness (GitHub has commits this checkout hasn't pulled); `ahead`
+    (unpushed local work) is normal mid-development, not "outdated"."""
     if not app.binds or not source_tree_ready(app):
         return None
     path = app.binds[0][0]
@@ -910,12 +910,28 @@ def dev_source_remote_commit(app: AppDef) -> str | None:
                            capture_output=True, text=True, timeout=5)
         if r.returncode != 0 or not r.stdout.strip():
             return None
-        url = r.stdout.strip()
-        r = subprocess.run(["git", "ls-remote", url, "HEAD"],
-                           capture_output=True, text=True, timeout=15)
-        if r.returncode != 0 or not r.stdout.strip():
+        f = subprocess.run(["git", "-C", path, "fetch", "origin"],
+                           capture_output=True, text=True, timeout=20)
+        if f.returncode != 0:
             return None
-        return r.stdout.split()[0]
+        ref = subprocess.run(
+            ["git", "-C", path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            capture_output=True, text=True, timeout=5)
+        upstream = ref.stdout.strip() if ref.returncode == 0 else None
+        if not upstream:
+            return None
+        remote_commit = subprocess.run(
+            ["git", "-C", path, "rev-parse", upstream],
+            capture_output=True, text=True, timeout=5).stdout.strip() or None
+        counts = subprocess.run(
+            ["git", "-C", path, "rev-list", "--left-right", "--count", f"HEAD...{upstream}"],
+            capture_output=True, text=True, timeout=10)
+        ahead = behind = None
+        if counts.returncode == 0 and counts.stdout.strip():
+            parts = counts.stdout.split()
+            if len(parts) == 2:
+                ahead, behind = int(parts[0]), int(parts[1])
+        return {"remote_commit": remote_commit, "ahead": ahead, "behind": behind}
     except Exception:  # noqa: BLE001
         return None
 
