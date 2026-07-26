@@ -2,6 +2,7 @@
 docker CLI (no extra SDK dependency). Mirrors the proven run-lan.sh parameters,
 but with per-instance ports so concurrent instances don't collide."""
 from __future__ import annotations
+import calendar
 import json
 import os
 import subprocess
@@ -145,16 +146,56 @@ def _parse_mem_usage(s: str | None) -> tuple[float | None, float | None]:
     return _parse_mem_value_mb(used_s), _parse_mem_value_mb(limit_s)
 
 
+_STATS_SETTLE_SECONDS = 20  # see _started_at()'s docstring
+
+
+def _started_at(names: list[str], host: str | None = None) -> dict[str, float]:
+    """Each container's start time as epoch seconds, batched into one `docker
+    inspect` call. Used to hold back a just-launched container's CPU% until
+    it's had a few seconds to settle: `docker stats --no-stream`'s own
+    reading is genuinely misleading right after start — dependency installs/
+    builds briefly peg a core, and that one-off burst reads no differently
+    from sustained load, showing e.g. 114% CPU for an app that's actually
+    idle a few seconds later."""
+    if not names:
+        return {}
+    r = _docker(["inspect", "--format", "{{.Name}}|{{.State.StartedAt}}", *names],
+               timeout=10, host=host)
+    if r.returncode != 0:
+        return {}
+    out: dict[str, float] = {}
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if "|" not in line:
+            continue
+        name, started = line.split("|", 1)
+        name = name.lstrip("/")
+        try:
+            # Docker's RFC3339 timestamp has nanosecond precision; strptime
+            # only handles microseconds, so truncate to the first 26 chars
+            # ("YYYY-MM-DDTHH:MM:SS.dddddd") — plenty of precision for an
+            # age-in-seconds check.
+            ts = time.strptime(started[:26], "%Y-%m-%dT%H:%M:%S.%f")
+            out[name] = calendar.timegm(ts)  # ts is UTC; timegm (not mktime) treats it as such
+        except ValueError:
+            continue
+    return out
+
+
 def stats(names: list[str], host: str | None = None) -> dict[str, dict]:
     """`docker stats` snapshot for the given (running) container names on ONE
-    daemon -> {name: {cpu_percent, mem_used_mb, mem_limit_mb, mem_percent}}.
-    Skipped entirely (returns {}) if `names` is empty — `docker stats` with
-    no name args would otherwise snapshot EVERY container on that daemon."""
+    daemon -> {name: {cpu_percent, mem_used_mb, mem_limit_mb, mem_percent,
+    settling}}. Skipped entirely (returns {}) if `names` is empty — `docker
+    stats` with no name args would otherwise snapshot EVERY container on
+    that daemon. `cpu_percent` is None (settling=True) for the first
+    _STATS_SETTLE_SECONDS after a container starts — see _started_at()."""
     if not names:
         return {}
     r = _docker(["stats", "--no-stream", "--format", "{{json .}}", *names], timeout=15, host=host)
     if r.returncode != 0:
         return {}
+    started = _started_at(names, host=host)
+    now = time.time()
     out: dict[str, dict] = {}
     for line in r.stdout.splitlines():
         line = line.strip()
@@ -168,11 +209,14 @@ def stats(names: list[str], host: str | None = None) -> dict[str, dict]:
         if not name:
             continue
         mem_used, mem_limit = _parse_mem_usage(d.get("MemUsage"))
+        start = started.get(name)
+        settling = start is not None and (now - start) < _STATS_SETTLE_SECONDS
         out[name] = {
-            "cpu_percent": _parse_percent(d.get("CPUPerc")),
+            "cpu_percent": None if settling else _parse_percent(d.get("CPUPerc")),
             "mem_used_mb": mem_used,
             "mem_limit_mb": mem_limit,
             "mem_percent": _parse_percent(d.get("MemPerc")),
+            "settling": settling,
         }
     return out
 

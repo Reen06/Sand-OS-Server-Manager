@@ -480,6 +480,14 @@ def sm_info():
              "image_tag": app_images._image_tag(a),
              "binds": [list(b) for b in a.binds],
              "source_ready": registry.source_tree_ready(a),
+             # A node without the live checkout isn't broken if it's running
+             # the self-contained packaged build instead (see
+             # app_variants.active_image()) — only flag it red when there's
+             # neither the checkout NOR a packaged build installed here.
+             "packaged_image_installed": (
+                 bool(a.packaged_image) and
+                 app_variants._docker_image_exists(a.packaged_image, app_images.active_docker_host(a.id))
+             ),
              "manual_install_hint": registry.manual_install_hint(a),
              # Lets the Hub tell "real rebuild needed if uninstalled" apps
              # from "plain re-pull, cheap to uninstall" apps for the
