@@ -163,6 +163,14 @@ class AppDef:
     # a DEV app that runs live from a bind-mounted source tree (edit on the host →
     # rebuild/reload in the container). Empty for every normal app.
     binds: list[tuple[str, str]] = field(default_factory=list)
+    # For a `binds`-having dev-source app: the tag of a SEPARATE, self-contained
+    # build (source COPYed + built in at image-build time — see the app repo's
+    # containers/<app>/Dockerfile.packaged) for nodes that don't have the live
+    # checkout. Never used on a node where source_tree_ready(app) is true (the
+    # dev machine keeps running `image` off the bind mount, exactly as before —
+    # this only changes behavior on a node that would otherwise run `image`
+    # against an empty bind). None = no packaged build exists for this app yet.
+    packaged_image: str | None = None
     # Installable versions this app offers (empty = no version manager UI; the
     # app just always runs `image` as today). build_context is the Dockerfile
     # directory for "build"-kind variants, relative to the SM repo root — an

@@ -100,6 +100,10 @@ FILEBROWSER_IMAGE = os.environ.get("SM_FILEBROWSER_IMAGE", "sm-filebrowser:lates
 # WebCAD/CAM — the browser CAD/CAM app (a 'web' app). Dev image runs the app live
 # from a bind-mounted source tree; build from containers/webcad.
 WEBCAD_IMAGE = os.environ.get("SM_WEBCAD_IMAGE", "sm-webcad:dev")
+# Self-contained build (source COPYed + built in, no bind mount needed) — built
+# from containers/webcad/Dockerfile.packaged, repo root as context. Used
+# automatically on any node that doesn't have the live checkout.
+WEBCAD_PACKAGED_IMAGE = os.environ.get("SM_WEBCAD_PACKAGED_IMAGE", "sm-webcad:packaged")
 
 # HeliX Motion — CNC controller for the Carvera Air (a 'web' app). Dev image runs
 # live from the bind-mounted /home/control/CNC_Controller tree; build from its
@@ -107,6 +111,9 @@ WEBCAD_IMAGE = os.environ.get("SM_WEBCAD_IMAGE", "sm-webcad:dev")
 # discovery TCP-sweeps (:2222) — the hub's home LAN + any gateway-node LANs
 # reachable over WireGuard (UDP broadcast can't cross the docker bridge).
 HELIX_IMAGE = os.environ.get("SM_HELIX_IMAGE", "sm-helix:dev")
+# Self-contained build — same idea as WEBCAD_PACKAGED_IMAGE, built from
+# containers/helix/Dockerfile.packaged, repo root as context.
+HELIX_PACKAGED_IMAGE = os.environ.get("SM_HELIX_PACKAGED_IMAGE", "sm-helix:packaged")
 # Default the scan to this host's own /24: the SM host sits on the same LAN as
 # the Carvera, but the app's UDP :3333 discovery can't cross the docker bridge,
 # so the TCP sweep is how the container finds the machine. Env still overrides

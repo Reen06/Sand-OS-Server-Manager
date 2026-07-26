@@ -468,9 +468,18 @@ def spawn(inst: Instance, app: AppDef) -> subprocess.CompletedProcess:
 
     # Dev bind mounts — bind a real host dir straight into the container (a DEV app
     # that runs live from a bind-mounted source tree). node_modules etc. are shadowed
-    # by the image's own VOLUME declarations so the host tree isn't injected.
-    for host_path, container_path in app.binds:
-        args += ["-v", f"{host_path}:{container_path}"]
+    # by the image's own VOLUME declarations so the host tree isn't injected. Only
+    # applied when the source tree actually exists on THIS host — binds is a fixed
+    # AppDef fact, not a per-node one (see App Definition Standard §8.1), so on a
+    # node that doesn't have the checkout, applying it anyway would have Docker
+    # silently create and mount an EMPTY directory over the image's own baked-in
+    # code (see app_variants.py's packaged-image build) — the exact failure mode
+    # the Fleet page's red "dev source missing" badge exists to warn about.
+    if app.binds:
+        from . import registry  # deferred: avoids a circular import at load time
+        if registry.source_tree_ready(app):
+            for host_path, container_path in app.binds:
+                args += ["-v", f"{host_path}:{container_path}"]
 
     # App-specific extra env (declared on the App Definition).
     for k, v in app.env.items():

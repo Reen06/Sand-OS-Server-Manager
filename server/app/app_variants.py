@@ -162,6 +162,20 @@ def active_image(app: AppDef) -> str:
     app's ACTUAL daemon (local, or a USB drive if the image was relocated) —
     checking the wrong one would wrongly report "not installed"."""
     if not app.variants:
+        # A dev-source app on a node that doesn't have the live checkout
+        # would otherwise still try to launch `image` — which docker_backend
+        # now refuses to bind-mount there, so it'd run against WHATEVER the
+        # image itself contains (nothing, for the plain dev image). Prefer
+        # the self-contained packaged build instead, if one exists on this
+        # node. On the dev machine itself (source_tree_ready == True) this
+        # never triggers — `image` off the live bind mount stays the default,
+        # completely unaffected by whether a packaged tag also happens to
+        # exist on disk there.
+        from . import registry
+        if app.packaged_image and app.binds and not registry.source_tree_ready(app):
+            host = _host_for(app)
+            if _docker_image_exists(app.packaged_image, host):
+                return app.packaged_image
         return app.image
     state = _load_state()
     variant_id = state.get(app.id, {}).get("variant_id") or _default_active(app)

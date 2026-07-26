@@ -110,6 +110,7 @@ APPS: dict[str, AppDef] = {
         color="blue",
         desc="Browser CAD/CAM for the Carvera — model right in your dashboard.",
         image=config.WEBCAD_IMAGE,
+        packaged_image=config.WEBCAD_PACKAGED_IMAGE,
         # Dockerfile lives INSIDE the sibling source repo (self-contained —
         # entrypoint.sh is right there too), not in this repo. Absolute path
         # is fine here (app_variants.py's os.path.join keeps an absolute
@@ -144,6 +145,7 @@ APPS: dict[str, AppDef] = {
         color="green",
         desc="CNC control for the Carvera Air — jog, run jobs, resume, 3D view.",
         image=config.HELIX_IMAGE,
+        packaged_image=config.HELIX_PACKAGED_IMAGE,
         # Same "Dockerfile lives inside the sibling repo" shape as webcad.
         build_context="/home/control/CNC_Controller/containers/helix",
         kind="web",
