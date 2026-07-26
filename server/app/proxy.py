@@ -18,7 +18,7 @@ from pathlib import Path
 import httpx
 import websockets
 from fastapi import Request, WebSocket
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.websockets import WebSocketDisconnect
 
 from . import app_images, config, docker_backend, pwa, registry
@@ -40,7 +40,14 @@ def _get_client() -> "httpx.AsyncClient":
     global _client
     if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(
-            timeout=30.0, follow_redirects=False,
+            # A flat 30s timeout applied to EVERY request through this proxy used to
+            # cap read time too — fine for ordinary page/asset loads, but a long LLM
+            # generation (Open WebUI chat, proxied through here) can easily run past
+            # that and get cut off mid-stream. Split out read specifically (mirrors
+            # the Hub's own _SM_TIMEOUT_STREAM in api/llm.py); connect/write/pool stay
+            # tight since those really should be fast regardless of what's requested.
+            timeout=httpx.Timeout(connect=10.0, read=600.0, write=30.0, pool=10.0),
+            follow_redirects=False,
             limits=httpx.Limits(max_keepalive_connections=32, max_connections=128),
         )
     return _client
@@ -340,10 +347,20 @@ async def http(app_id: str, path: str, request: Request, user: str, role: str | 
         return Response("app not running", status_code=502)
     target = f"http://127.0.0.1:{port}/{_upstream_path(app_id, path)}"
     fwd = _fwd_headers(registry.APPS.get(app_id), request, user, role)
+    client = _get_client()
+    req = client.build_request(request.method, target, params=dict(request.query_params),
+                               headers=fwd, content=await request.body())
     try:
-        r = await _get_client().request(request.method, target,
-                                        params=dict(request.query_params),
-                                        headers=fwd, content=await request.body())
+        # stream=True: don't read the body yet. Rewriting HTML (below) genuinely
+        # needs the whole thing in memory first, but most traffic through here —
+        # in particular a chat completion's token-by-token SSE stream — doesn't,
+        # and reading it all here before forwarding ANY of it used to turn real-
+        # time streaming into "wait for the whole response, then dump it all on
+        # the browser at once" (confirmed live: Open WebUI chat responses arrived
+        # in 2-3 big chunks instead of smoothly token-by-token). Content-Type is
+        # available on `r` immediately, before the body is touched, so we can
+        # still decide per-response which path to take.
+        r = await client.send(req, stream=True)
     except Exception as e:  # noqa: BLE001
         log.exception("HTTP %s /%s → upstream error", request.method, path)
         return Response(f"upstream error: {e}", status_code=502)
@@ -353,15 +370,6 @@ async def http(app_id: str, path: str, request: Request, user: str, role: str | 
     out = {k: v for k, v in r.headers.items()
            if k.lower() not in _HOP and k.lower() != "set-cookie"
            and (not streamed or k.lower() not in _STRIP_RESP)}
-    # user_saml under OVERWRITEWEBROOT mis-generates its own route URLs: the app
-    # segment `apps/user_saml` comes out as the corrupt `index.php_saml`, so the
-    # first (unauthenticated) load 302s into a 404 even though the SSO session was
-    # just established. Nextcloud serves the correct `apps/user_saml/...` path, so
-    # repair the redirect target it emits. Scoped to the exact corrupt token, which
-    # never appears in a legitimate URL.
-    for k in list(out):
-        if k.lower() == "location" and "index.php_saml" in out[k]:
-            out[k] = out[k].replace("index.php_saml", "apps/user_saml")
     # Never allow the proxy response to be cached. For streamed apps this was
     # already required (stale paths broke the proxy). For web apps, passing
     # through the upstream Cache-Control caused the browser to disk-cache a
@@ -369,31 +377,66 @@ async def http(app_id: str, path: str, request: Request, user: str, role: str | 
     # couldn't decompress without brotlicffi) — browser rendered binary garbage
     # and kept serving it from cache indefinitely, bypassing all fixes.
     out["Cache-Control"] = "no-store, no-cache, must-revalidate"
-    content = r.content
     ct = (r.headers.get("content-type") or "").lower()
-    if "text/html" in ct:
-        if not (app and app.own_subdomain):
-            content = _rewrite_base_href(content, app_id)
-        if app and app.native_pwa:
-            if app.native_pwa_apple_icon:
-                content = _inject_apple_touch_icon(content, app.native_pwa_apple_icon)
-        else:
-            content = _inject_pwa(content, app)   # make the popped-out app its own PWA
-        if app_id == "filebrowser":
-            content = _inject_fb_theme_picker(content)
-        if streamed:
-            content = _inject_touch(content)  # mobile gestures for the stream
-    if streamed and path.rstrip("/") == "turn" and "json" in ct:
-        content = _inject_extra_turn(content)
-    if app_id == "paraview" and path.rstrip("/") == "paraview":
-        # The launcher mislabels its own JSON response as text/html (an old
-        # Twisted-library quirk) — confirmed live, so this can't be gated on
-        # content-type; gate on the exact launcher endpoint path instead.
-        # The regex only matches the one literal string it's looking for, so
-        # this is a harmless no-op on any response that isn't what we expect.
-        content = _rewrite_paraview_session(content, request)
-    resp = Response(content=content, status_code=r.status_code, headers=out,
-                    media_type=r.headers.get("content-type"))
+
+    # Everything below needs the full body in memory to rewrite it — genuinely
+    # can't be done chunk-by-chunk. Keep this list exactly as narrow as the
+    # rewrites that actually need it; anything else falls through to the real
+    # streaming path further down.
+    needs_rewrite = (
+        "text/html" in ct
+        or (streamed and path.rstrip("/") == "turn" and "json" in ct)
+        or (app_id == "paraview" and path.rstrip("/") == "paraview")
+    )
+
+    if needs_rewrite:
+        content = await r.aread()
+        await r.aclose()
+        # user_saml under OVERWRITEWEBROOT mis-generates its own route URLs: the app
+        # segment `apps/user_saml` comes out as the corrupt `index.php_saml`, so the
+        # first (unauthenticated) load 302s into a 404 even though the SSO session was
+        # just established. Nextcloud serves the correct `apps/user_saml/...` path, so
+        # repair the redirect target it emits. Scoped to the exact corrupt token, which
+        # never appears in a legitimate URL.
+        for k in list(out):
+            if k.lower() == "location" and "index.php_saml" in out[k]:
+                out[k] = out[k].replace("index.php_saml", "apps/user_saml")
+        if "text/html" in ct:
+            if not (app and app.own_subdomain):
+                content = _rewrite_base_href(content, app_id)
+            if app and app.native_pwa:
+                if app.native_pwa_apple_icon:
+                    content = _inject_apple_touch_icon(content, app.native_pwa_apple_icon)
+            else:
+                content = _inject_pwa(content, app)   # make the popped-out app its own PWA
+            if app_id == "filebrowser":
+                content = _inject_fb_theme_picker(content)
+            if streamed:
+                content = _inject_touch(content)  # mobile gestures for the stream
+        if streamed and path.rstrip("/") == "turn" and "json" in ct:
+            content = _inject_extra_turn(content)
+        if app_id == "paraview" and path.rstrip("/") == "paraview":
+            # The launcher mislabels its own JSON response as text/html (an old
+            # Twisted-library quirk) — confirmed live, so this can't be gated on
+            # content-type; gate on the exact launcher endpoint path instead.
+            # The regex only matches the one literal string it's looking for, so
+            # this is a harmless no-op on any response that isn't what we expect.
+            content = _rewrite_paraview_session(content, request)
+        resp = Response(content=content, status_code=r.status_code, headers=out,
+                        media_type=r.headers.get("content-type"))
+    else:
+        # True streaming passthrough — SSE chat completions, plain JSON, binary
+        # assets, everything that doesn't need rewriting. Bytes reach the
+        # browser as they arrive from upstream instead of being held here until
+        # the whole response is done.
+        async def _relay():
+            try:
+                async for chunk in r.aiter_bytes():
+                    yield chunk
+            finally:
+                await r.aclose()
+        resp = StreamingResponse(_relay(), status_code=r.status_code, headers=out,
+                                 media_type=r.headers.get("content-type"))
     # Forward EACH Set-Cookie separately — Nextcloud sets several session cookies
     # and a plain dict keeps only the last, which breaks the session (redirect loop).
     for cookie in r.headers.get_list("set-cookie"):
