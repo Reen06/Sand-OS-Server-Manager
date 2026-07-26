@@ -6,6 +6,7 @@ reconciled from Docker on startup (single-node MVP)."""
 from __future__ import annotations
 import os
 import re
+import subprocess
 import threading
 import time
 from .models import AppDef, AppVariant, Instance, Mount, Service
@@ -868,6 +869,27 @@ def source_tree_ready(app: AppDef) -> bool:
     a bind-mount 'live source tree' app (webcad/helix/openfoamgui) needs its
     real code checked out at that host path too, not baked into the image."""
     return all(os.path.isdir(p) and os.listdir(p) for p, _ in app.binds)
+
+
+def dev_source_commit(app: AppDef) -> str | None:
+    """Current git commit of this app's dev-source checkout, if THIS node
+    actually has it (source_tree_ready()) and it's a git repo — None
+    otherwise, including on a node that merely has the AppDef entry but not
+    the real checkout (see App Definition Standard §8.1: binds is pinned to
+    one specific machine, never assume it's present just because the entry
+    exists). Used to compare against a packaged build's baked-in
+    sandos.source_commit label (app_variants.image_source_commit()) so a
+    node running the packaged image can tell whether it's behind the current
+    dev source — a check, never an automatic rebuild."""
+    if not app.binds or not source_tree_ready(app):
+        return None
+    path = app.binds[0][0]
+    try:
+        r = subprocess.run(["git", "-C", path, "rev-parse", "HEAD"],
+                           capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def manual_install_hint(app: AppDef) -> dict:

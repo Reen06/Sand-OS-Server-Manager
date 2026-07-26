@@ -172,6 +172,27 @@ def active_image(app: AppDef) -> str:
     return v.image_tag if _docker_image_exists(v.image_tag, _host_for(app)) else app.image
 
 
+def image_source_commit(app: AppDef, host: str | None = None) -> str | None:
+    """The dev-source git commit baked into THIS node's currently-active
+    image for `app`, via the `sandos.source_commit` label _run_install() sets
+    at build time (only for a binds-having app whose source is a git repo —
+    see App Definition Standard §8/§10). None if the image has no such
+    label — a pulled/manually-built image, or one built before this existed.
+    Paired with registry.dev_source_commit() (the CURRENT source commit, only
+    known on whichever node actually has the live checkout) to answer "is
+    this packaged copy behind the dev source" — a check, never an automatic
+    rebuild; see the fleet_source_check Hub endpoint."""
+    tag = active_image(app)
+    r = subprocess.run(
+        ["docker", *_host_args(host), "image", "inspect", tag,
+         "--format", '{{index .Config.Labels "sandos.source_commit"}}'],
+        capture_output=True, text=True, timeout=10)
+    if r.returncode != 0:
+        return None
+    val = r.stdout.strip()
+    return val if val and val != "<no value>" else None
+
+
 # ── actions ──────────────────────────────────────────────────────────────────
 
 def select(app: AppDef, variant_id: str) -> dict:
@@ -245,6 +266,18 @@ def _run_install(app: AppDef, v: AppVariant, job: dict) -> None:
             cmd = ["docker", *_host_args(host), "build", "-t", v.image_tag]
             for k, val in build_args.items():
                 cmd += ["--build-arg", f"{k}={val}"]
+            if app.binds:
+                # Bake in the dev source's CURRENT commit at the moment of
+                # this build — a deliberate snapshot, not a live link. This
+                # is what image_source_commit() later compares against the
+                # dev node's then-current commit to flag "this packaged copy
+                # is behind" (registry.dev_source_commit(), fleet_source_check
+                # on the Hub) — never anything that rebuilds automatically.
+                from . import registry
+                commit = registry.dev_source_commit(app)
+                if commit:
+                    cmd += ["--label", f"sandos.source_commit={commit}"]
+                    job["log"].append(f"building from source commit {commit[:12]}")
             cmd.append(context)
             if host:
                 # `docker build` is aliased to `docker buildx build`, and

@@ -711,6 +711,26 @@ class _VariantSelectBody(BaseModel):
     variant_id: str
 
 
+@app.get("/api/apps/{app_id}/source-check")
+def app_source_check(app_id: str, request: Request):
+    """This node's own half of the dev-source-vs-packaged-image staleness
+    check (see App Definition Standard §8-10) — the Hub's fleet_source_check
+    combines this node's answer with whichever node actually has the live
+    dev-source checkout to tell "is this packaged copy behind". Read-only,
+    on-demand only; nothing here ever triggers a rebuild."""
+    _require_identity(request)
+    app = registry.APPS.get(app_id)
+    if app is None or not app.binds:
+        return {"has_dev_source_concept": False}
+    host = app_images.active_docker_host(app_id)
+    return {
+        "has_dev_source_concept": True,
+        "dev_source_commit": registry.dev_source_commit(app),   # non-None only if THIS node has the real checkout
+        "image_commit": app_variants.image_source_commit(app, host=host),
+        "image_installed": registry.image_installed(app),
+    }
+
+
 @app.get("/api/apps/{app_id}/variants")
 def app_variants_list(app_id: str, request: Request, dev: bool = False):
     """Catalog + installed/active state for this app's installable versions.
