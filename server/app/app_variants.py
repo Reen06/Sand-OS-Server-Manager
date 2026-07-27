@@ -367,6 +367,15 @@ def build_manifest(app: AppDef) -> dict:
         "mem_limit": app.mem_limit,
         "proxy_subpath": app.proxy_subpath,
         "keepalive_seconds": app.keepalive_seconds,
+        # Portable frontend facts (NOT mesh-specific): whether the app's
+        # bundle hardcodes absolute paths and so can't live under a shared
+        # subpath (openfoamgui/engineeringpaper — see own_subdomain's
+        # docstring in models.py), and whether it ships its own real PWA
+        # manifest that must not be overridden. A receiving SM's proxy keys
+        # its base-href/PWA-injection behavior off these.
+        "own_subdomain": app.own_subdomain,
+        "native_pwa": app.native_pwa,
+        "native_pwa_apple_icon": app.native_pwa_apple_icon or "",
         "mounts": [{"name": m.name, "path": m.path, "scope": m.scope, "ro": m.ro}
                    for m in app.mounts],
         "env_required": sorted(app.env.keys()),
@@ -402,18 +411,30 @@ def build_packaged(app: AppDef) -> dict:
 def _run_packaged_build(app: AppDef, job: dict) -> None:
     from . import registry
     try:
+        # Build against the app's ACTIVE daemon, same rule _run_install
+        # follows for variants: openfoamgui's multi-GB base lives on the USB
+        # drive's dockerd precisely so it never touches the node's own disk —
+        # building the packaged variant locally would drag it all back.
+        # webcad/helix resolve to None (local daemon), unchanged.
+        host = _host_for(app)
         commit = registry.dev_source_commit(app)
         dockerfile = os.path.join(app.packaged_build_context, app.packaged_dockerfile)
-        cmd = ["docker", "build", "-f", dockerfile, "-t", app.packaged_image]
+        cmd = ["docker", *_host_args(host), "build", "-f", dockerfile, "-t", app.packaged_image]
         if commit:
             cmd += ["--label", f"sandos.source_commit={commit}"]
             job["log"].append(f"building from source commit {commit[:12]}")
         cmd += ["--label", f"sandos.appdef={json.dumps(build_manifest(app), separators=(',', ':'))}"]
         cmd.append(app.packaged_build_context)
 
+        env = None
+        if host:
+            # Same buildx-ignores--H trap _run_install documents: force the
+            # legacy builder so the build actually lands on the -H daemon.
+            env = {**os.environ, "DOCKER_BUILDKIT": "0"}
+
         job["log"].append("$ " + " ".join(cmd))
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, bufsize=1)
+                                text=True, bufsize=1, env=env)
         for line in proc.stdout:
             job["log"].append(line.rstrip())
             job["log"][:] = job["log"][-500:]
@@ -421,7 +442,7 @@ def _run_packaged_build(app: AppDef, job: dict) -> None:
 
         if proc.returncode != 0:
             job["error"] = f"exit code {proc.returncode}"
-        elif not _docker_image_exists(app.packaged_image):
+        elif not _docker_image_exists(app.packaged_image, host):
             job["error"] = "build finished but the image tag wasn't produced"
     except Exception as e:  # noqa: BLE001
         job["error"] = str(e)
@@ -481,17 +502,22 @@ def _run_publish(app: AppDef, job: dict) -> None:
             job["error"] = f"build failed: {build_job['error']}"
             return
 
+        # Tag+push from the same daemon the build landed on (see
+        # _run_packaged_build) — `docker push` auth is client-side, so the
+        # node's normal `docker login` works unchanged through -H.
+        host = _host_for(app)
         commit = registry.dev_source_commit(app)
         tags = ["latest"] + ([commit[:12]] if commit else [])
         for tag in tags:
             target = f"{app.dockerhub_repo}:{tag}"
-            r = subprocess.run(["docker", "tag", app.packaged_image, target],
+            r = subprocess.run(["docker", *_host_args(host), "tag", app.packaged_image, target],
                                capture_output=True, text=True, timeout=30)
             if r.returncode != 0:
                 job["error"] = f"tag {target} failed: {r.stderr.strip()}"
                 return
             job["log"].append(f"$ docker push {target}")
-            proc = subprocess.Popen(["docker", "push", target], stdout=subprocess.PIPE,
+            proc = subprocess.Popen(["docker", *_host_args(host), "push", target],
+                                    stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, bufsize=1)
             for line in proc.stdout:
                 job["log"].append(line.rstrip())

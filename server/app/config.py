@@ -152,6 +152,11 @@ ENGINEERINGPAPER_IMAGE = os.environ.get("SM_ENGINEERINGPAPER_IMAGE", "sm-enginee
 # build context/Dockerfile at containers/openfoam-gui. Large — built directly
 # against the USB app-hosting drive's own dockerd, never touches local disk.
 OPENFOAM_GUI_IMAGE = os.environ.get("SM_OPENFOAM_GUI_IMAGE", "sm-openfoam-gui:latest")
+# Self-contained build (source COPYed + deps installed at image-build time) —
+# from Dockerfile.packaged at the OpenFOAM_GUI repo root. Same idea as
+# WEBCAD_PACKAGED_IMAGE; builds/pushes against the app's active daemon (the
+# USB drive's dockerd here — the multi-GB base never touches local disk).
+OPENFOAM_GUI_PACKAGED_IMAGE = os.environ.get("SM_OPENFOAM_GUI_PACKAGED_IMAGE", "sm-openfoam-gui:packaged")
 
 # ParaView (ParaViewWeb) — browser-based scientific visualizer, a 'web' app.
 # Official Kitware image (osmesa = software rendering, no GPU needed). This

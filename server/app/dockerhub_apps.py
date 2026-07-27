@@ -100,6 +100,8 @@ def _validate_manifest(m: dict) -> dict:
 
     def _s(key: str, maxlen: int, default: str = "", required: bool = False) -> str:
         v = m.get(key, default)
+        if v is None and not required:
+            v = default
         if not isinstance(v, str) or (required and not v):
             raise ValueError(f"manifest field {key!r} missing or not a string")
         return v[:maxlen]
@@ -158,6 +160,13 @@ def _validate_manifest(m: dict) -> dict:
             "this app declares sidecar services (DB/cache) — not yet supported "
             "for Docker Hub installs; the sidecars' credentials aren't in the manifest")
 
+    # Portable frontend facts (see build_manifest()): absolute-path bundles
+    # that can't run under a shared subpath, and real-PWA apps whose own
+    # manifest must be served untouched. apple icon is a same-origin path.
+    apple_icon = _s("native_pwa_apple_icon", 200)
+    if apple_icon and (not apple_icon.startswith("/") or ".." in apple_icon):
+        apple_icon = ""
+
     return {
         "schema": schema, "id": app_id,
         "label": _s("label", 60) or app_id,
@@ -168,6 +177,9 @@ def _validate_manifest(m: dict) -> dict:
         "gpu": bool(m.get("gpu", False)),
         "mem_limit": mem, "proxy_subpath": proxy_subpath,
         "keepalive_seconds": keepalive,
+        "own_subdomain": bool(m.get("own_subdomain", False)),
+        "native_pwa": bool(m.get("native_pwa", False)),
+        "native_pwa_apple_icon": apple_icon,
         "mounts": clean_mounts, "env_required": list(env_required),
     }
 
@@ -180,6 +192,9 @@ def _manifest_to_appdef(man: dict, image_ref: str, env_values: dict[str, str]) -
         internal_port=man["internal_port"], gpu=man["gpu"],
         mem_limit=man["mem_limit"], proxy_subpath=man["proxy_subpath"],
         keepalive_seconds=man["keepalive_seconds"],
+        own_subdomain=man.get("own_subdomain", False),
+        native_pwa=man.get("native_pwa", False),
+        native_pwa_apple_icon=man.get("native_pwa_apple_icon") or None,
         mounts=[Mount(name=mt["name"], path=mt["path"], scope=mt["scope"], ro=mt["ro"])
                 for mt in man["mounts"]],
         env=dict(env_values),

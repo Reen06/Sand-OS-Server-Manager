@@ -307,6 +307,14 @@ APPS: dict[str, AppDef] = {
         # NFS Mount — no host-editing workflow needed here, but the app was
         # already built expecting /gui to be the live repo, not baked-in code.
         binds=[("/home/control/OpenFOAM_GUI", "/gui")],
+        packaged_image=config.OPENFOAM_GUI_PACKAGED_IMAGE,
+        # Unlike webcad/helix (Dockerfile.packaged under containers/<app>/ in
+        # their repos), this one sits at the repo ROOT — the dev Dockerfile
+        # lives in THIS repo (containers/openfoam-gui), not the app's, so the
+        # app repo had no containers/ dir to mirror.
+        packaged_build_context="/home/control/OpenFOAM_GUI",
+        packaged_dockerfile="Dockerfile.packaged",
+        dockerhub_repo="reen16/openfoamgui",
     ),
     "paraview": AppDef(
         id="paraview",
