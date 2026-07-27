@@ -338,6 +338,43 @@ def _run_install(app: AppDef, v: AppVariant, job: dict) -> None:
 # the Hub's fleet_rebuild_and_deploy orchestrates.
 _packaged_jobs: dict[str, dict] = {}
 
+APPDEF_MANIFEST_SCHEMA = 1
+
+
+def build_manifest(app: AppDef) -> dict:
+    """The portable subset of this AppDef, baked into a published image as
+    the `sandos.appdef` label (see Docker Hub publish, below) — enough for a
+    DIFFERENT Server Manager install, on a mesh that's never heard of this
+    one, to auto-wire the app (port, volumes, env keys, GPU need) instead of
+    an admin hand-writing an AppDef in Python from scratch. Deliberately
+    excludes anything mesh-specific (binds, packaged_build_context,
+    dockerhub_repo itself, SSO/proxy wiring that assumes THIS Hub's auth) —
+    those aren't portable facts about the app, they're facts about this
+    particular deployment of it. env VALUES are never included — only which
+    keys the app expects — since values are often secrets or instance-
+    specific (a receiving admin fills these in themselves)."""
+    return {
+        "schema": APPDEF_MANIFEST_SCHEMA,
+        "id": app.id,
+        "label": app.label,
+        "icon": app.icon,
+        "color": app.color,
+        "desc": app.desc,
+        "kind": app.kind,
+        "mode": app.mode,
+        "internal_port": app.internal_port,
+        "gpu": app.gpu,
+        "mem_limit": app.mem_limit,
+        "proxy_subpath": app.proxy_subpath,
+        "keepalive_seconds": app.keepalive_seconds,
+        "mounts": [{"name": m.name, "path": m.path, "scope": m.scope, "ro": m.ro}
+                   for m in app.mounts],
+        "env_required": sorted(app.env.keys()),
+        "services": [{"name": s.name, "image": s.image, "env": sorted(s.env.keys()),
+                      "mounts": [{"name": m.name, "path": m.path} for m in s.mounts]}
+                     for s in app.services],
+    }
+
 
 def build_packaged(app: AppDef) -> dict:
     """Kick off a background rebuild of app.packaged_image FROM THIS NODE's
@@ -371,6 +408,7 @@ def _run_packaged_build(app: AppDef, job: dict) -> None:
         if commit:
             cmd += ["--label", f"sandos.source_commit={commit}"]
             job["log"].append(f"building from source commit {commit[:12]}")
+        cmd += ["--label", f"sandos.appdef={json.dumps(build_manifest(app), separators=(',', ':'))}"]
         cmd.append(app.packaged_build_context)
 
         job["log"].append("$ " + " ".join(cmd))
@@ -396,3 +434,82 @@ def packaged_build_status(app_id: str) -> dict | None:
     if not job:
         return None
     return {"done": job["done"], "error": job["error"], "log_tail": job["log"][-30:]}
+
+
+# ── publish to Docker Hub ────────────────────────────────────────────────────
+# App Definition Standard §11's developer-side half: sharing an app OUTSIDE
+# this mesh entirely, for a Server Manager install on a mesh that's never
+# heard of this one to consume. Deliberately separate from the internal
+# Rebuild & deploy flow (sm_fleet.py) — that transfers image bytes over a
+# Hub-brokered SSH relay between two nodes that already trust each other;
+# this pushes to a PUBLIC registry, a fundamentally different trust
+# boundary, and always rebuilds fresh first so what's published is never
+# stale relative to what "Rebuild & deploy" would have shipped internally.
+_publish_jobs: dict[str, dict] = {}
+
+
+def publish_to_dockerhub(app: AppDef) -> dict:
+    """Rebuild app.packaged_image fresh (so the published copy is never
+    behind the dev source — see build_packaged()) then `docker push` it to
+    app.dockerhub_repo as both `:latest` and `:<short-commit>`. Requires
+    `docker login` to already be set up for this daemon's user — this never
+    handles or stores a registry credential itself, same boundary as the
+    plain `docker` CLI. Raises ValueError if this app has no dockerhub_repo
+    configured, or (via build_packaged) this node isn't the dev machine."""
+    if not app.dockerhub_repo:
+        raise ValueError(f"{app.id} has no dockerhub_repo configured")
+    with _lock:
+        existing = _publish_jobs.get(app.id)
+        if existing and not existing["done"]:
+            raise ValueError(f"{app.id} publish already in progress")
+        job = {"log": [], "started_at": time.time(), "done": False, "error": None,
+               "repo": app.dockerhub_repo, "tags": []}
+        _publish_jobs[app.id] = job
+    threading.Thread(target=_run_publish, args=(app, job), daemon=True,
+                     name=f"publish-{app.id}").start()
+    return {"ok": True, "status": "publishing"}
+
+
+def _run_publish(app: AppDef, job: dict) -> None:
+    from . import registry
+    try:
+        job["log"].append("rebuilding packaged image fresh before publishing…")
+        build_job = {"log": [], "started_at": time.time(), "done": False, "error": None}
+        _run_packaged_build(app, build_job)
+        job["log"].extend(build_job["log"])
+        if build_job["error"]:
+            job["error"] = f"build failed: {build_job['error']}"
+            return
+
+        commit = registry.dev_source_commit(app)
+        tags = ["latest"] + ([commit[:12]] if commit else [])
+        for tag in tags:
+            target = f"{app.dockerhub_repo}:{tag}"
+            r = subprocess.run(["docker", "tag", app.packaged_image, target],
+                               capture_output=True, text=True, timeout=30)
+            if r.returncode != 0:
+                job["error"] = f"tag {target} failed: {r.stderr.strip()}"
+                return
+            job["log"].append(f"$ docker push {target}")
+            proc = subprocess.Popen(["docker", "push", target], stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, bufsize=1)
+            for line in proc.stdout:
+                job["log"].append(line.rstrip())
+                job["log"][:] = job["log"][-500:]
+            proc.wait(timeout=900)
+            if proc.returncode != 0:
+                job["error"] = f"push {target} failed: exit code {proc.returncode}"
+                return
+            job["tags"].append(target)
+    except Exception as e:  # noqa: BLE001
+        job["error"] = str(e)
+    finally:
+        job["done"] = True
+
+
+def publish_status(app_id: str) -> dict | None:
+    job = _publish_jobs.get(app_id)
+    if not job:
+        return None
+    return {"done": job["done"], "error": job["error"], "log_tail": job["log"][-30:],
+            "repo": job["repo"], "tags": job["tags"]}

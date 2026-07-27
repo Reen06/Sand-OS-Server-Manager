@@ -485,6 +485,7 @@ def sm_info():
              # app_variants.active_image()) — only flag it red when there's
              # neither the checkout NOR a packaged build installed here.
              "packaged_image": a.packaged_image,   # static AppDef fact — same tag fleet-wide
+             "dockerhub_repo": a.dockerhub_repo,    # static AppDef fact — where §11's publish flow pushes
              "packaged_image_installed": (
                  bool(a.packaged_image) and
                  app_variants._docker_image_exists(a.packaged_image, app_images.active_docker_host(a.id))
@@ -768,6 +769,35 @@ def app_packaged_build_status(app_id: str, request: Request):
     status = app_variants.packaged_build_status(app_id)
     if status is None:
         raise HTTPException(404, "no packaged build in progress or completed on this node")
+    return status
+
+
+@app.post("/api/apps/{app_id}/publish")
+def app_publish(app_id: str, request: Request):
+    """Publish this app to Docker Hub (App Definition Standard §11) — rebuilds
+    fresh (see app_variants.build_packaged()'s dev-machine-only guard) then
+    pushes :latest + :<short-commit> to app.dockerhub_repo, carrying a
+    sandos.appdef label so a DIFFERENT Server Manager install can auto-wire
+    it. Admin-only, and requires `docker login` already set up on this
+    node's daemon — this never touches or stores a registry credential."""
+    ident = _require_identity(request)
+    if ident.get("role") != "admin":
+        raise HTTPException(403, "admin only")
+    app = registry.APPS.get(app_id)
+    if app is None:
+        raise HTTPException(404, "unknown app")
+    try:
+        return app_variants.publish_to_dockerhub(app)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/apps/{app_id}/publish/status")
+def app_publish_status(app_id: str, request: Request):
+    _require_identity(request)
+    status = app_variants.publish_status(app_id)
+    if status is None:
+        raise HTTPException(404, "no publish in progress or completed on this node")
     return status
 
 

@@ -178,6 +178,14 @@ class AppDef:
     # deploy" flow (app_variants.build_packaged()); unused otherwise.
     packaged_build_context: str = ""
     packaged_dockerfile: str = ""
+    # The Docker Hub repo (e.g. "reen16/webcad") this app publishes to — the
+    # "share this app outside the mesh" path (App Definition Standard §11).
+    # None = not set up for publishing. See app_variants.build_manifest()/
+    # publish_to_dockerhub(): the pushed image carries a sandos.appdef label
+    # (this AppDef's portable config — port, mounts, env keys, etc.) so a
+    # DIFFERENT Server Manager install, on a mesh this one has never heard
+    # of, can pull it and auto-wire it without hand-writing an AppDef.
+    dockerhub_repo: str | None = None
     # Installable versions this app offers (empty = no version manager UI; the
     # app just always runs `image` as today). build_context is the Dockerfile
     # directory for "build"-kind variants, relative to the SM repo root — an
