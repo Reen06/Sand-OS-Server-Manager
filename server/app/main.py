@@ -814,16 +814,19 @@ def app_publish_status(app_id: str, request: Request):
 class _HubInstallBody(BaseModel):
     repo: str
     env: dict[str, str] = {}
+    internal_port: int | None = None   # generic installs: explicit HTTP port
 
 
 @app.post("/api/apps/hub-install")
 def hub_install(body: _HubInstallBody, request: Request):
-    """Pull a Sand-OS app image from Docker Hub and register it as a live
-    app on THIS node — reads the sandos.appdef manifest the publish flow
-    baked in; refuses anything without one. Admin-only: installs software."""
+    """Pull an app image from Docker Hub and register it as a live app on
+    THIS node. Sand-OS-published images bring their full sandos.appdef
+    manifest; anything else gets a generic install from the image's own
+    EXPOSE/VOLUME metadata (sane defaults, no SSO/GPU/per-user).
+    Admin-only: installs software."""
     _require_admin(request)
     try:
-        return dockerhub_apps.install(body.repo, body.env)
+        return dockerhub_apps.install(body.repo, body.env, body.internal_port)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

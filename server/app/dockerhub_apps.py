@@ -281,14 +281,18 @@ def job_status(repo_input: str) -> dict | None:
     if not job:
         return None
     return {"done": job["done"], "error": job["error"], "log_tail": job["log"][-30:],
-            "app_id": job.get("app_id"), "env_required": job.get("env_required", [])}
+            "app_id": job.get("app_id"), "env_required": job.get("env_required", []),
+            "generic": job.get("generic", False)}
 
 
-def install(repo_input: str, env: dict[str, str] | None = None) -> dict:
-    """Kick off a background pull+register of a Sand-OS app image from Docker
-    Hub. Returns immediately; poll job_status(). `env` supplies values for the
+def install(repo_input: str, env: dict[str, str] | None = None,
+            internal_port: int | None = None) -> dict:
+    """Kick off a background pull+register of an app image from Docker Hub.
+    Returns immediately; poll job_status(). `env` supplies values for the
     manifest's declared env_required keys — unknown keys are rejected loudly
-    rather than silently dropped."""
+    rather than silently dropped (generic installs, which declare nothing,
+    accept any keys). `internal_port` overrides port detection for a generic
+    image exposing several ports."""
     repo, tag = normalize_repo(repo_input)
     key = f"{repo}:{tag}"
     with _lock:
@@ -296,14 +300,69 @@ def install(repo_input: str, env: dict[str, str] | None = None) -> dict:
         if existing and not existing["done"]:
             raise ValueError(f"{key} install already in progress")
         job = {"log": [], "started_at": time.time(), "done": False, "error": None,
-               "app_id": None, "env_required": []}
+               "app_id": None, "env_required": [], "generic": False}
         _jobs[key] = job
-    threading.Thread(target=_run_install, args=(repo, tag, dict(env or {}), job),
+    threading.Thread(target=_run_install, args=(repo, tag, dict(env or {}), internal_port, job),
                      daemon=True, name=f"hub-install-{repo.replace('/', '-')}").start()
     return {"ok": True, "status": "installing", "repo": repo, "tag": tag}
 
 
-def _run_install(repo: str, tag: str, env: dict[str, str], job: dict) -> None:
+def _synthesize_manifest(repo: str, image_ref: str, internal_port: int | None,
+                         log: list[str]) -> dict:
+    """A best-effort manifest for a NON-Sand-OS image, from what the image
+    itself declares: EXPOSE → internal_port, VOLUME → shared named volumes
+    (so its data survives container recreation). This is the deliberate v1
+    of 'install any reasonable web-app image': no SSO, no GPU, shared mode,
+    default proxying — the admin can't get a broken bind mount or a hostile
+    mount path out of it because everything still passes _validate_manifest.
+    Raises ValueError when the image declares no usable port and none was
+    supplied — an unproxiable app, better refused than half-installed."""
+    r = subprocess.run(["docker", "image", "inspect", image_ref,
+                        "--format", "{{json .Config.ExposedPorts}} {{json .Config.Volumes}}"],
+                       capture_output=True, text=True, timeout=15)
+    if r.returncode != 0:
+        raise ValueError("docker image inspect failed after pull")
+    exposed_raw, _, volumes_raw = r.stdout.strip().partition(" ")
+    exposed = json.loads(exposed_raw or "null") or {}
+    volumes = json.loads(volumes_raw or "null") or {}
+
+    ports = sorted(int(p.split("/")[0]) for p in exposed if p.endswith("/tcp"))
+    if internal_port:
+        port = internal_port
+        log.append(f"using supplied port {port}")
+    elif len(ports) == 1:
+        port = ports[0]
+        log.append(f"image exposes port {port}")
+    elif not ports:
+        raise ValueError(
+            "this image declares no EXPOSEd TCP port and none was supplied — "
+            "can't proxy it; provide the app's HTTP port explicitly")
+    else:
+        raise ValueError(
+            f"this image exposes several ports ({', '.join(map(str, ports))}) — "
+            "provide the app's HTTP port explicitly")
+
+    name = repo.rsplit("/", 1)[-1]
+    app_id = re.sub(r"[^a-z0-9-]", "-", name.lower()).strip("-")[:40] or "app"
+    mounts = []
+    for path in sorted(volumes):
+        mname = re.sub(r"[^a-z0-9-]", "-", path.lower()).strip("-")[:40]
+        if mname:
+            mounts.append({"name": mname, "path": path, "scope": "shared", "ro": False})
+            log.append(f"volume {path} → persistent shared volume")
+
+    return _validate_manifest({
+        "schema": SUPPORTED_SCHEMA, "id": app_id,
+        "label": name[:60], "icon": "cpu", "color": "blue",
+        "desc": f"Generic Docker Hub install of {repo} (no Sand-OS manifest).",
+        "kind": "web", "mode": "shared", "internal_port": port,
+        "gpu": False, "mem_limit": "", "proxy_subpath": "forward",
+        "keepalive_seconds": 600, "mounts": mounts, "env_required": [],
+    })
+
+
+def _run_install(repo: str, tag: str, env: dict[str, str],
+                 internal_port: int | None, job: dict) -> None:
     from . import registry
     image_ref = f"{repo}:{tag}"
     try:
@@ -323,21 +382,41 @@ def _run_install(repo: str, tag: str, env: dict[str, str], job: dict) -> None:
              "--format", '{{index .Config.Labels "sandos.appdef"}}'],
             capture_output=True, text=True, timeout=15)
         raw = r.stdout.strip()
-        if r.returncode != 0 or not raw or raw == "<no value>":
-            job["error"] = ("not a Sand-OS app image — no sandos.appdef manifest label. "
-                            "Only images published through a Sand-OS Server Manager "
-                            "(App Definition Standard §11) can be installed this way.")
+        generic = r.returncode == 0 and (not raw or raw == "<no value>")
+        if r.returncode != 0:
+            job["error"] = "docker image inspect failed after pull"
             return
-        try:
-            man = _validate_manifest(json.loads(raw))
-        except (ValueError, json.JSONDecodeError) as e:
-            job["error"] = f"invalid sandos.appdef manifest: {e}"
-            return
-        job["env_required"] = man["env_required"]
 
-        unknown = set(env) - set(man["env_required"])
-        if unknown:
-            job["error"] = f"env keys not declared by this app: {', '.join(sorted(unknown))}"
+        if generic:
+            # No Sand-OS manifest — fall back to what the image itself
+            # declares (EXPOSE/VOLUME). Full-fidelity config (SSO, GPU,
+            # per-user mode, subdomain frontends…) still needs a published
+            # manifest; this path is "reasonable web app, sane defaults".
+            job["generic"] = True
+            job["log"].append("no sandos.appdef manifest — generic install from image metadata")
+            try:
+                man = _synthesize_manifest(repo, image_ref, internal_port, job["log"])
+            except ValueError as e:
+                job["error"] = str(e)
+                return
+        else:
+            try:
+                man = _validate_manifest(json.loads(raw))
+            except (ValueError, json.JSONDecodeError) as e:
+                job["error"] = f"invalid sandos.appdef manifest: {e}"
+                return
+            job["env_required"] = man["env_required"]
+            unknown = set(env) - set(man["env_required"])
+            if unknown:
+                job["error"] = f"env keys not declared by this app: {', '.join(sorted(unknown))}"
+                return
+
+        # Generic installs accept any (valid-shaped) env keys — there's no
+        # declared contract to check against, and images like linuxserver.io's
+        # genuinely need PUID/TZ-style settings.
+        bad_keys = [k for k in env if not _ENVKEY_RE.match(k)]
+        if bad_keys:
+            job["error"] = f"invalid env key(s): {', '.join(sorted(bad_keys))}"
             return
 
         app_id = ID_PREFIX + man["id"]
@@ -350,11 +429,12 @@ def _run_install(repo: str, tag: str, env: dict[str, str], job: dict) -> None:
         with _lock:
             registry.APPS[app_id] = app
             _state[app_id] = {"repo": repo, "tag": tag, "image_ref": image_ref,
-                              "manifest": man, "env": env,
+                              "manifest": man, "env": env, "generic": generic,
                               "digest": digest, "installed_at": time.time()}
             _save_state()
         job["app_id"] = app_id
-        job["log"].append(f"registered as {app_id} ({man['label']})")
+        job["log"].append(f"registered as {app_id} ({man['label']})"
+                          + (" — generic install" if generic else ""))
     except Exception as e:  # noqa: BLE001
         job["error"] = str(e)
     finally:
@@ -443,8 +523,11 @@ def check_update(app_id: str) -> dict:
 def update(app_id: str) -> dict:
     """Re-pull + re-register from the same repo:tag — a fresh install run
     that keeps the admin's env values. Same job machinery/status endpoint
-    as install."""
+    as install. A generic install keeps its established port across
+    updates (re-detection could flip to 'several ports, be explicit' if
+    the image's EXPOSE list grew)."""
     rec = _state.get(app_id)
     if not rec:
         raise ValueError(f"{app_id} is not a Docker Hub-installed app")
-    return install(f"{rec['repo']}:{rec['tag']}", rec.get("env") or {})
+    port = rec["manifest"]["internal_port"] if rec.get("generic") else None
+    return install(f"{rec['repo']}:{rec['tag']}", rec.get("env") or {}, internal_port=port)
