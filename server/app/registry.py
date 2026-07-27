@@ -28,6 +28,7 @@ APPS: dict[str, AppDef] = {
         color="blue",
         desc="Full FreeCAD 1.1.1, streamed — your own GPU instance.",
         image=config.FREECAD_IMAGE,
+        dockerhub_repo="reen16/freecad-streamer",   # §11 publish target (fork of an upstream app, SM-tailored)
         kind="streamed",
         mode="per-user",
         internal_port=8080,
@@ -75,6 +76,7 @@ APPS: dict[str, AppDef] = {
         color="amber",
         desc="Browse & manage your files — private home + the shared library.",
         image=config.FILEBROWSER_IMAGE,
+        dockerhub_repo="reen16/filebrowser",   # §11 publish target (fork of an upstream app, SM-tailored)
         build_context="containers/filebrowser",
         kind="web",
         mode="per-user",
@@ -188,6 +190,7 @@ APPS: dict[str, AppDef] = {
         # Build from /home/control/OpenMapper/app/Dockerfile (source is COPYed
         # in at build time here, not bind-mounted — no `binds` on this app).
         image=config.OPENMAPPER_IMAGE,
+        dockerhub_repo="reen16/openmapper",   # §11 publish target (fork of an upstream app, SM-tailored)
         build_context="/home/control/OpenMapper/app",
         kind="web",
         mode="shared",
@@ -204,7 +207,17 @@ APPS: dict[str, AppDef] = {
         color="cyan",
         desc="2D geometric optics simulator — draw rays, lenses and mirrors.",
         image=config.RAYOPTICS_IMAGE,
-        build_context="containers/rayoptics",
+        dockerhub_repo="reen16/rayoptics",   # §11 publish target (fork of an upstream app, SM-tailored)
+        # The REAL build context is the ray-optics source checkout — the
+        # Dockerfile's `COPY . .` copies the app source, and build.sh always
+        # built it that way (`-f containers/rayoptics/Dockerfile <checkout>`).
+        # The old value here ("containers/rayoptics", just the Dockerfile's
+        # own dir) never produced a working build; it only looked plausible
+        # because nothing re-ran the build from the AppDef until the §11
+        # publish flow tried to. Same context-lives-in-the-source-clone shape
+        # as engineeringpaper.
+        build_context="/home/control/ray-optics",
+        build_dockerfile="containers/rayoptics/Dockerfile",
         kind="web",
         mode="shared",       # one static site for everyone; saving is per-user via /api/files
         internal_port=80,
@@ -226,6 +239,7 @@ APPS: dict[str, AppDef] = {
         # `docker build -t sm-renode-web:latest containers/renode-web` once,
         # same manual-build pattern as WebCAD/HeliX/OpenMapper (no variants).
         image=config.RENODE_IMAGE,
+        dockerhub_repo="reen16/renode-web",   # §11 publish target (fork of an upstream app, SM-tailored)
         build_context="containers/renode-web",
         kind="web",
         mode="shared",
@@ -245,6 +259,7 @@ APPS: dict[str, AppDef] = {
         # sm-engineeringpaper:latest /home/control/EngineeringPaper.xyz` once,
         # same manual-build pattern as Ray Optics/Renode (no variants).
         image=config.ENGINEERINGPAPER_IMAGE,
+        dockerhub_repo="reen16/engineeringpaper",   # §11 publish target (fork of an upstream app, SM-tailored)
         build_context="/home/control/EngineeringPaper.xyz",
         build_dockerfile="containers/engineeringpaper/Dockerfile",
         kind="web",
@@ -330,6 +345,7 @@ APPS: dict[str, AppDef] = {
         # the launcher's ProxyPass — an Apache mod_proxy circuit-breaker bug,
         # not anything GPU/rendering-related).
         image=config.PARAVIEW_IMAGE,
+        dockerhub_repo="reen16/paraview",   # §11 publish target (fork of an upstream app, SM-tailored)
         build_context="containers/paraview",
         kind="web",
         # per-user, not shared: each user gets their OWN instance/data — a
@@ -426,6 +442,7 @@ APPS: dict[str, AppDef] = {
         color="blue",
         desc="Your private cloud — files, Photos, sharing. One account, SSO'd.",
         image=config.NEXTCLOUD_IMAGE,
+        dockerhub_repo="reen16/nextcloud",   # §11 publish target (fork of an upstream app, SM-tailored)
         build_context="containers/nextcloud",
         kind="web",
         mode="shared",              # ONE Nextcloud, per-user accounts inside it
@@ -532,6 +549,7 @@ APPS: dict[str, AppDef] = {
         # interpreter's sandboxed iframe (see config.py's OPEN_WEBUI_IMAGE
         # comment for why).
         image=config.OPEN_WEBUI_IMAGE,
+        dockerhub_repo="reen16/open-webui",   # §11 publish target (fork of an upstream app, SM-tailored)
         build_context="containers/open-webui",
         kind="web",
         mode="shared",

@@ -167,6 +167,22 @@ def _validate_manifest(m: dict) -> dict:
     if apple_icon and (not apple_icon.startswith("/") or ".." in apple_icon):
         apple_icon = ""
 
+    # Streamed tuning: whitelist the encoder (it lands in the spawn args).
+    encoder = _s("encoder", 16, "nvh264enc")
+    if encoder not in ("nvh264enc", "x264enc"):
+        encoder = "nvh264enc"
+
+    # Trusted-header SSO NAMES (portable — this SM's proxy injects its own
+    # authenticated user under them). Strict header-token shape; anything
+    # else is dropped rather than reaching the proxy layer.
+    hdr_re = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+    sso_header = _s("sso_header", 64)
+    sso_role_header = _s("sso_role_header", 64)
+    if sso_header and not hdr_re.match(sso_header):
+        sso_header = ""
+    if sso_role_header and not hdr_re.match(sso_role_header):
+        sso_role_header = ""
+
     return {
         "schema": schema, "id": app_id,
         "label": _s("label", 60) or app_id,
@@ -180,6 +196,9 @@ def _validate_manifest(m: dict) -> dict:
         "own_subdomain": bool(m.get("own_subdomain", False)),
         "native_pwa": bool(m.get("native_pwa", False)),
         "native_pwa_apple_icon": apple_icon,
+        "encoder": encoder, "resize": bool(m.get("resize", False)),
+        "sso_header": sso_header, "sso_role_header": sso_role_header,
+        "sso_role_value": _s("sso_role_value", 32) or "user",
         "mounts": clean_mounts, "env_required": list(env_required),
     }
 
@@ -195,6 +214,11 @@ def _manifest_to_appdef(man: dict, image_ref: str, env_values: dict[str, str]) -
         own_subdomain=man.get("own_subdomain", False),
         native_pwa=man.get("native_pwa", False),
         native_pwa_apple_icon=man.get("native_pwa_apple_icon") or None,
+        encoder=man.get("encoder", "nvh264enc"),
+        resize=man.get("resize", False),
+        sso_header=man.get("sso_header") or None,
+        sso_role_header=man.get("sso_role_header") or None,
+        sso_role_value=man.get("sso_role_value", "user"),
         mounts=[Mount(name=mt["name"], path=mt["path"], scope=mt["scope"], ro=mt["ro"])
                 for mt in man["mounts"]],
         env=dict(env_values),

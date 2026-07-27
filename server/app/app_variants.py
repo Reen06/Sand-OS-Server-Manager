@@ -376,13 +376,94 @@ def build_manifest(app: AppDef) -> dict:
         "own_subdomain": app.own_subdomain,
         "native_pwa": app.native_pwa,
         "native_pwa_apple_icon": app.native_pwa_apple_icon or "",
-        "mounts": [{"name": m.name, "path": m.path, "scope": m.scope, "ro": m.ro}
+        # Streamed-only tuning — defaults for web apps, real for FreeCAD-class
+        # streamed desktops; a receiving node needs them to spawn correctly.
+        "encoder": app.encoder,
+        "resize": app.resize,
+        # Trusted-header SSO names are PORTABLE app facts, unlike docker_args
+        # (mesh plumbing, deliberately excluded): the receiving SM's proxy
+        # injects ITS OWN authenticated username under these exact headers,
+        # so an app tailored for header SSO (Open WebUI) logs users straight
+        # in on any mesh. Header NAMES only — never secrets.
+        "sso_header": app.sso_header or "",
+        "sso_role_header": app.sso_role_header or "",
+        "sso_role_value": app.sso_role_value,
+        # scope="root" (mount the ENTIRE fleet NAS export — Nextcloud/Open
+        # WebUI scope per-user themselves) is inherently mesh-specific: a
+        # receiving install has no fleet NAS. Translate to a plain shared
+        # volume so the app still gets persistent storage at that path;
+        # `storage` (nfs/usb) is likewise stripped — a receiver's own
+        # storage layout is its own business.
+        "mounts": [{"name": m.name, "path": m.path,
+                    "scope": "shared" if m.scope == "root" else m.scope,
+                    "ro": m.ro}
                    for m in app.mounts],
         "env_required": sorted(app.env.keys()),
         "services": [{"name": s.name, "image": s.image, "env": sorted(s.env.keys()),
                       "mounts": [{"name": m.name, "path": m.path} for m in s.mounts]}
                      for s in app.services],
     }
+
+
+def _context_commit(ctx: str) -> str | None:
+    """Git commit of whatever tree a build context sits in — the app's own
+    source clone (EngineeringPaper.xyz, OpenMapper) or this SM repo itself
+    (containers/* contexts). None for a non-git context. Gives every
+    published image a truthful sandos.source_commit even for apps with no
+    dev-source binds."""
+    try:
+        r = subprocess.run(["git", "-C", ctx, "rev-parse", "HEAD"],
+                           capture_output=True, text=True, timeout=10)
+        return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _publish_build_spec(app: AppDef) -> tuple[str, str | None, str, dict[str, str]]:
+    """(context_abs, dockerfile_abs|None, image_tag, build_args) for building
+    this app's publishable image. Three shapes:
+      - binds app (webcad/helix/openfoamgui): the SEPARATE packaged build —
+        Dockerfile.packaged, packaged_image tag — since its normal image
+        expects a bind-mounted source tree.
+      - variants app (freecad-streamer): the ACTIVE variant's build
+        definition — its image_tag and, crucially, its build_args (a bare
+        context build without FREECAD_APPIMAGE_URL would fail). Resolver
+        variants get resolved by the caller, same as _run_install.
+      - plain custom build (engineeringpaper, renode…): the app's normal
+        build definition — its image already IS self-contained, so the
+        publish rebuild just adds the labels.
+    Raises ValueError for apps with nothing custom to build (pure upstream
+    images like stirlingpdf/ollama — publishing someone else's unmodified
+    image would be pointless AND label-less)."""
+    if app.binds:
+        if not (app.packaged_image and app.packaged_build_context and app.packaged_dockerfile):
+            raise ValueError(f"{app.id} has no packaged build configured")
+        ctx = app.packaged_build_context
+        return ctx, os.path.join(ctx, app.packaged_dockerfile), app.packaged_image, {}
+    if app.build_context:
+        ctx = app.build_context if os.path.isabs(app.build_context) \
+            else os.path.join(_REPO_ROOT, app.build_context)
+        df = None
+        if app.build_dockerfile:
+            df = app.build_dockerfile if os.path.isabs(app.build_dockerfile) \
+                else os.path.join(_REPO_ROOT, app.build_dockerfile)
+        tag = app.image
+        build_args: dict[str, str] = {}
+        if app.variants:
+            state = _load_state()
+            variant_id = state.get(app.id, {}).get("variant_id") or _default_active(app)
+            try:
+                v = _variant(app, variant_id)
+                tag = v.image_tag
+                build_args = dict(v.build_args)
+                if v.resolver:
+                    resolved = _RESOLVERS[v.resolver](v)
+                    build_args.update({k: val for k, val in resolved.items()
+                                       if not k.startswith("_")})
+            except KeyError:
+                pass
+        return ctx, df, tag, build_args
+    raise ValueError(f"{app.id} runs a pure upstream image — nothing custom to publish")
 
 
 def build_packaged(app: AppDef) -> dict:
@@ -417,14 +498,22 @@ def _run_packaged_build(app: AppDef, job: dict) -> None:
         # building the packaged variant locally would drag it all back.
         # webcad/helix resolve to None (local daemon), unchanged.
         host = _host_for(app)
-        commit = registry.dev_source_commit(app)
-        dockerfile = os.path.join(app.packaged_build_context, app.packaged_dockerfile)
-        cmd = ["docker", *_host_args(host), "build", "-f", dockerfile, "-t", app.packaged_image]
+        ctx, dockerfile, tag, build_args = _publish_build_spec(app)
+        # Truthful provenance either way: the live dev checkout's commit for
+        # a binds app, else the build context's own git tree (the app's
+        # source clone, or this SM repo for containers/* contexts).
+        commit = registry.dev_source_commit(app) or _context_commit(ctx)
+        cmd = ["docker", *_host_args(host), "build"]
+        if dockerfile:
+            cmd += ["-f", dockerfile]
+        cmd += ["-t", tag]
+        for k, val in build_args.items():
+            cmd += ["--build-arg", f"{k}={val}"]
         if commit:
             cmd += ["--label", f"sandos.source_commit={commit}"]
             job["log"].append(f"building from source commit {commit[:12]}")
         cmd += ["--label", f"sandos.appdef={json.dumps(build_manifest(app), separators=(',', ':'))}"]
-        cmd.append(app.packaged_build_context)
+        cmd.append(ctx)
 
         env = None
         if host:
@@ -442,7 +531,7 @@ def _run_packaged_build(app: AppDef, job: dict) -> None:
 
         if proc.returncode != 0:
             job["error"] = f"exit code {proc.returncode}"
-        elif not _docker_image_exists(app.packaged_image, host):
+        elif not _docker_image_exists(tag, host):
             job["error"] = "build finished but the image tag wasn't produced"
     except Exception as e:  # noqa: BLE001
         job["error"] = str(e)
@@ -506,11 +595,12 @@ def _run_publish(app: AppDef, job: dict) -> None:
         # _run_packaged_build) — `docker push` auth is client-side, so the
         # node's normal `docker login` works unchanged through -H.
         host = _host_for(app)
-        commit = registry.dev_source_commit(app)
+        ctx, _dockerfile, built_tag, _build_args = _publish_build_spec(app)
+        commit = registry.dev_source_commit(app) or _context_commit(ctx)
         tags = ["latest"] + ([commit[:12]] if commit else [])
         for tag in tags:
             target = f"{app.dockerhub_repo}:{tag}"
-            r = subprocess.run(["docker", *_host_args(host), "tag", app.packaged_image, target],
+            r = subprocess.run(["docker", *_host_args(host), "tag", built_tag, target],
                                capture_output=True, text=True, timeout=30)
             if r.returncode != 0:
                 job["error"] = f"tag {target} failed: {r.stderr.strip()}"
