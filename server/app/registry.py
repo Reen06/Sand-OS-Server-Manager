@@ -676,6 +676,16 @@ APPS: dict[str, AppDef] = {
     ),
 }
 
+# Apps installed from Docker Hub on THIS node (App Definition Standard §11's
+# user workflow — dockerhub_apps.py) join the catalogue at import time, which
+# is deliberately BEFORE reconcile_from_docker() ever runs: a running
+# hub-app container survives an SM restart and gets re-adopted exactly like
+# a built-in app's would. dockerhub_apps must not import registry at module
+# level (it defers via `from . import registry` inside functions) or this
+# would be a circular import.
+from . import dockerhub_apps as _dockerhub_apps  # noqa: E402
+APPS.update(_dockerhub_apps.load_installed())
+
 
 def resolve_volume(app_id: str, user: str, m: Mount) -> str:
     """Logical mount → real docker volume name. Per-user volumes are private to

@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import app_images, app_storage, app_variants, busy, config, docker_backend, files, glances_svc, hub_auth, metrics, nas, ollama_mgr, pending_imports, proxy, pwa, registry, snapshots, usb_storage
+from . import app_images, app_storage, app_variants, busy, config, docker_backend, dockerhub_apps, files, glances_svc, hub_auth, metrics, nas, ollama_mgr, pending_imports, proxy, pwa, registry, snapshots, usb_storage
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -486,6 +486,10 @@ def sm_info():
              # neither the checkout NOR a packaged build installed here.
              "packaged_image": a.packaged_image,   # static AppDef fact — same tag fleet-wide
              "dockerhub_repo": a.dockerhub_repo,    # static AppDef fact — where §11's publish flow pushes
+             # §11's receiving side: this app was installed FROM Docker Hub
+             # on this node (dockerhub_apps.py) rather than being built in.
+             "hub_installed": dockerhub_apps.is_hub_app(a.id),
+             "hub_repo": dockerhub_apps.hub_repo_of(a.id),
              "packaged_image_installed": (
                  bool(a.packaged_image) and
                  app_variants._docker_image_exists(a.packaged_image, app_images.active_docker_host(a.id))
@@ -799,6 +803,69 @@ def app_publish_status(app_id: str, request: Request):
     if status is None:
         raise HTTPException(404, "no publish in progress or completed on this node")
     return status
+
+
+# ── Install apps FROM Docker Hub (App Definition Standard §11, user side) ────
+# NOTE: these two literal paths are registered BEFORE /api/apps/{app_id}/status
+# below on purpose — FastAPI matches in registration order, so the literal
+# "hub-install" segment wins over the {app_id} pattern only because it comes
+# first. Don't move them below the parameterized routes.
+
+class _HubInstallBody(BaseModel):
+    repo: str
+    env: dict[str, str] = {}
+
+
+@app.post("/api/apps/hub-install")
+def hub_install(body: _HubInstallBody, request: Request):
+    """Pull a Sand-OS app image from Docker Hub and register it as a live
+    app on THIS node — reads the sandos.appdef manifest the publish flow
+    baked in; refuses anything without one. Admin-only: installs software."""
+    _require_admin(request)
+    try:
+        return dockerhub_apps.install(body.repo, body.env)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/apps/hub-install/status")
+def hub_install_status(repo: str, request: Request):
+    _require_identity(request)
+    status = dockerhub_apps.job_status(repo)
+    if status is None:
+        raise HTTPException(404, "no install job for that repo on this node")
+    return status
+
+
+@app.post("/api/apps/{app_id}/hub-uninstall")
+def hub_uninstall(app_id: str, request: Request):
+    _require_admin(request)
+    try:
+        return dockerhub_apps.uninstall(app_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/apps/{app_id}/hub-check")
+def hub_check(app_id: str, request: Request):
+    """Is a newer image available on Docker Hub for this hub-installed app?
+    Digest comparison via the registry API — read-only, nothing pulled."""
+    _require_identity(request)
+    try:
+        return dockerhub_apps.check_update(app_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/apps/{app_id}/hub-update")
+def hub_update(app_id: str, request: Request):
+    """Re-pull + re-register from the same repo:tag (keeps configured env).
+    Poll /api/apps/hub-install/status?repo=… — same job machinery."""
+    _require_admin(request)
+    try:
+        return dockerhub_apps.update(app_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/apps/{app_id}/variants")
