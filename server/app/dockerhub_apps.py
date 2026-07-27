@@ -270,6 +270,14 @@ def hub_repo_of(app_id: str) -> str | None:
     return rec["repo"] if rec else None
 
 
+def is_generic(app_id: str) -> bool:
+    """True for an app installed from a PLAIN image (no sandos.appdef
+    manifest — set up from EXPOSE/VOLUME metadata alone). The dashboard
+    shows a disclaimer for these: unvetted config, no SSO, unofficial."""
+    rec = _state.get(app_id)
+    return bool(rec and rec.get("generic"))
+
+
 # ── install / update jobs ────────────────────────────────────────────────────
 
 def job_status(repo_input: str) -> dict | None:

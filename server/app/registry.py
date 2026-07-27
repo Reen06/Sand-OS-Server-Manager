@@ -4,6 +4,7 @@ Holds the App Definitions, allocates per-instance ports/volumes, and resolves
 launch/stop/status against the Docker backend. State is in-memory and
 reconciled from Docker on startup (single-node MVP)."""
 from __future__ import annotations
+import json
 import os
 import re
 import subprocess
@@ -20,7 +21,11 @@ _INSTALLED_CACHE: dict[str, tuple[float, bool]] = {}
 _INSTALLED_TTL = 30.0
 
 # ── App catalogue (add more App Definitions here) ──────────────────────────────
-APPS: dict[str, AppDef] = {
+# CATALOG = every app definition this SM build SHIPS. APPS (built below) =
+# the subset actually enabled on THIS node, plus dynamically-registered apps
+# (Docker Hub installs, pending USB imports). A fresh install starts with an
+# EMPTY library — only apps the owner adds ever appear on their dashboard.
+CATALOG: dict[str, AppDef] = {
     "freecad": AppDef(
         id="freecad",
         label="FreeCAD",
@@ -701,6 +706,96 @@ APPS: dict[str, AppDef] = {
         ],
     ),
 }
+
+# ── Per-node app library (which CATALOG apps are enabled here) ───────────────
+_CATALOG_STATE = os.environ.get(
+    "SM_CATALOG_STATE", os.path.expanduser("~/.sandos-sm/catalog.json"))
+
+
+def _image_exists_any_daemon(tag: str) -> bool:
+    for host in docker_backend.all_docker_hosts():
+        args = ["docker"] + (["-H", host] if host else []) + ["image", "inspect", tag]
+        try:
+            if subprocess.run(args, capture_output=True, timeout=10).returncode == 0:
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+    return False
+
+
+def _seed_enabled() -> list[str]:
+    """First boot with no library state: enable exactly the built-ins whose
+    image already exists on one of this node's daemons — an existing node
+    keeps its working set across the upgrade, while a genuinely fresh
+    install (no images yet) starts with an EMPTY library. Deliberately does
+    NOT trust auto_pull/image_installed()'s always-true shortcut for public
+    upstream images — that would seed ollama onto every fresh node."""
+    out = []
+    for app in CATALOG.values():
+        for tag in filter(None, (app.image, app.packaged_image)):
+            if _image_exists_any_daemon(tag):
+                out.append(app.id)
+                break
+    return out
+
+
+def _save_enabled() -> None:
+    os.makedirs(os.path.dirname(_CATALOG_STATE), exist_ok=True)
+    tmp = _CATALOG_STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"enabled": [i for i in APPS if i in CATALOG]}, f, indent=2)
+    os.replace(tmp, _CATALOG_STATE)
+
+
+def _load_enabled() -> list[str]:
+    try:
+        with open(_CATALOG_STATE) as f:
+            return [i for i in json.load(f).get("enabled", []) if i in CATALOG]
+    except FileNotFoundError:
+        return _seed_enabled()
+    except Exception as e:  # noqa: BLE001
+        # Corrupt state fails OPEN (full catalogue), never closed — a broken
+        # file must not make every app vanish from a working node.
+        print(f"[registry] catalog state unreadable, enabling all: {e}")
+        return list(CATALOG)
+
+
+APPS: dict[str, AppDef] = {i: CATALOG[i] for i in _load_enabled()}
+if not os.path.exists(_CATALOG_STATE):
+    _save_enabled()   # make the seed durable so later boots don't re-scan docker
+
+
+def catalog_summary() -> list[dict]:
+    """Every SHIPPED app + whether it's enabled on this node — the 'built-in
+    app library' the Install-app modal offers."""
+    return [{"id": a.id, "label": a.label, "icon": a.icon, "color": a.color,
+             "desc": a.desc, "kind": a.kind, "gpu": a.gpu,
+             "enabled": a.id in APPS}
+            for a in CATALOG.values()]
+
+
+def enable_app(app_id: str) -> dict:
+    if app_id not in CATALOG:
+        raise ValueError(f"{app_id!r} is not a built-in app")
+    APPS[app_id] = CATALOG[app_id]
+    _save_enabled()
+    return {"ok": True, "enabled": True}
+
+
+def disable_app(app_id: str) -> dict:
+    """Hide a built-in app from this node's library. Refuses while an
+    instance is running; the app's image and data volumes are untouched —
+    re-enabling brings it back exactly as it was."""
+    if app_id not in CATALOG:
+        raise ValueError(f"{app_id!r} is not a built-in app")
+    if app_id not in APPS:
+        return {"ok": True, "enabled": False}
+    if any(i["app_id"] == app_id and i["running"] for i in instances_summary()):
+        raise ValueError("stop the app before removing it from the library")
+    del APPS[app_id]
+    _save_enabled()
+    return {"ok": True, "enabled": False}
+
 
 # Apps installed from Docker Hub on THIS node (App Definition Standard §11's
 # user workflow — dockerhub_apps.py) join the catalogue at import time, which

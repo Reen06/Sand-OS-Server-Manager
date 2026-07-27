@@ -490,6 +490,7 @@ def sm_info():
              # on this node (dockerhub_apps.py) rather than being built in.
              "hub_installed": dockerhub_apps.is_hub_app(a.id),
              "hub_repo": dockerhub_apps.hub_repo_of(a.id),
+             "hub_generic": dockerhub_apps.is_generic(a.id),   # plain image, unvetted config
              "packaged_image_installed": (
                  bool(a.packaged_image) and
                  app_variants._docker_image_exists(a.packaged_image, app_images.active_docker_host(a.id))
@@ -838,6 +839,36 @@ def hub_install_status(repo: str, request: Request):
     if status is None:
         raise HTTPException(404, "no install job for that repo on this node")
     return status
+
+
+# ── Per-node app library: which SHIPPED apps are enabled here ────────────────
+# A fresh install starts empty (registry._seed_enabled()); these endpoints
+# are how built-in apps get added to (or removed from) a node's library.
+# Same registration-order note as hub-install above: the literal "catalog"
+# segment must register before /api/apps/{app_id}/status.
+
+@app.get("/api/apps/catalog")
+def apps_catalog(request: Request):
+    _require_identity(request)
+    return {"catalog": registry.catalog_summary()}
+
+
+@app.post("/api/apps/catalog/{app_id}/enable")
+def catalog_enable(app_id: str, request: Request):
+    _require_admin(request)
+    try:
+        return registry.enable_app(app_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/apps/catalog/{app_id}/disable")
+def catalog_disable(app_id: str, request: Request):
+    _require_admin(request)
+    try:
+        return registry.disable_app(app_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.post("/api/apps/{app_id}/hub-uninstall")
