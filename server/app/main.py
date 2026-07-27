@@ -1226,7 +1226,8 @@ def ollama_loaded(request: Request):
     return {"ok": True,
             "running": ollama_mgr.ollama_running(),
             "loaded": ollama_mgr.running_models(),
-            "keep_alive": ollama_mgr.get_keep_alive()}
+            "keep_alive": ollama_mgr.get_keep_alive(),
+            "model_config": ollama_mgr.model_config()}
 
 
 class _OllamaUnloadBody(BaseModel):
@@ -1258,6 +1259,30 @@ def ollama_keep_alive(body: _OllamaKeepAliveBody, request: Request):
         raise HTTPException(400, msg)
     return {"ok": True, "message": msg,
             "applies": "next Ollama start" if ollama_mgr.ollama_running() else "now"}
+
+
+class _OllamaModelCfgBody(BaseModel):
+    model: str
+    num_ctx: int | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    num_gpu: int | None = None
+
+
+@app.post("/api/apps/ollama/model-config")
+def ollama_model_config(body: _OllamaModelCfgBody, request: Request):
+    """Set per-model inference parameters ON THIS NODE. Per-node by design:
+    the same model on a GPU box and a small server wants different limits.
+    Saved and baked onto the model so it applies to every request, including
+    through the OpenAI-compatible endpoint Open WebUI uses."""
+    _require_admin(request)
+    ok, msg = ollama_mgr.set_model_config(
+        body.model,
+        {"num_ctx": body.num_ctx, "temperature": body.temperature,
+         "top_p": body.top_p, "num_gpu": body.num_gpu})
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"ok": True, "message": msg, "config": ollama_mgr.model_config(body.model)}
 
 
 @app.get("/api/apps/ollama/llm-status")

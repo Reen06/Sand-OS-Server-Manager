@@ -148,6 +148,147 @@ def get_keep_alive() -> str:
     return "5m"
 
 
+_MODEL_CFG_FILE = os.path.join(config.NAS_ROOT, ".ollama-model-config.json")
+# Ollama's own default when a model doesn't specify otherwise. Also what its
+# OpenAI-compatible endpoint silently falls back to (see apply_model_config).
+DEFAULT_NUM_CTX = 4096
+
+
+def _load_model_cfg() -> dict:
+    try:
+        with open(_MODEL_CFG_FILE) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def model_config(name: str | None = None):
+    """Per-model inference settings for THIS node. Per-node on purpose: the
+    same model on a big GPU box and a small one wants different limits, and
+    the whole point of storing it here is that granularity."""
+    cfg = _load_model_cfg()
+    if name is None:
+        return cfg
+    return cfg.get(name, {})
+
+
+def set_model_config(name: str, opts: dict) -> tuple[bool, str]:
+    """Store per-model options for this node AND bake them onto the model so
+    they actually take effect (see apply_model_config for why that is the
+    only approach that works through /v1). Only a known, validated subset is
+    accepted — these reach Ollama, so anything unknown or out of range is
+    rejected rather than passed through unchecked."""
+    clean: dict = {}
+    try:
+        if opts.get("num_ctx") not in (None, ""):
+            n = int(opts["num_ctx"])
+            if not (256 <= n <= 1_048_576):
+                return False, "context length must be between 256 and 1048576"
+            clean["num_ctx"] = n
+        if opts.get("temperature") not in (None, ""):
+            t = float(opts["temperature"])
+            if not (0.0 <= t <= 2.0):
+                return False, "temperature must be between 0 and 2"
+            clean["temperature"] = t
+        if opts.get("top_p") not in (None, ""):
+            p = float(opts["top_p"])
+            if not (0.0 <= p <= 1.0):
+                return False, "top_p must be between 0 and 1"
+            clean["top_p"] = p
+        if opts.get("num_gpu") not in (None, ""):
+            g = int(opts["num_gpu"])
+            if not (0 <= g <= 999):
+                return False, "num_gpu must be 0 or more"
+            clean["num_gpu"] = g
+    except (TypeError, ValueError):
+        return False, "invalid value"
+
+    cfg = _load_model_cfg()
+    if clean:
+        cfg[name] = clean
+    else:
+        cfg.pop(name, None)   # empty = revert to Ollama's defaults
+    try:
+        os.makedirs(os.path.dirname(_MODEL_CFG_FILE), exist_ok=True)
+        tmp = _MODEL_CFG_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(cfg, f, indent=2)
+        os.replace(tmp, _MODEL_CFG_FILE)
+    except OSError as e:
+        return False, f"could not save: {e}"
+    if clean:
+        ok, msg = apply_model_config(name, clean)
+        if not ok:
+            return False, f"saved, but could not apply: {msg}"
+        return True, "saved and applied"
+    return True, "reverted to defaults (restart the model to clear baked-in values)"
+
+
+def apply_model_config(name: str, opts: dict) -> tuple[bool, str]:
+    """Bake inference parameters onto the model itself, in place.
+
+    This is the ONLY approach that actually works through the endpoint we
+    serve. Ollama's OpenAI-compatible /v1/* layer discards a request's
+    `options` block, including num_ctx — verified live: the identical request
+    yields 8192 on /api/chat and 4096 on /v1/chat/completions. Rewriting
+    requests to the native API would mean translating Ollama's streaming
+    response back into OpenAI SSE, which is a lot of fragile surface for one
+    setting.
+
+    Instead, /api/create with `from` pointing at the model itself re-registers
+    it under the same name with the parameters attached. Those become the
+    model's own defaults, so they apply on EVERY request, including through
+    /v1 — confirmed live (context_length 8192 on a plain /v1 call with no
+    options). A per-request value still overrides them where the API honours
+    one.
+    """
+    if not ollama_running():
+        return False, "Ollama is not running"
+    params = {k: v for k, v in opts.items()
+              if k in ("num_ctx", "temperature", "top_p", "num_gpu")}
+    try:
+        r = httpx.post(f"{ollama_url()}/api/create",
+                       json={"model": name, "from": name,
+                             "parameters": params, "stream": False},
+                       timeout=180.0)
+        if r.status_code >= 400:
+            return False, (r.text or "")[:200] or f"HTTP {r.status_code}"
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+    # Evict so the next request loads with the new parameters rather than
+    # continuing on the already-resident copy.
+    unload_model(name)
+    return True, "applied"
+
+
+def _vram_mb() -> int:
+    """Total GPU memory in MB, 0 when there's no usable GPU. Routing uses this
+    to tell a machine that can hold a large context from one that can't."""
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout.strip():
+            return max(int(float(v)) for v in r.stdout.split() if v.strip().isdigit())
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
+def _ram_mb() -> int:
+    """Total system RAM in MB — the fallback capacity signal for a CPU-only
+    node, which serves models out of system memory."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) // 1024
+    except OSError:
+        pass
+    return 0
+
+
 def node_llm_status() -> dict:
     """Snapshot of LLM capability for the Hub router to poll."""
     running = ollama_running()
@@ -158,6 +299,14 @@ def node_llm_status() -> dict:
         "models": [{"name": m["name"], "size": m.get("size")} for m in models],
         "active_models": [m["name"] for m in active],
         "load_score": len(active),  # simple: more running = more busy
+        # Per-model context limits this node is configured for, so the Hub's
+        # router can match a request's size against what each node can
+        # actually serve (see llm_router.pick_node).
+        "model_config": model_config(),
+        # Real capacity signals for routing: a big-context request belongs on
+        # a machine that can hold it, not merely one that has the model.
+        "vram_mb": _vram_mb(),
+        "ram_mb": _ram_mb(),
     }
 
 
