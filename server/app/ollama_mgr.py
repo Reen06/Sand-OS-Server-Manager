@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -79,6 +80,72 @@ def running_models() -> list[dict]:
         return r.json().get("models") or []
     except Exception:  # noqa: BLE001
         return []
+
+
+def unload_model(name: str) -> tuple[bool, str]:
+    """Evict one model from memory now.
+
+    Ollama has no explicit unload call — the documented way is a generate
+    request with keep_alive=0, which loads nothing and drops whatever is
+    resident for that model. Mirrors what Open WebUI's own model manager
+    does when it isn't proxied through us.
+    """
+    if not ollama_running():
+        return False, "Ollama is not running"
+    try:
+        r = httpx.post(f"{ollama_url()}/api/generate",
+                       json={"model": name, "keep_alive": 0},
+                       timeout=30.0)
+        if r.status_code >= 400:
+            return False, (r.text or "")[:200] or f"HTTP {r.status_code}"
+        return True, f"{name} unloaded"
+    except Exception as e:  # noqa: BLE001
+        return False, str(e)
+
+
+def set_keep_alive(value: str) -> tuple[bool, str]:
+    """Set how long a model stays resident after its last request.
+
+    Applied by restarting Ollama with OLLAMA_KEEP_ALIVE — it is read at
+    process start, so there is no way to change it on a live daemon. Accepts
+    Ollama's own duration forms ("5m", "1h", "0" to unload immediately, "-1"
+    to keep loaded indefinitely).
+    """
+    if not _KEEPALIVE_RE.match(value or ""):
+        return False, "invalid duration (use e.g. 5m, 1h, 0, or -1)"
+    app = registry.APPS.get("ollama")
+    if app is None:
+        return False, "ollama app is not in this node's library"
+    # Persisted on the AppDef's env so it survives restarts and is applied by
+    # every future launch, not just this one.
+    app.env["OLLAMA_KEEP_ALIVE"] = value
+    _save_keep_alive(value)
+    return True, f"keep-alive set to {value}"
+
+
+_KEEPALIVE_RE = re.compile(r"^-?\d+(\.\d+)?(ns|us|ms|s|m|h)?$")
+_KEEPALIVE_FILE = os.path.join(config.NAS_ROOT, ".ollama-keepalive")
+
+
+def _save_keep_alive(value: str) -> None:
+    try:
+        os.makedirs(os.path.dirname(_KEEPALIVE_FILE), exist_ok=True)
+        with open(_KEEPALIVE_FILE, "w") as f:
+            f.write(value)
+    except OSError:
+        pass
+
+
+def get_keep_alive() -> str:
+    """Current keep-alive setting; Ollama's own default is 5m."""
+    try:
+        with open(_KEEPALIVE_FILE) as f:
+            v = f.read().strip()
+            if _KEEPALIVE_RE.match(v):
+                return v
+    except OSError:
+        pass
+    return "5m"
 
 
 def node_llm_status() -> dict:

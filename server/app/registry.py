@@ -921,6 +921,12 @@ def launch(app_id: str, user: str) -> Instance:
     if app_id not in APPS:
         raise KeyError(app_id)
     app = APPS[app_id]
+    # OLLAMA_KEEP_ALIVE is read by Ollama at process start, so the owner's
+    # saved setting has to be on the env at every launch — not only on the one
+    # where they changed it (see ollama_mgr.set_keep_alive).
+    if app_id == "ollama":
+        from . import ollama_mgr
+        app.env["OLLAMA_KEEP_ALIVE"] = ollama_mgr.get_keep_alive()
     host = app_images.active_docker_host(app_id)
     with _lock_for((app_id, _eff(app_id, user))):
         inst = _instance_for(app_id, user)

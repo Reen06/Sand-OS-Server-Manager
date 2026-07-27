@@ -1215,6 +1215,51 @@ def ollama_models(request: Request):
             "ollama_running": ollama_mgr.ollama_running()}
 
 
+@app.get("/api/apps/ollama/loaded")
+def ollama_loaded(request: Request):
+    """Models currently resident in memory (Ollama's /api/ps), plus the
+    keep-alive setting. This is what the dashboard's green "loaded" dot and
+    unload controls read — Open WebUI can't show them itself because it talks
+    to us as a plain OpenAI endpoint (ENABLE_OLLAMA_API=false), and the
+    OpenAI API has no concept of a loaded model."""
+    _require_identity(request)
+    return {"ok": True,
+            "running": ollama_mgr.ollama_running(),
+            "loaded": ollama_mgr.running_models(),
+            "keep_alive": ollama_mgr.get_keep_alive()}
+
+
+class _OllamaUnloadBody(BaseModel):
+    model: str
+
+
+@app.post("/api/apps/ollama/unload")
+def ollama_unload(body: _OllamaUnloadBody, request: Request):
+    """Evict one model from memory now."""
+    _require_admin(request)
+    ok, msg = ollama_mgr.unload_model(body.model)
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"ok": True, "message": msg}
+
+
+class _OllamaKeepAliveBody(BaseModel):
+    keep_alive: str
+
+
+@app.post("/api/apps/ollama/keep-alive")
+def ollama_keep_alive(body: _OllamaKeepAliveBody, request: Request):
+    """Set how long a model stays resident after its last request. Ollama
+    reads this at process start, so it takes effect on the next launch —
+    the response says so rather than implying it applied instantly."""
+    _require_admin(request)
+    ok, msg = ollama_mgr.set_keep_alive(body.keep_alive)
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"ok": True, "message": msg,
+            "applies": "next Ollama start" if ollama_mgr.ollama_running() else "now"}
+
+
 @app.get("/api/apps/ollama/llm-status")
 def ollama_llm_status(request: Request):
     """Full LLM-node snapshot (running models, load score) for the Hub router poller.
