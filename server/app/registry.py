@@ -964,6 +964,35 @@ def stop(app_id: str, user: str) -> None:
         docker_backend.teardown(name, app, host=host)   # primary + any sidecars + network
     else:
         docker_backend.stop(name, host=host)
+    _clear_staging_for(name, user)
+
+
+def _clear_staging_for(instance_name: str, user: str) -> None:
+    """Drop this instance's staged files as it stops.
+
+    The value of staging is that exposure ENDS — files left behind after a job
+    finishes are exactly the standing access the whole design exists to avoid,
+    and "we meant to clean that up" is not a security property. Runs on the NAS
+    host only, where the staging tree actually lives.
+
+    Best effort and never raises: failing to tidy up must not turn a successful
+    stop into an error the caller has to handle.
+    """
+    try:
+        if not config.NAS_ENABLED or config.NAS_HOST != config.LAN_IP:
+            return                       # not the NAS host — nothing local to clear
+        from . import nas_staging
+        # config.NODE_NAME, not the raw env var: config already falls back to
+        # the hostname, whereas reading os.environ directly returns None in any
+        # process that did not inherit the unit's EnvironmentFile and silently
+        # cleared a DIFFERENT directory — leaving the real staged files in place,
+        # which is the one outcome this cleanup exists to prevent.
+        node = config.NODE_NAME
+        if user:
+            nas_staging.collect(node, instance_name, user)
+        nas_staging.clear(node, instance_name)
+    except Exception as e:   # noqa: BLE001
+        print(f"[nas] staging cleanup for {instance_name} skipped: {e}")
 
 
 def stop_all() -> dict:

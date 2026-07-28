@@ -575,6 +575,66 @@ def sm_ssh_authorize(request: Request, body: _SshAuthorizeBody):
     return {"ok": True, "user": getpass.getuser(), "ssh_port": config.SSH_PORT}
 
 
+class _StageBody(BaseModel):
+    node: str
+    instance: str
+    user: str
+    paths: list[str] = []
+
+
+@app.post("/api/sm/nas/stage")
+def sm_nas_stage(body: _StageBody, request: Request):
+    """Place specific files into one app instance's staging directory.
+
+    Only meaningful on the NAS host. Paths are resolved inside the named user's
+    own home and validated by realpath, so neither traversal nor a symlink
+    planted in that home can reach anything else.
+    """
+    _require_identity(request)
+    from . import nas_staging
+    try:
+        return nas_staging.stage(body.node, body.instance, body.user, body.paths)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class _InstanceBody(BaseModel):
+    node: str
+    instance: str
+    user: str = ""
+
+
+@app.post("/api/sm/nas/unstage")
+def sm_nas_unstage(body: _InstanceBody, request: Request):
+    """Collect anything the app produced, then clear the staging directory.
+
+    Results go to a dated folder under the user's home rather than over their
+    originals — an app writing a mangled file must not be able to destroy the
+    input it was handed.
+    """
+    _require_identity(request)
+    from . import nas_staging
+    try:
+        collected = nas_staging.collect(body.node, body.instance, body.user) \
+            if body.user else {"collected": []}
+        cleared = nas_staging.clear(body.node, body.instance)
+        return {**cleared, **collected}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/sm/nas/staged")
+def sm_nas_staged(request: Request, node: str = ""):
+    """What is exposed to which node right now.
+
+    'What can that box currently see' should be answerable from the dashboard,
+    not by reading a filesystem by hand.
+    """
+    _require_identity(request)
+    from . import nas_staging
+    return {"staged": nas_staging.list_staged(node or None)}
+
+
 @app.post("/api/sm/nas/apply-policy")
 def sm_apply_nas_policy(request: Request):
     """Re-apply this node's NFS export policy from the Hub's per-node trust
