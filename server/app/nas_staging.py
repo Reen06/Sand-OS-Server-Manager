@@ -143,6 +143,19 @@ def clear(node: str, instance: str) -> dict:
     return {"cleared": existed, "dir": d}
 
 
+def clear_node(node: str) -> dict:
+    """Remove a node's entire staging tree — every instance under it.
+
+    For decommissioning: revoking the export stops the node reaching these
+    files, but leaving them on disk still leaves someone else's documents lying
+    in a directory named after a machine that no longer exists.
+    """
+    d = _node_dir(node)
+    existed = os.path.isdir(d)
+    shutil.rmtree(d, ignore_errors=True)
+    return {"cleared": existed, "dir": d}
+
+
 def list_staged(node: str | None = None) -> list[dict]:
     """What is currently exposed, and to whom — the answer to 'what can that
     box see right now', which should never require reading a filesystem by hand.

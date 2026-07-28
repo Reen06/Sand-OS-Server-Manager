@@ -623,6 +623,21 @@ def sm_nas_unstage(body: _InstanceBody, request: Request):
         raise HTTPException(400, str(e))
 
 
+class _NodeBody(BaseModel):
+    node: str
+
+
+@app.post("/api/sm/nas/clear-node")
+def sm_nas_clear_node(body: _NodeBody, request: Request):
+    """Drop a decommissioned node's whole staging tree."""
+    _require_identity(request)
+    from . import nas_staging
+    try:
+        return nas_staging.clear_node(body.node)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/sm/nas/staged")
 def sm_nas_staged(request: Request, node: str = ""):
     """What is exposed to which node right now.
