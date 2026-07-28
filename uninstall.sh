@@ -105,17 +105,6 @@ WG_IFACE="sandos-hub"
 WG_CONF="/etc/wireguard/${WG_IFACE}.conf"
 WG_STAGING_DIR="/etc/sandos"
 
-# Read the node's own identity BEFORE step 3 deletes the env file. Deregistering
-# needs to know which Hub to call and which node to name, and by the time the
-# teardown reaches that point the file that says so is gone.
-SM_HUB_URL_SAVED=""
-SM_NODE_NAME_SAVED=""
-SM_LAN_IP_SAVED=""
-if [ -f "$ENV_FILE" ]; then
-  SM_HUB_URL_SAVED="$($SUDO grep -oP '^SM_HUB_URL=\K.*' "$ENV_FILE" 2>/dev/null || true)"
-  SM_NODE_NAME_SAVED="$($SUDO grep -oP '^SM_NODE_NAME=\K.*' "$ENV_FILE" 2>/dev/null || true)"
-  SM_LAN_IP_SAVED="$($SUDO grep -oP '^SM_LAN_IP=\K.*' "$ENV_FILE" 2>/dev/null || true)"
-fi
 
 # ── Sudo wrapper ──────────────────────────────────────────────────────────────
 if [ "$EUID" -eq 0 ]; then
@@ -124,6 +113,21 @@ else
   command -v sudo &>/dev/null || die "Not root and sudo not found. Run as root."
   SUDO="sudo"
   $SUDO true
+fi
+
+# Read the node's own identity BEFORE step 3 deletes the env file. Deregistering
+# needs to know which Hub to call and which node to name, and by then the file
+# that says so is gone.
+#
+# Must come after the sudo wrapper above: $SUDO does not exist until then, and
+# under `set -u` using it earlier aborts the whole script.
+SM_HUB_URL_SAVED=""
+SM_NODE_NAME_SAVED=""
+SM_LAN_IP_SAVED=""
+if [ -f "$ENV_FILE" ]; then
+  SM_HUB_URL_SAVED="$($SUDO grep -oP '^SM_HUB_URL=\K.*' "$ENV_FILE" 2>/dev/null || true)"
+  SM_NODE_NAME_SAVED="$($SUDO grep -oP '^SM_NODE_NAME=\K.*' "$ENV_FILE" 2>/dev/null || true)"
+  SM_LAN_IP_SAVED="$($SUDO grep -oP '^SM_LAN_IP=\K.*' "$ENV_FILE" 2>/dev/null || true)"
 fi
 
 header
