@@ -874,6 +874,43 @@ else
 fi
 rm -f "$_sudoers_tmp"
 
+# ── 4. Docker socket access for the service user ──────────────────────────────
+# The unit runs as CURRENT_USER and every app launch shells out to `docker`, so
+# without membership of the docker group the install "succeeds", the service
+# starts, and then EVERY app launch fails forever with
+#   permission denied while trying to connect to the docker API at
+#   unix:///var/run/docker.sock
+# That is silent: nothing in the install output hints at it, because the
+# service itself is perfectly healthy — only the thing it exists to do is
+# broken. It went unnoticed on existing nodes because their accounts had been
+# added to the group by hand long ago.
+#
+# Membership is evaluated when a process starts, so the group must be granted
+# BEFORE the service is (re)started below.
+if ! $SUDO -u "$CURRENT_USER" docker info &>/dev/null; then
+  if getent group docker >/dev/null 2>&1; then
+    info "Granting ${CURRENT_USER} access to the Docker socket…"
+    $SUDO usermod -aG docker "$CURRENT_USER"
+    if $SUDO -u "$CURRENT_USER" docker info &>/dev/null; then
+      ok "${CURRENT_USER} can now reach Docker"
+    else
+      # Adding to a group does not affect already-running sessions; the service
+      # started below gets it regardless, which is what actually matters here.
+      ok "Added ${CURRENT_USER} to the docker group"
+      info "Your own shell won't see this until you log out and back in —"
+      info "the service picks it up when it starts, so apps still work now."
+    fi
+    warn "Note: docker group membership is effectively root-level access on"
+    warn "this machine. That is what running app containers requires."
+  else
+    warn "No 'docker' group on this system — ${CURRENT_USER} cannot reach the"
+    warn "Docker socket, so no app will be able to launch. Check how Docker was"
+    warn "installed, then re-run this installer."
+  fi
+else
+  ok "${CURRENT_USER} can reach Docker"
+fi
+
 # Stop any dev instance that might be holding the port
 pkill -f "uvicorn app.main" 2>/dev/null || true
 sleep 1
