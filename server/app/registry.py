@@ -409,6 +409,12 @@ CATALOG: dict[str, AppDef] = {
         color="amber",
         desc="FOSS PDF toolkit — merge, split, convert, OCR, sign, and more.",
         image=config.STIRLINGPDF_IMAGE,
+        # Pure upstream image with no build context: nothing can build it
+        # locally, so the ONLY way it reaches a node is a pull. Without this,
+        # spawn() skipped its pre-pull and left `docker run` to fetch the
+        # image inside its own 120s cap — which a ~1GB image never makes, so
+        # the first launch on any fresh node failed and rolled the pull back.
+        auto_pull=True,   # public image — pre-pulled with a long timeout
         kind="web",
         mode="shared",       # one shared tool instance; no per-user accounts of its own
         internal_port=8080,
@@ -671,6 +677,12 @@ CATALOG: dict[str, AppDef] = {
         desc="Docs/Sheets/Slides alternative to Collabora — needs ~4GB+ free "
              "RAM; verify headroom before starting.",
         image=config.ONLYOFFICE_IMAGE,
+        # Pure upstream image with no build context: nothing can build it
+        # locally, so the ONLY way it reaches a node is a pull. Without this,
+        # spawn() skipped its pre-pull and left `docker run` to fetch the
+        # image inside its own 120s cap — which a ~1GB image never makes, so
+        # the first launch on any fresh node failed and rolled the pull back.
+        auto_pull=True,   # public image — pre-pulled with a long timeout
         kind="web",
         mode="shared",        # one shared document server, like Collabora
         internal_port=80,

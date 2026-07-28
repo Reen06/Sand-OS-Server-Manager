@@ -224,6 +224,25 @@ else
   $SUDO true
 fi
 
+# Run a command AS a given user, whether or not we are already root.
+#
+# Not "$SUDO -u user cmd": $SUDO is empty when running as root — which is the
+# documented way to invoke this installer — so that expands to "-u user cmd",
+# a command which does not exist. It fails every time, and a check written that
+# way silently reports "this user cannot do X" no matter what is true.
+_as_user() {   # _as_user <user> <cmd...>
+  local _u="$1"; shift
+  if [ "$EUID" -eq 0 ]; then
+    if command -v runuser &>/dev/null; then
+      runuser -u "$_u" -- "$@"
+    else
+      sudo -u "$_u" "$@"
+    fi
+  else
+    sudo -u "$_u" "$@"
+  fi
+}
+
 # ── Auto-detect helpers ───────────────────────────────────────────────────────
 _lan_ip() {
   python3 -c "
@@ -887,11 +906,11 @@ rm -f "$_sudoers_tmp"
 #
 # Membership is evaluated when a process starts, so the group must be granted
 # BEFORE the service is (re)started below.
-if ! $SUDO -u "$CURRENT_USER" docker info &>/dev/null; then
+if ! _as_user "$CURRENT_USER" docker info &>/dev/null; then
   if getent group docker >/dev/null 2>&1; then
     info "Granting ${CURRENT_USER} access to the Docker socket…"
     $SUDO usermod -aG docker "$CURRENT_USER"
-    if $SUDO -u "$CURRENT_USER" docker info &>/dev/null; then
+    if _as_user "$CURRENT_USER" docker info &>/dev/null; then
       ok "${CURRENT_USER} can now reach Docker"
     else
       # Adding to a group does not affect already-running sessions; the service
