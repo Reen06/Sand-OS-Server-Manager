@@ -47,12 +47,22 @@ _check_conf() {
         key="$(echo -n "$key" | sed 's/[[:space:]]*$//')"
         case "$section" in
             Interface)
-                case "$key" in PrivateKey|Address|ListenPort) ;;
+                # Widened to the keys a real PiVPN/Hub-generated conf
+                # actually contains. The Hub emits DNS= and PresharedKey=,
+                # so the old narrower list rejected every genuine enrollment
+                # conf outright ("disallowed key 'DNS'") and remote
+                # enrollment could never succeed. Sand-OS's own sand-wg hit
+                # this first and was widened the same way; this copy drifted.
+                #
+                # Still rejects PostUp/PreUp/PostDown/PreDown — those are
+                # shell commands wg-quick runs AS ROOT, and this conf came
+                # off the network, so it must never be able to supply one.
+                case "$key" in PrivateKey|Address|ListenPort|DNS|MTU|Table) ;;
                     *) echo "bad conf: disallowed key '$key' in [Interface]" >&2; exit 2 ;;
                 esac
                 ;;
             Peer)
-                case "$key" in PublicKey|Endpoint|AllowedIPs|PersistentKeepalive) ;;
+                case "$key" in PublicKey|PresharedKey|Endpoint|AllowedIPs|PersistentKeepalive) ;;
                     *) echo "bad conf: disallowed key '$key' in [Peer]" >&2; exit 2 ;;
                 esac
                 ;;
@@ -69,6 +79,17 @@ case "${1:-}" in
     [[ "$conf" == "$STAGED_CONF" ]] || { echo "refusing: only $STAGED_CONF is accepted" >&2; exit 2; }
     _check_conf "$conf"
     install -m 0600 "$conf" "$DEST_CONF"
+    # wg-quick hands DNS= to resolvconf, which a minimal server (a VPS, a
+    # container host) frequently does not have — it then aborts with
+    # "resolvconf: command not found" AFTER creating the interface, leaving a
+    # half-built tunnel. The DNS line is a convenience, not a requirement, so
+    # drop it rather than fail the enrollment over it.
+    if grep -qiE "^[[:space:]]*DNS[[:space:]]*=" "$DEST_CONF" \
+       && ! command -v resolvconf >/dev/null 2>&1 \
+       && ! command -v resolvectl  >/dev/null 2>&1; then
+        echo "note: no resolvconf/resolvectl here — dropping DNS= from the tunnel conf" >&2
+        sed -i -E "/^[[:space:]]*DNS[[:space:]]*=/d" "$DEST_CONF"
+    fi
     wg-quick up "$IFACE"
     ;;
   down)
