@@ -92,6 +92,40 @@ def _startup() -> None:
     registry.reconcile_from_docker()
     glances_svc.start()   # local Glances REST server for the Fleet monitor panel
     _autostart_apps()            # bring the always-on AI stack up after a reboot
+    _resync_nas_policy_if_host() # re-read export policy from the Hub after a reboot
+
+
+def _resync_nas_policy_if_host() -> None:
+    """Re-apply the NAS export policy at startup, if this node hosts the NAS.
+
+    The NFS container is `--restart unless-stopped`, so after a reboot it comes
+    back with whatever exports were baked into its `docker run` — i.e. whatever
+    the policy was the last time run-nas.sh executed, NOT what the Hub says now.
+    Trust changed while this box was down would silently not be in effect, which
+    for a revocation is the wrong way to fail.
+
+    Deliberately quiet and non-fatal: a node that does not host the NAS, or a
+    Hub that is unreachable at boot, must not stop the Server Manager starting.
+    """
+    script = _REPO_ROOT / "containers" / "nfs-server" / "sync-nas-policy.sh"
+    if not script.exists():
+        return
+    if not config.NAS_ENABLED or config.NAS_HOST != config.LAN_IP:
+        return                      # not the NAS host — nothing to apply
+    def _run() -> None:
+        try:
+            r = subprocess.run(["bash", str(script)], capture_output=True,
+                               text=True, timeout=120)
+            if r.returncode == 0:
+                print("[nas] export policy re-applied from the Hub")
+            else:
+                print(f"[nas] policy resync skipped: "
+                      f"{(r.stderr or r.stdout or '').strip()[:200]}")
+        except Exception as e:      # noqa: BLE001
+            print(f"[nas] policy resync failed: {e}")
+    # Off the startup path: the Hub may not be reachable the instant this boots,
+    # and blocking here would delay every other service this node provides.
+    threading.Thread(target=_run, daemon=True).start()
 
 
 @app.on_event("shutdown")
