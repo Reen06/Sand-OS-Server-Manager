@@ -359,7 +359,36 @@ DESC
     [ -n "$ENROLL_WG_IP" ] || die "Tunnel came up but its address couldn't be read — check: sudo wg show sandos-hub"
     ok "Tunnel up — this machine's WireGuard IP is ${ENROLL_WG_IP}"
     AUTO_IP="$ENROLL_WG_IP"
-    ENROLL_HUB_BASE="${ENROLL_LINK%%/api/pairing/enroll/*}"
+
+    # Talk to the Hub over the TUNNEL from here on, not the public hostname the
+    # enrollment link came from.
+    #
+    # The Hub serves its dashboard and API to the mesh only — a request arriving
+    # from the public internet gets a deliberate 404 ("contact the server
+    # administrator"). The enrollment link is the single documented exception,
+    # and it has now been used. So a remote node that keeps pointing at the
+    # public URL gets 404 for everything afterwards: the fleet NAS lookup in
+    # Step 4 silently fails and the node makes ITSELF the NAS, and every Hub
+    # session validation fails, which breaks SSO for every user of that node.
+    # Confirmed against a live Hub: public URL 404, same request over the
+    # tunnel 200.
+    #
+    # The Hub tells us its own tunnel address in the conf's DNS= line; fall
+    # back to the first host of the tunnel subnet, which is where the Hub sits
+    # by convention.
+    _hub_wg=$($SUDO sh -c "grep -m1 -i '^[[:space:]]*DNS' /etc/sandos/wg-enroll-staging.conf" 2>/dev/null \
+      | sed -E 's/.*=[[:space:]]*//; s/,.*//' | tr -d '[:space:]')
+    if [ -z "$_hub_wg" ]; then
+      _hub_wg=$(echo "$ENROLL_WG_IP" | awk -F. 'NF==4{print $1"."$2"."$3".1"}')
+    fi
+    if [ -n "$_hub_wg" ] && curl -fsSk --max-time 8 "https://${_hub_wg}/api/fleet/nas-host" >/dev/null 2>&1; then
+      ENROLL_HUB_BASE="https://${_hub_wg}"
+      ok "Hub reachable over the tunnel at ${_hub_wg} — using it for Hub SSO"
+    else
+      ENROLL_HUB_BASE="${ENROLL_LINK%%/api/pairing/enroll/*}"
+      warn "Couldn't reach the Hub over the tunnel; falling back to ${ENROLL_HUB_BASE}."
+      warn "If the Hub only serves the mesh, SSO and NAS discovery will fail there."
+    fi
   fi
 fi
 
