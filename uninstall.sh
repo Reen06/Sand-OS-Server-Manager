@@ -93,6 +93,7 @@ UNIT_NAME="sandos-server-manager"
 UNIT_DEST="/etc/systemd/system/${UNIT_NAME}.service"
 SUDOERS_FILE="/etc/sudoers.d/61-sandos-sm-restart"
 CLI_SHIM="/usr/local/bin/server-manager"
+PYCACHE_DIR="/var/cache/sandos-server-manager"
 
 # This runs under sudo, so a bare ~ is root's home, not the account that owns
 # the install — the per-node app library would be looked for in the wrong place
@@ -335,6 +336,14 @@ if [ "$PURGE" -eq 1 ]; then
     ok "Removed ${CATALOG_STATE_DIR} (per-node app library)"
   else
     warn "${CATALOG_STATE_DIR} not present — skipping"
+  fi
+  # Python bytecode. Newer installs redirect it here; older ones wrote it into
+  # the checkout owned by the service user, which on a root-run install leaves
+  # the repo undeletable by its own owner. Removed with privileges for exactly
+  # that case.
+  [ -d "$PYCACHE_DIR" ] && { $SUDO rm -rf "$PYCACHE_DIR"; ok "Removed ${PYCACHE_DIR}"; }
+  if $SUDO find "$SERVER_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null; then
+    ok "Cleared any bytecode left inside the checkout"
   fi
 else
   info "Keeping ${VENV} (pass --purge to remove)"

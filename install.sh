@@ -211,6 +211,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_DIR="$REPO_ROOT/server"
 VENV="$SERVER_DIR/.venv"
 ENV_FILE="/etc/sandos-server-manager.env"
+PYCACHE_DIR="/var/cache/sandos-server-manager"
 UNIT_NAME="sandos-server-manager"
 UNIT_DEST="/etc/systemd/system/${UNIT_NAME}.service"
 
@@ -900,6 +901,14 @@ else
 fi
 
 # ── 3. Systemd unit ────────────────────────────────────────────────────────────
+# Somewhere to put it, owned by the account the service will run as so the
+# service can actually write there.
+$SUDO mkdir -p "$PYCACHE_DIR"
+$SUDO chown "${INVOKING_USER}:$(id -gn "$INVOKING_USER" 2>/dev/null || echo "$INVOKING_USER")" "$PYCACHE_DIR" 2>/dev/null || true
+# Clear bytecode an earlier install already wrote into the checkout, which may
+# be root-owned and is exactly what blocks a later reinstall.
+$SUDO find "$SERVER_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+
 info "Installing systemd unit → ${UNIT_DEST}…"
 CURRENT_USER="$INVOKING_USER"
 # Quote paths in case they contain spaces (repo path may include spaces).
@@ -914,6 +923,16 @@ Requires=docker.service
 Type=simple
 User=${CURRENT_USER}
 EnvironmentFile=-${ENV_FILE}
+# Keep Python's bytecode cache OUT of the repo. Without this the interpreter
+# writes __pycache__ next to the source, owned by whoever the service runs as —
+# and when that is root (install.sh run with no SUDO_USER, i.e. from a
+# provisioning script, cron, or `su -`), the account that owns the checkout can
+# no longer `rm -rf` it or `git pull` into it. That silently breaks both a
+# reinstall and the fleet auto-update, and leaves a repo its owner cannot
+# delete. Redirecting is better than chowning after the fact: it needs no
+# assumption about who should own the checkout, and it holds for every service
+# user rather than only the one install.sh happened to see.
+Environment=PYTHONPYCACHEPREFIX=${PYCACHE_DIR}
 WorkingDirectory=${SERVER_DIR}
 ExecStart="${VENV}/bin/uvicorn" app.main:app --host 0.0.0.0 --port ${SM_PORT}
 Restart=on-failure
