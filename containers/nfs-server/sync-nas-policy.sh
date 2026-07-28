@@ -55,4 +55,30 @@ echo "Applying NAS policy from ${HUB_URL}:"
 echo "  trusted:  ${NAS_TRUSTED}"
 echo "  app-only: ${NAS_APP_CLIENTS:-<none>}"
 
-NAS_TRUSTED="$NAS_TRUSTED" NAS_APP_CLIENTS="$NAS_APP_CLIENTS" bash "$HERE/run-nas.sh"
+NAS_UID="${NAS_UID:-1000}"
+NAS_GID="${NAS_GID:-1000}"
+NAS_ROOT="${NAS_ROOT:-/home/control/sandos-nas}"
+
+# Apply LIVE when the server is already up: rewrite /etc/exports and reload with
+# `exportfs -ra`. Recreating the container instead would drop every client's
+# mount, and clients that had one hang on their next access until the volume is
+# recreated — far too destructive for something a dropdown can trigger. Only
+# fall back to a full start when there is no server running to reload.
+if docker inspect -f '{{.State.Running}}' sandos-nfs 2>/dev/null | grep -q true; then
+  _exports=""
+  for _host in $NAS_TRUSTED; do
+    _exports="${_exports}/nfs  ${_host}(rw,fsid=0,crossmnt,sync,no_subtree_check,insecure,all_squash,anonuid=${NAS_UID},anongid=${NAS_GID})
+"
+  done
+  for _entry in ${NAS_APP_CLIENTS:-}; do
+    _addr="${_entry%%:*}"; _dir="${_entry##*:}"
+    mkdir -p "${NAS_ROOT}/staging/${_dir}"
+    _exports="${_exports}/nfs/staging/${_dir}  ${_addr}(rw,fsid=0,sync,no_subtree_check,insecure,all_squash,anonuid=${NAS_UID},anongid=${NAS_GID})
+"
+  done
+  printf '%s' "$_exports" | docker exec -i sandos-nfs sh -c 'cat > /etc/exports && exportfs -ra'
+  echo "  applied live (exportfs -ra) — existing mounts undisturbed"
+else
+  echo "  no running server — starting one"
+  NAS_TRUSTED="$NAS_TRUSTED" NAS_APP_CLIENTS="$NAS_APP_CLIENTS" bash "$HERE/run-nas.sh"
+fi

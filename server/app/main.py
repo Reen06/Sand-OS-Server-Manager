@@ -7,6 +7,7 @@ cookie so per-user instances are demonstrable on the LAN.
 """
 from __future__ import annotations
 import getpass
+import os
 import subprocess
 import threading
 import time
@@ -538,6 +539,52 @@ def sm_ssh_authorize(request: Request, body: _SshAuthorizeBody):
             f.write(key + "\n")
         auth_file.chmod(0o600)
     return {"ok": True, "user": getpass.getuser(), "ssh_port": config.SSH_PORT}
+
+
+@app.post("/api/sm/nas/apply-policy")
+def sm_apply_nas_policy(request: Request):
+    """Re-apply this node's NFS export policy from the Hub's per-node trust
+    settings. Only meaningful on the node that HOSTS the NAS.
+
+    Called by the Hub right after a node's NAS trust changes on the Fleet page,
+    so the dropdown takes effect immediately instead of waiting for someone to
+    run a script by hand.
+
+    Applies live via `exportfs -ra` — it does not restart the NFS server, which
+    would drop every client's mount. Needs no sudo: the script drives Docker,
+    and this service's user is already in the docker group (install.sh ensures
+    that, since app launching needs it too).
+    """
+    script = _REPO_ROOT / "containers" / "nfs-server" / "sync-nas-policy.sh"
+    if not script.exists():
+        raise HTTPException(404, "sync-nas-policy.sh not present on this node")
+    env = dict(os.environ)
+    # Only pass SM_HUB_URL through when it is a private/mesh address. The Hub
+    # serves its API to the mesh only and answers a deliberate 404 to anything
+    # arriving from the public internet — so a node configured with the public
+    # hostname (which is easy to end up with, and was the case on the live NAS
+    # host) would fail every call. The script's own mesh default is correct in
+    # that case, so let it win rather than forcing a URL we know cannot work.
+    _hub = getattr(config, "HUB_URL", "") or ""
+    _host = _hub.split("//", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+    try:
+        import ipaddress as _ip
+        _private = _ip.ip_address(_host).is_private
+    except ValueError:
+        _private = False        # a hostname — assume public-facing
+    if _hub and _private:
+        env["HUB_URL"] = _hub
+    try:
+        r = subprocess.run(["bash", str(script)], capture_output=True, text=True,
+                           timeout=120, env=env)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "NAS policy sync timed out")
+    if r.returncode != 0:
+        # The script deliberately refuses to apply an empty or unreachable
+        # policy rather than widening/revoking access on a Hub hiccup — surface
+        # that reason rather than a bare failure.
+        raise HTTPException(502, (r.stderr or r.stdout or "sync failed").strip()[:400])
+    return {"ok": True, "detail": (r.stdout or "").strip()[-400:]}
 
 
 @app.post("/api/sm/restart")
