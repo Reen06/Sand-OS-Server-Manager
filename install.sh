@@ -1,8 +1,58 @@
 #!/usr/bin/env bash
 # Sand-OS Server Manager — Interactive installer
-# Usage:  sudo bash install.sh          (system-wide install)
-#         bash install.sh               (prompts for sudo when needed)
+# Usage:  sudo bash install.sh                (system-wide install)
+#         bash install.sh                     (prompts for sudo when needed)
+#         sudo bash install.sh --unattended   (no prompts; read config from env)
+#
+# UNATTENDED MODE
+#   Every question below takes its answer from the matching SM_* environment
+#   variable, falling back to the same default the prompt would have offered.
+#   Nothing is asked and nothing blocks, so this is what CI, a re-provision, or
+#   a scripted fleet rollout should use.
+#
+#     SM_MODE           lan | vpn | colocated        (default: lan)
+#     SM_LAN_IP         this node's LAN/WireGuard IP (default: auto-detected)
+#     SM_PORT           listen port                  (default: 8170)
+#     SM_NODE_NAME      name shown in Hub fleet      (default: hostname)
+#     SM_HUB_URL        Hub base URL, blank=standalone
+#     SM_HUB_VERIFY_TLS true | false                 (default: false)
+#     SM_EXTERNAL_BASE  Hub mount path               (default: /apps)
+#     SM_NAS_ENABLED    true | false                 (default: false)
+#     SM_NAS_HOST       NFS server IP                (default: discovered/self)
+#     SM_NAS_ROOT       export root path
+#     SM_GPU            true | false                 (default: auto-detect)
+#     SM_SLOT_COUNT     max concurrent apps          (default: 8)
+#     SM_DOCKER_ROOT    move Docker's data-root here (default: leave alone)
+#     SM_ENROLL_LINK    one-time Hub enrollment link (vpn mode only)
+#
+#   Example:
+#     sudo SM_HUB_URL=https://10.0.0.177 SM_NODE_NAME=mini-eclipse \
+#          bash install.sh --unattended
 set -euo pipefail
+
+# ── Unattended flag ───────────────────────────────────────────────────────────
+# Parsed before anything else so the prompt helpers below can consult it.
+UNATTENDED=0
+for _arg in "$@"; do
+  case "$_arg" in
+    --unattended|-y|--yes) UNATTENDED=1 ;;
+    -h|--help)
+      sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      exit 0 ;;
+    *) echo "install.sh: unknown option '$_arg' (try --help)" >&2; exit 2 ;;
+  esac
+done
+[ "${SM_UNATTENDED:-0}" = "1" ] && UNATTENDED=1
+
+# Pick a value without asking: an environment override wins, else the default.
+# Used to seed each prompt's default so interactive and unattended runs resolve
+# a value identically — the only difference is whether the user is offered the
+# chance to change it.
+_env_or() {   # _env_or VARNAME default
+  local _v="${1}" _d="${2-}" _cur
+  _cur="${!_v-}"
+  printf '%s' "${_cur:-$_d}"
+}
 
 # ── Colour / terminal helpers ─────────────────────────────────────────────────
 # A real interactive terminal on BOTH ends, not just this process's own stdout —
@@ -59,7 +109,13 @@ blank()   { echo; }
 # was just never faced squarely before now).
 ask()     { printf "    %s " "$*" >&2; }
 
-confirm() {
+confirm() {            # confirm "prompt" [unattended-default: y|n]
+  if [ "$UNATTENDED" = "1" ]; then
+    local _d="${2:-y}"
+    echo "    ${DIM}$1 → ${_d}${RST}" >&2
+    [[ "$_d" =~ ^[Yy] ]]
+    return
+  fi
   ask "${BOLD}$1${RST} [Y/n]"
   read -r _ans
   [[ -z "$_ans" || "$_ans" =~ ^[Yy] ]]
@@ -67,6 +123,14 @@ confirm() {
 
 read_val() {           # read_val "prompt" "default"  →  echoes value
   local prompt="$1" default="$2"
+  if [ "$UNATTENDED" = "1" ]; then
+    # Echo the choice to stderr so an unattended run still leaves a readable
+    # transcript of what it decided — otherwise a scripted install is silent
+    # about the very values that are hardest to debug later.
+    echo "    ${DIM}${prompt} → ${default:-(blank)}${RST}" >&2
+    printf '%s' "$default"
+    return
+  fi
   ask "${prompt} ${DIM}[${default}]${RST}:"
   read -r _val
   printf '%s' "${_val:-$default}"
@@ -76,6 +140,20 @@ pick() {               # pick "prompt" default  val1 "label1"  val2 "label2"  ..
   local prompt="$1" default="$2"; shift 2
   local -a vals labels
   while (( $# >= 2 )); do vals+=("$1"); labels+=("$2"); shift 2; done
+  if [ "$UNATTENDED" = "1" ]; then
+    # Validate against the offered set rather than trusting it blindly: a typo
+    # in an env var would otherwise be written straight into the env file and
+    # only surface as a confusing runtime failure much later.
+    local _v
+    for _v in "${vals[@]}"; do
+      if [[ "$_v" == "$default" ]]; then
+        echo "    ${DIM}${prompt} → ${default}${RST}" >&2
+        echo "$default"; return
+      fi
+    done
+    echo "  ${RED}✗${RST}  Invalid value '${default}' for '${prompt}' — expected one of: ${vals[*]}" >&2
+    exit 2
+  fi
   # The whole menu is display-only — same reasoning as ask() above, redirect
   # it all to stderr so it can never be swallowed by `x=$(pick ...)`.
   {
@@ -185,7 +263,7 @@ cat << 'DESC'
 
 DESC
 
-MODE=$(pick "Mode" "lan" \
+MODE=$(pick "Mode" "$(_env_or SM_MODE lan)" \
   "lan"        "Same LAN          (direct LAN, same subnet as Hub)" \
   "vpn"        "Remote / VPN      (different network, WireGuard tunnel)" \
   "colocated"  "On the Hub        (both services on one device)")
@@ -206,7 +284,7 @@ if [[ "$MODE" == "vpn" ]]; then
   Leave blank if this machine already has its own tunnel configured.
 
 DESC
-  ENROLL_LINK=$(read_val "Enrollment link (blank to skip)" "")
+  ENROLL_LINK=$(read_val "Enrollment link (blank to skip)" "$(_env_or SM_ENROLL_LINK "")")
   if [ -n "$ENROLL_LINK" ]; then
     blank
     info "Setting up the WireGuard enrollment tunnel…"
@@ -251,7 +329,7 @@ case "$MODE" in
   lan)
     echo "  Enter the LAN IP the Hub will use to probe and reach this node."
     blank
-    SM_LAN_IP=$(read_val "LAN IP of this machine" "$AUTO_IP")
+    SM_LAN_IP=$(read_val "LAN IP of this machine" "$(_env_or SM_LAN_IP "$AUTO_IP")")
     SM_TURN_EXTRA_HOST=""
     blank
     info "Apps will be reachable at  http://${SM_LAN_IP}:8170"
@@ -261,7 +339,7 @@ case "$MODE" in
     echo "  This IP is used for both the API endpoint and TURN relay"
     echo "  so the Hub and browsers can reach it over the VPN."
     blank
-    SM_LAN_IP=$(read_val "WireGuard IP of this machine" "$AUTO_IP")
+    SM_LAN_IP=$(read_val "WireGuard IP of this machine" "$(_env_or SM_LAN_IP "$AUTO_IP")")
     SM_TURN_EXTRA_HOST="$SM_LAN_IP"
     blank
     info "API + TURN will use WireGuard IP  ${SM_LAN_IP}"
@@ -270,7 +348,7 @@ case "$MODE" in
     echo "  Enter the Hub's LAN IP. Both services share this machine;"
     echo "  the Server Manager binds on the same interface."
     blank
-    SM_LAN_IP=$(read_val "This machine's LAN IP" "$AUTO_IP")
+    SM_LAN_IP=$(read_val "This machine's LAN IP" "$(_env_or SM_LAN_IP "$AUTO_IP")")
     SM_TURN_EXTRA_HOST=""
     blank
     info "Co-located at  ${SM_LAN_IP}"
@@ -278,8 +356,8 @@ case "$MODE" in
 esac
 
 blank
-SM_PORT=$(read_val "Server Manager port" "8170")
-SM_NODE_NAME=$(read_val "Friendly node name (shown in Hub fleet)" "$(hostname)")
+SM_PORT=$(read_val "Server Manager port" "$(_env_or SM_PORT 8170)")
+SM_NODE_NAME=$(read_val "Friendly node name (shown in Hub fleet)" "$(_env_or SM_NODE_NAME "$(hostname)")")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 3 — HUB CONNECTION
@@ -297,7 +375,7 @@ cat << 'DESC'
 
 DESC
 
-SM_HUB_URL=$(read_val "Hub URL  (e.g. https://10.0.0.177 — blank for standalone)" "$ENROLL_HUB_BASE")
+SM_HUB_URL=$(read_val "Hub URL  (e.g. https://10.0.0.177 — blank for standalone)" "$(_env_or SM_HUB_URL "$ENROLL_HUB_BASE")")
 # A bare IP/hostname with no scheme (an easy slip — "just the IP" instead of
 # the full URL) doesn't fail here; it silently gets written into the env
 # file as-is and only crashes later, deep in an unrelated request handler,
@@ -317,9 +395,10 @@ if [ -n "$SM_HUB_URL" ]; then
   blank
   echo "  Caddy on the Hub routes  /apps/*  to this Server Manager, then"
   echo "  apps are reached at  {hub}/apps/stream/{app-id}/..."
-  SM_EXTERNAL_BASE=$(read_val "Hub mount path" "/apps")
+  SM_EXTERNAL_BASE=$(read_val "Hub mount path" "$(_env_or SM_EXTERNAL_BASE /apps)")
   blank
-  if confirm "Verify the Hub's TLS certificate? (no = accept self-signed Caddy internal CA)"; then
+  if confirm "Verify the Hub's TLS certificate? (no = accept self-signed Caddy internal CA)" \
+       "$([ "$(_env_or SM_HUB_VERIFY_TLS false)" = "true" ] && echo y || echo n)"; then
     SM_HUB_VERIFY_TLS="true"
   fi
 else
@@ -367,11 +446,11 @@ except Exception:
 fi
 SM_NAS_HOST="${_discovered_nas_host:-$SM_LAN_IP}"
 
-if confirm "Enable the NAS layer?"; then
+if confirm "Enable the NAS layer?" "$([ "$(_env_or SM_NAS_ENABLED false)" = "true" ] && echo y || echo n)"; then
   SM_NAS_ENABLED="true"
 
   _nas_root_default="/home/$(whoami)/sandos-nas"
-  SM_NAS_ROOT=$(read_val "Local path to the NAS export root (on the NAS host)" "$_nas_root_default")
+  SM_NAS_ROOT=$(read_val "Local path to the NAS export root (on the NAS host)" "$(_env_or SM_NAS_ROOT "$_nas_root_default")")
 
   blank
   if [ -n "$_discovered_nas_host" ]; then
@@ -380,7 +459,7 @@ if confirm "Enable the NAS layer?"; then
     warn "No existing fleet NAS found — defaulting to this machine (${SM_LAN_IP})."
     warn "Only accept this if THIS node should be the shared NAS host."
   fi
-  SM_NAS_HOST=$(read_val "IP of the NFS server host" "$SM_NAS_HOST")
+  SM_NAS_HOST=$(read_val "IP of the NFS server host" "$(_env_or SM_NAS_HOST "$SM_NAS_HOST")")
 
   blank
   info "NFS: ${SM_NAS_HOST}:/ — containers mount sub-paths per user/app"
@@ -411,7 +490,7 @@ else
   _gpu_default="false"
 fi
 
-SM_GPU=$(pick "GPU support" "$_gpu_default" \
+SM_GPU=$(pick "GPU support" "$(_env_or SM_GPU "$_gpu_default")" \
   "true"  "Enable  — advertise GPU; streamed apps (FreeCAD) available" \
   "false" "Disable — web apps only (Nextcloud, Files, WebCAD, Renode…)")
 
@@ -462,7 +541,7 @@ elif [[ "$SM_GPU" == "true" ]] && [ ! -f /etc/cdi/nvidia.yaml ]; then
 fi
 
 blank
-SM_SLOT_COUNT=$(read_val "Max concurrent app instances" "8")
+SM_SLOT_COUNT=$(read_val "Max concurrent app instances" "$(_env_or SM_SLOT_COUNT 8)")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 6 — LOCAL STORAGE (Docker's own data-root — images/volumes/build cache)
@@ -494,10 +573,11 @@ else
   _docker_free=$(df -h "$_docker_root" 2>/dev/null | awk 'NR==2{print $4}')
   info "Docker currently stores data at ${_docker_root}$( [ -n "$_docker_free" ] && echo " (${_docker_free} free there)")."
   blank
-  if confirm "Change where Docker stores images/volumes on this machine?"; then
+  if confirm "Change where Docker stores images/volumes on this machine?" \
+       "$([ -n "${SM_DOCKER_ROOT:-}" ] && echo y || echo n)"; then
     warn "Anything Docker already has at ${_docker_root} becomes invisible to it"
     warn "the moment this changes — NOT deleted, just no longer where Docker looks."
-    _new_root=$(read_val "New Docker data directory" "$_docker_root")
+    _new_root=$(read_val "New Docker data directory" "$(_env_or SM_DOCKER_ROOT "$_docker_root")")
     if [ "$_new_root" != "$_docker_root" ]; then
       $SUDO mkdir -p "$_new_root"
       _daemon_json="/etc/docker/daemon.json"
