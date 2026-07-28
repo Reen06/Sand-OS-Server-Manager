@@ -49,19 +49,36 @@ confirm() {
 PURGE=0
 WIPE_DOCKER=0
 ASSUME_YES=0
+REMOVE_TUNNEL=0
+DEREGISTER=0
 for arg in "$@"; do
   case "$arg" in
     --purge) PURGE=1 ;;
     --wipe-docker) WIPE_DOCKER=1 ;;
     -y|--yes) ASSUME_YES=1 ;;
+    --remove-tunnel) REMOVE_TUNNEL=1 ;;
+    --deregister) DEREGISTER=1 ;;
+    # Decommissioning this machine for good: everything local, plus telling the
+    # Hub to forget it. Separate from the default because reinstalling on the
+    # same box is the far more common reason to run this, and that case wants
+    # the tunnel and the Hub registration kept.
+    --full) PURGE=1; WIPE_DOCKER=1; REMOVE_TUNNEL=1; DEREGISTER=1 ;;
     -h|--help)
       echo "usage: sudo bash uninstall.sh [--purge] [--wipe-docker] [--yes]"
-      echo "  --purge         also remove the Python venv (server/.venv)"
-      echo "  --yes, -y       assume yes to every confirmation (scripted teardown)"
-      echo "  --wipe-docker   also remove every sm-* container/volume/network/image"
-      echo "                  this node ever created — a real, destructive teardown"
-      echo "                  of all locally-installed app data, for a genuinely"
-      echo "                  clean slate before reinstalling with different settings"
+      echo "                              [--remove-tunnel] [--deregister] [--full]"
+      echo "  --purge          also remove the Python venv (server/.venv)"
+      echo "  --yes, -y        assume yes to every confirmation (scripted teardown)"
+      echo "  --wipe-docker    also remove every sm-* container/volume/network/image"
+      echo "                   this node ever created — a real, destructive teardown"
+      echo "                   of all locally-installed app data, for a genuinely"
+      echo "                   clean slate before reinstalling with different settings"
+      echo "  --remove-tunnel  also tear down the WireGuard enrollment tunnel and"
+      echo "                   delete its config — the credential stops working, so"
+      echo "                   rejoining needs a fresh enrollment link"
+      echo "  --deregister     tell the Hub to forget this node: registry row,"
+      echo "                   telemetry history, its WireGuard peer, scoped"
+      echo "                   firewall rules and any staged files on the NAS"
+      echo "  --full           everything above — decommission this machine"
       exit 0 ;;
     *) die "Unknown option: $arg" ;;
   esac
@@ -84,6 +101,21 @@ INVOKING_USER="${SUDO_USER:-$(whoami)}"
 INVOKING_HOME="$(getent passwd "$INVOKING_USER" 2>/dev/null | cut -d: -f6)"
 [ -n "$INVOKING_HOME" ] || INVOKING_HOME="/home/${INVOKING_USER}"
 CATALOG_STATE_DIR="${INVOKING_HOME}/.sandos-sm"
+WG_IFACE="sandos-hub"
+WG_CONF="/etc/wireguard/${WG_IFACE}.conf"
+WG_STAGING_DIR="/etc/sandos"
+
+# Read the node's own identity BEFORE step 3 deletes the env file. Deregistering
+# needs to know which Hub to call and which node to name, and by the time the
+# teardown reaches that point the file that says so is gone.
+SM_HUB_URL_SAVED=""
+SM_NODE_NAME_SAVED=""
+SM_LAN_IP_SAVED=""
+if [ -f "$ENV_FILE" ]; then
+  SM_HUB_URL_SAVED="$($SUDO grep -oP '^SM_HUB_URL=\K.*' "$ENV_FILE" 2>/dev/null || true)"
+  SM_NODE_NAME_SAVED="$($SUDO grep -oP '^SM_NODE_NAME=\K.*' "$ENV_FILE" 2>/dev/null || true)"
+  SM_LAN_IP_SAVED="$($SUDO grep -oP '^SM_LAN_IP=\K.*' "$ENV_FILE" 2>/dev/null || true)"
+fi
 
 # ── Sudo wrapper ──────────────────────────────────────────────────────────────
 if [ "$EUID" -eq 0 ]; then
@@ -108,10 +140,12 @@ cat << INTRO
 $( [ "$PURGE" -eq 1 ] && echo "    • remove  ${VENV}  (--purge)" )
 $( [ "$PURGE" -eq 1 ] && echo "    • remove  ${CATALOG_STATE_DIR}  — this node's enabled-app list (--purge)" )
 $( [ "$WIPE_DOCKER" -eq 1 ] && echo "    • remove EVERY sm-* container/volume/network/image on this node (--wipe-docker)" )
+$( [ "$DEREGISTER" -eq 1 ] && echo "    • tell the Hub to forget this node entirely (--deregister)" )
+$( [ "$REMOVE_TUNNEL" -eq 1 ] && echo "    • tear down the WireGuard tunnel + delete ${WG_CONF} (--remove-tunnel)" )
 
   This does NOT touch:
     • NAS-backed project/app data
-    • any WireGuard enrollment tunnel set up during install
+$( [ "$REMOVE_TUNNEL" -eq 0 ] && echo "    • any WireGuard enrollment tunnel set up during install — pass --remove-tunnel to also remove it" )
 $( [ "$WIPE_DOCKER" -eq 0 ] && echo "    • running app containers (FreeCAD, Nextcloud, WebCAD, …) or their images — pass --wipe-docker to also remove these" )
 
 INTRO
@@ -302,6 +336,67 @@ else
   info "Keeping ${VENV} (pass --purge to remove)"
   [ -d "$CATALOG_STATE_DIR" ] && \
     info "Keeping ${CATALOG_STATE_DIR} — this node's enabled-app list survives a reinstall"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 7 — TELL THE HUB TO FORGET THIS NODE (--deregister)
+# ═══════════════════════════════════════════════════════════════════════════════
+header
+step 7 "Deregister From Hub"
+
+if [ "$DEREGISTER" -eq 1 ]; then
+  if [ -z "$SM_HUB_URL_SAVED" ]; then
+    warn "This node had no Hub configured — nothing to deregister from."
+  elif ! command -v curl >/dev/null 2>&1; then
+    warn "curl not available — deregister by hand from the Hub's Fleet page."
+  else
+    _id="${SM_LAN_IP_SAVED:-$SM_NODE_NAME_SAVED}"
+    info "Asking ${SM_HUB_URL_SAVED} to forget '${_id}'…"
+    # Runs BEFORE the tunnel is torn down below: on a remote node the Hub is
+    # only reachable through that tunnel, so revoking it first would remove the
+    # path needed to make this call.
+    #
+    # -k: the Hub is normally fronted by Caddy's internal CA, same as every other
+    # Hub call in this project.
+    _resp="$(curl -fsSk --max-time 20 -X POST \
+      -H 'Content-Type: application/json' \
+      -d "{\"node_id\": \"${_id}\"}" \
+      "${SM_HUB_URL_SAVED%/}/api/fleet/nodes/deregister" 2>/dev/null || true)"
+    if [ -n "$_resp" ]; then
+      ok "Hub acknowledged — registry, history, peer and staged files removed"
+      echo "      ${DIM}${_resp}${RST}"
+    else
+      warn "The Hub did not answer. It still lists this node, and its WireGuard"
+      warn "peer is still valid — remove it from the Fleet page so that stale"
+      warn "credential does not stay live."
+    fi
+  fi
+else
+  info "Skipped (pass --deregister to have the Hub forget this node)"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STEP 8 — REMOVE THE WIREGUARD TUNNEL (--remove-tunnel)
+# ═══════════════════════════════════════════════════════════════════════════════
+header
+step 8 "WireGuard Tunnel"
+
+if [ "$REMOVE_TUNNEL" -eq 1 ]; then
+  if command -v sandos-wg-enroll >/dev/null 2>&1; then
+    $SUDO sandos-wg-enroll down >/dev/null 2>&1 || true
+  else
+    $SUDO wg-quick down "$WG_IFACE" >/dev/null 2>&1 || true
+  fi
+  $SUDO rm -f "$WG_CONF" "${WG_STAGING_DIR}/wg-enroll-staging.conf"
+  $SUDO rm -f /usr/local/bin/sandos-wg-enroll /etc/sudoers.d/63-sandos-wg-enroll
+  $SUDO rmdir "$WG_STAGING_DIR" 2>/dev/null || true
+  if ip link show "$WG_IFACE" >/dev/null 2>&1; then
+    warn "Interface ${WG_IFACE} is still up — check: sudo wg show ${WG_IFACE}"
+  else
+    ok "Tunnel down, config and helper removed"
+  fi
+else
+  info "Skipped (pass --remove-tunnel to also tear down the tunnel)"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
