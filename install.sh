@@ -389,6 +389,26 @@ DESC
       warn "Couldn't reach the Hub over the tunnel; falling back to ${ENROLL_HUB_BASE}."
       warn "If the Hub only serves the mesh, SSO and NAS discovery will fail there."
     fi
+  else
+    # No link given. The prompt above explicitly offers this for a machine that
+    # ALREADY has its tunnel, so adopt it rather than ignoring it — otherwise a
+    # re-run or upgrade on an enrolled node silently reconfigures it back to its
+    # LAN address with no Hub URL at all, i.e. standalone with no SSO, and names
+    # itself the NAS. Observed exactly that on a live enrolled node.
+    _existing_wg=$($SUDO sh -c "grep -m1 '^Address' /etc/wireguard/sandos-hub.conf" 2>/dev/null \
+      | sed -E 's/.*=\s*//; s#/.*##' | tr -d '[:space:]')
+    if [ -n "$_existing_wg" ]; then
+      ok "Found an existing tunnel — this machine's WireGuard IP is ${_existing_wg}"
+      AUTO_IP="$_existing_wg"
+      _hub_wg=$(echo "$_existing_wg" | awk -F. 'NF==4{print $1"."$2"."$3".1"}')
+      if [ -n "$_hub_wg" ] && curl -fsSk --max-time 8 "https://${_hub_wg}/api/fleet/nas-host" >/dev/null 2>&1; then
+        ENROLL_HUB_BASE="https://${_hub_wg}"
+        ok "Hub reachable over that tunnel at ${_hub_wg} — using it for Hub SSO"
+      else
+        warn "Tunnel is up but the Hub didn't answer at ${_hub_wg}."
+        warn "Set the Hub URL manually below, or SSO stays off."
+      fi
+    fi
   fi
 fi
 
