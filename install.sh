@@ -458,7 +458,16 @@ SM_NAS_ROOT="${INVOKING_HOME}/sandos-nas"
 # reliably run an NFS server) NAS instead of pointing it at the real one.
 _discovered_nas_host=""
 if [ -n "$SM_HUB_URL" ] && command -v curl &>/dev/null; then
-  _nas_info=$(curl -fsS --max-time 5 "${SM_HUB_URL%/}/api/fleet/nas-host" 2>/dev/null || true)
+  # -k unless the user asked for real verification. A Hub fronted by Caddy's
+  # internal CA (the default, and what SM_HUB_VERIFY_TLS=false above already
+  # assumes) fails an unqualified curl every time — and because the failure is
+  # swallowed below, discovery silently returned nothing and the node quietly
+  # made ITSELF the fleet NAS. That is the exact "manual wiring" this lookup
+  # exists to remove, so it must use the same TLS posture as the rest of the
+  # installer's Hub calls (see the enrollment fetch above, which always -k's).
+  _nas_curl_tls=""
+  [ "$SM_HUB_VERIFY_TLS" = "true" ] || _nas_curl_tls="-k"
+  _nas_info=$(curl -fsS $_nas_curl_tls --max-time 5 "${SM_HUB_URL%/}/api/fleet/nas-host" 2>/dev/null || true)
   if [ -n "$_nas_info" ]; then
     _discovered_nas_host=$(python3 -c "
 import json, sys
