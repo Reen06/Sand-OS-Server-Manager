@@ -267,7 +267,14 @@ step 6 "Python Venv"
 
 if [ "$PURGE" -eq 1 ]; then
   if [ -d "$VENV" ]; then
-    rm -rf "$VENV"
+    # $SUDO, not a bare rm: an installer run with sudo used to leave this venv
+    # owned by root, and a plain `rm -rf` then failed on every file. Under
+    # `set -e` that aborted the whole uninstall part-way — service and env file
+    # already gone, venv and app library still present, and no error summary,
+    # so the machine was left half-uninstalled and looked done. install.sh now
+    # fixes the ownership, but old installs still have root-owned venvs and
+    # must still be removable.
+    $SUDO rm -rf "$VENV"
     ok "Removed ${VENV}"
   else
     warn "${VENV} not present — skipping"

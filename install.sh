@@ -837,6 +837,14 @@ if [ ! -x "${VENV}/bin/uvicorn" ]; then
     && python3 -m venv .venv \
     && .venv/bin/pip install -q --upgrade pip \
     && .venv/bin/pip install -q -r requirements.txt )
+  # The installer is normally run with sudo, which left the whole venv owned by
+  # root inside a repo owned by the user the SERVICE runs as — the service could
+  # read it but never modify it, and ownership differed depending on whether
+  # install.sh happened to be invoked as root or not. It also broke teardown:
+  # uninstall.sh --purge run as a normal user could not delete a root-owned
+  # venv, and aborted part-way through, leaving the machine half-uninstalled.
+  # Own it as the user the service runs as, regardless of how we got here.
+  chown -R "${INVOKING_USER}:$(id -gn "$INVOKING_USER" 2>/dev/null || echo "$INVOKING_USER")" "$VENV" 2>/dev/null || true
   ok "Venv ready at ${VENV}"
 else
   ok "Venv already exists — skipping pip install"
