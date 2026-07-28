@@ -362,10 +362,27 @@ if [ "$DEREGISTER" -eq 1 ]; then
     #
     # -k: the Hub is normally fronted by Caddy's internal CA, same as every other
     # Hub call in this project.
-    _resp="$(curl -fsSk --max-time 20 -X POST \
+    # Capture the body AND the status separately, and do NOT discard curl's
+    # stderr: "the Hub did not answer" is useless when the real answer was 403
+    # or a TLS error, and this is the step whose silent failure leaves a live
+    # credential behind.
+    _body_file="$(mktemp)"
+    _code="$(curl -sSk --max-time 20 -X POST \
       -H 'Content-Type: application/json' \
       -d "{\"node_id\": \"${_id}\"}" \
-      "${SM_HUB_URL_SAVED%/}/api/fleet/nodes/deregister" 2>/dev/null || true)"
+      -o "$_body_file" -w '%{http_code}' \
+      "${SM_HUB_URL_SAVED%/}/api/fleet/nodes/deregister" 2>"${_body_file}.err" || echo 000)"
+    _resp="$(cat "$_body_file" 2>/dev/null)"
+    _curl_err="$(cat "${_body_file}.err" 2>/dev/null)"
+    rm -f "$_body_file" "${_body_file}.err"
+    if [ "$_code" != "200" ]; then
+      warn "The Hub refused the deregister (HTTP ${_code})."
+      [ -n "$_resp" ] && echo "      ${DIM}${_resp}${RST}"
+      [ -n "$_curl_err" ] && echo "      ${DIM}${_curl_err}${RST}"
+      warn "It still lists this node and its WireGuard peer is still valid —"
+      warn "remove it from the Fleet page so that credential does not stay live."
+      _resp=""
+    fi
     if [ -n "$_resp" ]; then
       ok "Hub acknowledged — registry, history, peer and staged files removed"
       echo "      ${DIM}${_resp}${RST}"
