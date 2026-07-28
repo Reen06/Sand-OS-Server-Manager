@@ -44,12 +44,27 @@ for _arg in "$@"; do
 done
 [ "${SM_UNATTENDED:-0}" = "1" ] && UNATTENDED=1
 
-# Pick a value without asking: an environment override wins, else the default.
-# Used to seed each prompt's default so interactive and unattended runs resolve
-# a value identically — the only difference is whether the user is offered the
-# chance to change it.
+# Snapshot what the CALLER passed in, before any code below runs.
+#
+# Several of these names are pre-initialised further down to the value they'd
+# hold if the user declined the corresponding prompt (SM_NAS_ENABLED="false",
+# SM_HUB_VERIFY_TLS="false", SM_EXTERNAL_BASE="/apps", SM_NAS_HOST=…). Reading
+# the live variable at prompt time would therefore see the script's own default
+# rather than what was asked for, and silently discard it — passing
+# SM_NAS_ENABLED=true really did come back out as false before this existed.
+for _v in SM_MODE SM_LAN_IP SM_PORT SM_NODE_NAME SM_HUB_URL SM_HUB_VERIFY_TLS \
+          SM_EXTERNAL_BASE SM_NAS_ENABLED SM_NAS_HOST SM_NAS_ROOT SM_GPU \
+          SM_SLOT_COUNT SM_DOCKER_ROOT SM_ENROLL_LINK SM_SSH_PORT; do
+  eval "_IN_${_v}=\${${_v}-}"
+done
+unset _v
+
+# Pick a value without asking: a caller-supplied override wins, else the
+# default. Used to seed each prompt's default so interactive and unattended
+# runs resolve a value identically — the only difference is whether the user is
+# offered the chance to change it.
 _env_or() {   # _env_or VARNAME default
-  local _v="${1}" _d="${2-}" _cur
+  local _v="_IN_${1}" _d="${2-}" _cur
   _cur="${!_v-}"
   printf '%s' "${_cur:-$_d}"
 }
@@ -180,6 +195,16 @@ pick() {               # pick "prompt" default  val1 "label1"  val2 "label2"  ..
 }
 
 _row() { printf "  ${DIM}%-26s${RST}  ${BOLD}%s${RST}\n" "$1" "$2"; }
+
+# ── Who is actually installing this ───────────────────────────────────────────
+# The installer is documented to be run with sudo, so a bare `whoami` here says
+# "root" and any path built from it belongs to the wrong account. Prefer the
+# invoking user, and read their real home from passwd rather than assuming
+# /home/<user> — root's home is /root, so guessing produces /home/root, a
+# directory that does not exist on any normal system.
+INVOKING_USER="${SUDO_USER:-$(whoami)}"
+INVOKING_HOME="$(getent passwd "$INVOKING_USER" 2>/dev/null | cut -d: -f6)"
+[ -n "$INVOKING_HOME" ] || INVOKING_HOME="/home/${INVOKING_USER}"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -423,7 +448,7 @@ cat << 'DESC'
 DESC
 
 SM_NAS_ENABLED="false"
-SM_NAS_ROOT="/home/$(whoami)/sandos-nas"
+SM_NAS_ROOT="${INVOKING_HOME}/sandos-nas"
 
 # Ask the Hub which node already self-hosts the fleet's real NFS export
 # (GET /api/fleet/nas-host — unauthenticated, exists precisely so a brand
@@ -449,7 +474,7 @@ SM_NAS_HOST="${_discovered_nas_host:-$SM_LAN_IP}"
 if confirm "Enable the NAS layer?" "$([ "$(_env_or SM_NAS_ENABLED false)" = "true" ] && echo y || echo n)"; then
   SM_NAS_ENABLED="true"
 
-  _nas_root_default="/home/$(whoami)/sandos-nas"
+  _nas_root_default="${INVOKING_HOME}/sandos-nas"
   SM_NAS_ROOT=$(read_val "Local path to the NAS export root (on the NAS host)" "$(_env_or SM_NAS_ROOT "$_nas_root_default")")
 
   blank
@@ -791,7 +816,7 @@ fi
 
 # ── 3. Systemd unit ────────────────────────────────────────────────────────────
 info "Installing systemd unit → ${UNIT_DEST}…"
-CURRENT_USER="${SUDO_USER:-$(whoami)}"
+CURRENT_USER="$INVOKING_USER"
 # Quote paths in case they contain spaces (repo path may include spaces).
 cat << EOF | $SUDO tee "$UNIT_DEST" > /dev/null
 [Unit]
