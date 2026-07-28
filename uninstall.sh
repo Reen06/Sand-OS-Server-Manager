@@ -248,6 +248,15 @@ for a in registry.CATALOG.values():
       warn "Couldn't read the app catalogue — upstream images (Stirling PDF,"
       warn "Ollama, …) left in place. Remove by hand with 'docker rmi <tag>'."
     fi
+    # Helper images the SM pulls ITSELF, not on behalf of any catalogue app:
+    # docker_backend shells out to a throwaway alpine to mkdir per-user paths
+    # on the NAS export. Nothing named it, so it survived --wipe-docker on
+    # every NAS-enabled node even though the SM is what put it there.
+    for _helper in alpine; do
+      if docker image inspect "$_helper" &>/dev/null; then
+        docker rmi -f "$_helper" &>/dev/null && ok "Removed helper image ${_helper}"
+      fi
+    done
     info "Images this node pulled for anything OTHER than a catalogue app are"
     info "left alone — they can't be told apart from an unrelated use of the"
     info "same tag elsewhere on this machine."
