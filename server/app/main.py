@@ -794,6 +794,63 @@ def sm_pool_status(request: Request):
         raise
 
 
+# ── Storage tiers ────────────────────────────────────────────────────────────
+@app.get("/api/sm/tiers")
+def sm_tiers(request: Request, refresh: bool = False):
+    """Tier policies and how much of the NAS currently sits in each.
+
+    Only meaningful on the NAS host — it is the machine that has the tree.
+    """
+    _require_identity(request)
+    from . import tiers, pool_sources
+    u = tiers.usage(refresh=refresh)
+    srcs = pool_sources.summary()["sources"]
+    # Which storage each tier may actually use here, so the dashboard can say
+    # "Critical has nowhere to go on this machine" rather than showing a policy
+    # that cannot currently be honoured.
+    for t in u["tiers"]:
+        eligible = tiers.eligible_sources(t["id"], srcs)
+        t["eligible_sources"] = [s["label"] for s in eligible]
+        t["eligible_free_bytes"] = sum(s["free_bytes"] for s in eligible)
+    return u
+
+
+@app.get("/api/sm/tiers/of")
+def sm_tier_of(request: Request, path: str):
+    """The tier that applies to one path, and why."""
+    ident = _require_identity(request)
+    from . import tiers
+    return tiers.effective_tier(ident.get("username", ""), path)
+
+
+class _TierBody(BaseModel):
+    path: str
+    tier: int | None = None       # None clears the override
+
+
+@app.post("/api/sm/tiers/override")
+def sm_tier_override(body: _TierBody, request: Request):
+    """Pin one of the caller's own files to a higher tier, or clear the pin.
+
+    The owner comes from the session, never the request, so nobody can retier
+    another account's files by naming them.
+    """
+    ident = _require_identity(request)
+    from . import tiers
+    try:
+        return tiers.set_override(ident.get("username", ""), body.path, body.tier)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/sm/tiers/prepare")
+def sm_tiers_prepare(request: Request):
+    """Create the caller's tier folders if they don't exist yet."""
+    ident = _require_identity(request)
+    from . import tiers
+    return {"created": tiers.ensure_tier_dirs(ident.get("username", ""))}
+
+
 @app.get("/api/sm/pool/sources")
 def sm_pool_sources(request: Request):
     """Every storage source this node contributes, with per-source capability.
