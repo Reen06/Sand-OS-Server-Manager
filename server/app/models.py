@@ -128,6 +128,20 @@ class AppDef:
     # placeholder. True here skips the injection so the app's native PWA
     # assets are served untouched.
     native_pwa: bool = False
+    # May this app run on several nodes at the same time, instead of having one
+    # fleet-wide placement the Hub moves around?
+    #
+    # Declared per app rather than derived, because the obvious derivations are
+    # wrong. "Has sidecars" catches Nextcloud and OnlyOffice but misses
+    # Open WebUI, whose shared SQLite lives in one NFS volume two copies would
+    # corrupt. "Has a shared NFS mount" catches that but wrongly excludes
+    # Filebrowser, whose shared media mount is a file share — concurrent access
+    # from several machines is the entire point of it.
+    #
+    # Default False keeps the existing single-placement behaviour for anything
+    # not consciously reviewed. Set True only where two concurrent copies
+    # provably do not share mutable state.
+    multi_node: bool = False
     # iOS Safari's "Add to Home Screen" mostly ignores the JSON manifest and
     # specifically wants a <link rel="apple-touch-icon">, which this app's own
     # HTML doesn't emit — without it, Safari falls back to a low-res favicon

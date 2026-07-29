@@ -28,6 +28,7 @@ _INSTALLED_TTL = 30.0
 CATALOG: dict[str, AppDef] = {
     "freecad": AppDef(
         id="freecad",
+        multi_node=True,   # per-user; opens the user's own NAS home, same as any two of their apps already do
         label="FreeCAD",
         icon="cpu",
         color="blue",
@@ -76,6 +77,7 @@ CATALOG: dict[str, AppDef] = {
     ),
     "filebrowser": AppDef(
         id="filebrowser",
+        multi_node=True,   # a file manager; its shared media mount is a network share and its index is node-local
         label="Files",
         icon="database",   # whitelisted NAS/storage glyph in the dashboard
         color="amber",
@@ -112,6 +114,7 @@ CATALOG: dict[str, AppDef] = {
     ),
     "webcad": AppDef(
         id="webcad",
+        multi_node=True,   # stateless tool
         label="WebCAD/CAM",
         icon="cpu",         # whitelisted CAD/compute glyph in the dashboard
         color="blue",
@@ -150,6 +153,7 @@ CATALOG: dict[str, AppDef] = {
     ),
     "helix": AppDef(
         id="helix",
+        multi_node=True,   # stateless editor
         label="HeliX Motion",
         icon="cpu",         # whitelisted CAD/compute glyph in the dashboard
         color="green",
@@ -207,6 +211,7 @@ CATALOG: dict[str, AppDef] = {
     ),
     "rayoptics": AppDef(
         id="rayoptics",
+        multi_node=True,   # stateless tool
         label="Ray Optics",
         icon="cpu",          # whitelisted; closest sim/compute glyph the Hub ships
         color="cyan",
@@ -256,6 +261,7 @@ CATALOG: dict[str, AppDef] = {
     ),
     "engineeringpaper": AppDef(
         id="engineeringpaper",
+        multi_node=True,   # per-user sheets in the user's own home
         label="EngineeringPaper.xyz",
         icon="cpu",          # whitelisted; closest sim/compute glyph the Hub ships
         color="cyan",
@@ -294,6 +300,7 @@ CATALOG: dict[str, AppDef] = {
     ),
     "openfoamgui": AppDef(
         id="openfoamgui",
+        multi_node=True,   # stateless solver UI
         label="OpenFOAM GUI",
         icon="cpu",
         color="blue",
@@ -338,6 +345,7 @@ CATALOG: dict[str, AppDef] = {
     ),
     "paraview": AppDef(
         id="paraview",
+        multi_node=True,   # per-user; reads datasets, no shared mutable state
         label="ParaView",
         icon="globe",         # whitelisted; visualizer glyph
         color="green",
@@ -404,6 +412,7 @@ CATALOG: dict[str, AppDef] = {
     ),
     "stirlingpdf": AppDef(
         id="stirlingpdf",
+        multi_node=True,   # stateless PDF tooling; config and logs are node-local volumes
         label="Stirling PDF",
         icon="pencil",       # whitelisted; closest "edit a document" glyph the Hub ships
         color="amber",
@@ -524,6 +533,7 @@ CATALOG: dict[str, AppDef] = {
     ),
     "ollama": AppDef(
         id="ollama",
+        multi_node=True,   # already ran fleet-wide; models are node-local
         label="Ollama",
         icon="cpu",
         color="violet",

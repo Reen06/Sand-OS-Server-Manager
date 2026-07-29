@@ -567,6 +567,9 @@ def sm_info():
              # file picker, so it must travel with the app metadata the Hub
              # caches, not just the per-user listing.
              "takes_staged_files": registry.takes_staged_files(a.id),
+             # Whether this app may run on several nodes at once. The Hub keeps
+             # one fleet-wide placement for anything that says False.
+             "multi_node": a.multi_node,
              # Lets the Hub's proxy know this app's own manifest.json/static/*
              # (icons, favicons) are safe to serve WITHOUT the hub_session
              # cookie — browsers fetch a PWA's install assets unauthenticated
