@@ -118,11 +118,39 @@ def _resync_nas_policy_if_host() -> None:
         return
     if not config.NAS_ENABLED or config.NAS_HOST != config.LAN_IP:
         return                      # not the NAS host — nothing to apply
+    def _prune() -> None:
+        """Delete staging trees for nodes the fleet no longer knows about.
+
+        Runs after a successful policy sync, so the Hub is known reachable and
+        its answer is known good. Never prunes on a failed or empty fetch — see
+        nas_staging.prune_orphans.
+        """
+        try:
+            import json as _json
+            import urllib.request as _u
+            hub = (config.HUB_URL or "").rstrip("/")
+            if not hub:
+                return
+            ctx = None
+            if hub.startswith("https"):
+                import ssl
+                ctx = ssl._create_unverified_context()
+            with _u.urlopen(f"{hub}/api/fleet/nas-policy", timeout=15,
+                            context=ctx) as resp:
+                policy = _json.loads(resp.read().decode())
+            from . import nas_staging
+            gone = nas_staging.prune_orphans(policy.get("known_nodes") or [])
+            for n in gone:
+                print(f"[nas] pruned staging for decommissioned node {n!r}")
+        except Exception as e:      # noqa: BLE001
+            print(f"[nas] staging prune skipped: {e}")
+
     def _once() -> bool:
         try:
             r = subprocess.run(["bash", str(script)], capture_output=True,
                                text=True, timeout=120)
             if r.returncode == 0:
+                _prune()
                 return True
             print(f"[nas] policy resync skipped: "
                   f"{(r.stderr or r.stdout or '').strip()[:200]}")

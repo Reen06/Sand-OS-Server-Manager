@@ -186,3 +186,40 @@ def list_staged(node: str | None = None) -> list[dict]:
             out.append({"node": n, "instance": inst, "files": files,
                         "user": meta.get("user"), "staged_at": meta.get("staged_at")})
     return out
+
+
+def prune_orphans(known_nodes: list[str]) -> list[str]:
+    """Delete staging trees belonging to nodes the fleet no longer knows about.
+
+    This is how a decommissioned node's staged files actually get removed. The
+    Hub cannot delete them at deregistration time: a node running its own
+    uninstaller has no Hub session, so the Hub has no credential to call the NAS
+    host with, and the call comes back 401. Here the NAS host is acting on its
+    own data, so no credential is involved.
+
+    Refuses to do anything on an empty roster. An empty list is what a failed
+    Hub fetch, a half-written response or a Hub with its registry wiped all look
+    like, and acting on it would delete every staged file on the NAS — including
+    files a running app is mid-way through using. Deleting nothing when the
+    answer is unclear is always recoverable; the reverse is not.
+    """
+    if not known_nodes:
+        return []
+    root = os.path.join(config.NAS_ROOT, _STAGING)
+    if not os.path.isdir(root):
+        return []
+    keep = {n.strip() for n in known_nodes if n and n.strip()}
+    # Case-insensitively too: a node stages into its raw NODE_NAME while the Hub
+    # generates the export path from a lowercased, sanitised one. Matching only
+    # exactly would delete a live node's files whenever the two spellings differ.
+    keep_lower = {n.lower() for n in keep}
+    removed = []
+    for name in sorted(os.listdir(root)):
+        d = os.path.join(root, name)
+        if not os.path.isdir(d):
+            continue
+        if name in keep or name.lower() in keep_lower:
+            continue
+        shutil.rmtree(d, ignore_errors=True)
+        removed.append(name)
+    return removed
