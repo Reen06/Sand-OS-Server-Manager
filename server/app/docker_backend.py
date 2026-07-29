@@ -322,6 +322,11 @@ def ensure_nfs_volume(user: str, m, host: str | None = None, app_id: str = "") -
     return _ensure_nfs(user, m, host=host, app_id=app_id)
 
 
+# Returned as the volume name when a mount must not be attached at all, as
+# distinct from "" which means "fall back to a node-local volume".
+_SKIP_MOUNT = "\x00skip"
+
+
 def _nfs_target(user: str, m, app_id: str = "") -> tuple[str, str]:
     """(export subpath, docker volume name) for an NFS mount. per-user → the
     user's NAS home (same files across ALL their apps); shared → shared/{name};
@@ -348,10 +353,20 @@ def _nfs_target(user: str, m, app_id: str = "") -> tuple[str, str]:
             from . import registry
             return registry.instance_name(app_id, user), \
                 f"sm-nfs-staged-{_safe(app_id)}-{_safe(user)}"
-        # Settings, caches and logs must NOT live in staging: staging is cleared
-        # when the app stops, which would wipe the user's app configuration
-        # every single time. Fall back to a node-local volume for those.
-        return "", ""
+        if m.scope == "per-user":
+            # A per-user, non-home NFS mount is this app's own settings for this
+            # user (FreeCAD's config and share dirs). They must NOT live in
+            # staging, which is wiped when the app stops — that would reset the
+            # user's preferences on every run. A node-local volume keeps them,
+            # at the cost of not following the user between nodes.
+            return "", ""
+        # A shared or root NFS mount is fleet-wide data this node is not allowed
+        # to see. Substituting a node-local volume was worse than not mounting
+        # it: the app showed a folder with the shared folder's NAME, backed by
+        # empty scratch space on the node's own disk. Anything saved into it
+        # looked shared, was visible nowhere else, and died with the node.
+        # Skip it entirely — an absent folder is honest, a fake one is not.
+        return "", _SKIP_MOUNT
     if m.scope == "root":
         return "", "sm-nfs-root"
     if m.scope == "shared":
@@ -378,8 +393,10 @@ def _ensure_nfs(user: str, m, host: str | None = None, app_id: str = "") -> str:
     mount of the NFS root, so this works from ANY node/daemon (the app node
     need not be the NAS)."""
     subpath, vol = _nfs_target(user, m, app_id=app_id)
+    if vol == _SKIP_MOUNT:
+        return _SKIP_MOUNT     # do not attach this mount at all
     if not vol:
-        return ""          # app-only node: caller falls back to a local volume
+        return ""              # app-only node: caller falls back to a local volume
     _nfs_volume_create("sm-nfs-root", ":/", host=host)       # NFSv4 pseudo-root
     # A brand-new NFSv4 client establishing its first session/lease against the
     # NAS can occasionally take well over 45s under load (observed live, not
@@ -410,6 +427,8 @@ def _mount_args(app_id: str, user: str, mounts, host: str | None = None) -> list
             vol = ensure_usb_volume(usb_uuid, app_id, user, m, host=host)
         elif mode == "nfs" and config.NAS_ENABLED:
             vol = _ensure_nfs(user, m, host=host, app_id=app_id)  # fleet NAS over NFSv4
+            if vol == _SKIP_MOUNT:
+                continue          # fleet-shared data this node may not see
             if not vol:
                 # App-only node, and this mount is not the user's files (it is
                 # settings/logs/cache). Those stay node-local — putting them in

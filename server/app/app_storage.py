@@ -148,7 +148,7 @@ def _current_volume(app_id: str, user: str, m: Mount) -> str:
         # Empty on an app-only node for anything but the user's files — that
         # mount is node-local there, so fall through to the local name.
         vol = docker_backend.nfs_volume_name(user, m, app_id=app_id)
-        if vol:
+        if vol and vol != docker_backend._SKIP_MOUNT:
             return vol
     return registry.resolve_volume(app_id, user, m)
 
@@ -266,7 +266,7 @@ def _run_move(job: dict, app_id: str, user: str, mount_name: str,
             new_vol = docker_backend.ensure_usb_volume(usb_uuid, app_id, user, m)
         elif target_mode == "nfs" and config.NAS_ENABLED:
             new_vol = docker_backend.ensure_nfs_volume(user, m, app_id=app_id)
-            if not new_vol:
+            if new_vol == docker_backend._SKIP_MOUNT or not new_vol:
                 # App-only node: this mount has no NAS home (see _nfs_target).
                 # Moving it "to the NAS" is not something this node can do.
                 raise ValueError(
