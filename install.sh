@@ -909,6 +909,28 @@ $SUDO chown "${INVOKING_USER}:$(id -gn "$INVOKING_USER" 2>/dev/null || echo "$IN
 # be root-owned and is exactly what blocks a later reinstall.
 $SUDO find "$SERVER_DIR" -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
 
+# Make sure the service user owns this checkout's git metadata.
+#
+# Fleet auto-update works by running `git -C <repo_root> pull` on the node as
+# that user. Git writes FETCH_HEAD, ORIG_HEAD, refs and objects while doing so,
+# so if any of that is owned by someone else — a root-run `git pull` during
+# setup, a checkout made by a different account — the pull fails with a
+# permission error and the node silently stops updating. Seen in practice:
+# .git/FETCH_HEAD and .git/ORIG_HEAD owned by root inside a user-owned clone.
+#
+# Only .git, not the whole tree: the working files may legitimately belong to
+# someone else (a shared or root-owned deployment), but whoever the service runs
+# as must be able to write git's own bookkeeping.
+if [ -d "${REPO_ROOT}/.git" ]; then
+  _grp="$(id -gn "$INVOKING_USER" 2>/dev/null || echo "$INVOKING_USER")"
+  if $SUDO chown -R "${INVOKING_USER}:${_grp}" "${REPO_ROOT}/.git" 2>/dev/null; then
+    ok "Git metadata owned by ${INVOKING_USER} (auto-update can pull)"
+  else
+    warn "Couldn't set ownership on ${REPO_ROOT}/.git — fleet auto-update may"
+    warn "fail to pull on this node until that is fixed by hand."
+  fi
+fi
+
 info "Installing systemd unit → ${UNIT_DEST}…"
 CURRENT_USER="$INVOKING_USER"
 # Quote paths in case they contain spaces (repo path may include spaces).
