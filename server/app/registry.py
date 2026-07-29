@@ -871,15 +871,45 @@ def instance_name(app_id: str, user: str) -> str:
     return f"sm-{_safe(app_id)}-{_safe(user)}"
 
 
+def _ports_in_use() -> set[int]:
+    """Web ports actually published by containers on this box, right now.
+
+    `_slots` only knows about instances THIS process started or adopted at its
+    last reconcile. A container started any other way — a crash-recovery
+    relaunch, an operator running docker by hand, a second admin — is invisible
+    to it, so the allocator hands out a slot whose port is already bound and
+    `docker run` fails with "address already in use". That surfaces to the user
+    as a bare "failed to set up container" with nothing pointing at the cause.
+
+    Asking Docker is the only answer that cannot be stale.
+    """
+    used: set[int] = set()
+    try:
+        for host in docker_backend.all_docker_hosts():
+            for name in docker_backend.list_sm_containers(host=host):
+                port = docker_backend.published_web_port(name, host=host)
+                if port:
+                    used.add(int(port))
+    except Exception:  # noqa: BLE001
+        pass          # never block a launch on a failed inspection
+    return used
+
+
 def _alloc_slot(app_id: str, user: str) -> int:
     key = (app_id, user)
     for s, owner in _slots.items():
         if owner == key:
             return s
+    busy_ports = _ports_in_use()
     for s in range(config.SLOT_COUNT):
-        if s not in _slots:
-            _slots[s] = key
-            return s
+        if s in _slots:
+            continue
+        if (config.WEB_PORT_BASE + s) in busy_ports:
+            # Something outside this process owns that port. Claiming the slot
+            # anyway would fail at docker run; skipping costs one slot.
+            continue
+        _slots[s] = key
+        return s
     raise RuntimeError("no free instance slots")
 
 
