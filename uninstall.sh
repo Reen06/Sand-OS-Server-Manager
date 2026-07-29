@@ -49,6 +49,8 @@ confirm() {
 PURGE=0
 WIPE_DOCKER=0
 ASSUME_YES=0
+KEEP_NAS=-1      # -1 = not stated; ask, or fall back to --purge/--yes
+REMOVE_NAS=0
 REMOVE_TUNNEL=0
 DEREGISTER=0
 for arg in "$@"; do
@@ -56,6 +58,11 @@ for arg in "$@"; do
     --purge) PURGE=1 ;;
     --wipe-docker) WIPE_DOCKER=1 ;;
     -y|--yes) ASSUME_YES=1 ;;
+    # Explicit answers for the NAS-storage question, so an unattended teardown
+    # never has to imply one. Without these, --yes would answer it too, and
+    # "delete the venv" would quietly mean "delete the files as well".
+    --keep-nas)   KEEP_NAS=1 ;;
+    --remove-nas) KEEP_NAS=0; REMOVE_NAS=1 ;;
     --remove-tunnel) REMOVE_TUNNEL=1 ;;
     --deregister) DEREGISTER=1 ;;
     # Decommissioning this machine for good: everything local, plus telling the
@@ -68,6 +75,8 @@ for arg in "$@"; do
       echo "                              [--remove-tunnel] [--deregister] [--full]"
       echo "  --purge          also remove the Python venv (server/.venv)"
       echo "  --yes, -y        assume yes to every confirmation (scripted teardown)"
+      echo "  --keep-nas       keep this node's contributed NAS storage and its files"
+      echo "  --remove-nas     delete this node's NAS storage and everything in it"
       echo "  --wipe-docker    also remove every sm-* container/volume/network/image"
       echo "                   this node ever created — a real, destructive teardown"
       echo "                   of all locally-installed app data, for a genuinely"
@@ -214,18 +223,40 @@ step 4 "Remove Sudoers Rule"
 # left on the machine to explain what took them. Only under --purge, though:
 # a plain uninstall is usually a prelude to reinstalling on the same box, and
 # silently discarding contributed storage would be a nasty surprise.
+# The NAS pool holds a preallocated image that is REAL disk space, and it may
+# hold the only copy of files stored on this node. Never decided by a flag
+# alone: the operator is shown exactly how much space and how much data is at
+# stake, and asked. --purge/--yes answer the question rather than skip it.
 POOL_HELPER=/usr/local/lib/sandos-sm-pool
 if [ -x "$POOL_HELPER" ]; then
-  if [ "$PURGE" -eq 1 ]; then
-    if $SUDO "$POOL_HELPER" destroy >/dev/null 2>&1; then
-      ok "NAS pool storage released back to this machine"
-    else
-      warn "Could not release the NAS pool (still in use?) — run:"
-      warn "  sudo ${POOL_HELPER} destroy"
+  _pool_json="$($SUDO "$POOL_HELPER" status 2>/dev/null || echo '{}')"
+  _pool_exists=$(printf '%s' "$_pool_json" | grep -o '"exists":[a-z]*' | cut -d: -f2)
+  if [ "${_pool_exists:-false}" = "true" ]; then
+    _pool_size=$(printf '%s' "$_pool_json" | grep -o '"image_bytes":[0-9]*' | cut -d: -f2)
+    _pool_used=$(printf '%s' "$_pool_json" | grep -o '"used_bytes":[0-9]*' | cut -d: -f2)
+    blank
+    warn "This node contributes $(( ${_pool_size:-0} / 1024 / 1024 / 1024 ))G to the mesh NAS,"
+    warn "holding $(( ${_pool_used:-0} / 1024 / 1024 ))M of data."
+    warn "Removing it frees the space and DELETES anything stored only here."
+    _drop_pool=0
+    if   [ "$KEEP_NAS" -eq 1 ];   then _drop_pool=0
+    elif [ "$REMOVE_NAS" -eq 1 ]; then _drop_pool=1
+    elif confirm "Delete this node's NAS storage and its contents?"; then _drop_pool=1
     fi
-    $SUDO rm -f "$POOL_HELPER"
+    if [ "$_drop_pool" -eq 1 ]; then
+      if $SUDO "$POOL_HELPER" destroy >/dev/null 2>&1; then
+        ok "NAS pool storage released back to this machine"
+        $SUDO rm -f "$POOL_HELPER"
+      else
+        warn "Could not release the NAS pool (still mounted or in use) — run:"
+        warn "  sudo ${POOL_HELPER} destroy"
+      fi
+    else
+      ok "NAS pool left in place — its files and reserved space are untouched"
+      info "Reclaim it later with: sudo ${POOL_HELPER} destroy"
+    fi
   else
-    warn "NAS pool image left in place (use --purge to reclaim that space)"
+    $SUDO rm -f "$POOL_HELPER"
   fi
 fi
 
