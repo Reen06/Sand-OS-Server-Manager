@@ -10,7 +10,7 @@ import time
 import urllib.error
 import urllib.request
 from .models import AppDef, Instance
-from . import config
+from . import config, nas_scope
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -312,20 +312,46 @@ def ensure_usb_volume(uuid: str, app_id: str, user: str, m, host: str | None = N
     return vol
 
 
-def nfs_volume_name(user: str, m) -> str:
-    return _nfs_target(user, m)[1]
+def nfs_volume_name(user: str, m, app_id: str = "") -> str:
+    return _nfs_target(user, m, app_id=app_id)[1]
 
 
-def ensure_nfs_volume(user: str, m, host: str | None = None) -> str:
+def ensure_nfs_volume(user: str, m, host: str | None = None, app_id: str = "") -> str:
     """Public wrapper — app_storage.py resolves/creates NFS-backed volumes the
     same way spawn()'s _mount_args does internally."""
-    return _ensure_nfs(user, m, host=host)
+    return _ensure_nfs(user, m, host=host, app_id=app_id)
 
 
-def _nfs_target(user: str, m) -> tuple[str, str]:
+def _nfs_target(user: str, m, app_id: str = "") -> tuple[str, str]:
     """(export subpath, docker volume name) for an NFS mount. per-user → the
     user's NAS home (same files across ALL their apps); shared → shared/{name};
-    root → the whole export (Nextcloud mounts this + scopes per user itself)."""
+    root → the whole export (Nextcloud mounts this + scopes per user itself).
+
+    On an app-only node none of those paths exist. Its export is fsid=0 on its
+    own staging directory, so that directory is the root of everything it can
+    see, and the user's home mount resolves to the files staged for THIS app
+    instance instead — which is the whole point of brokered access: the app gets
+    the files the job needs and nothing else.
+    """
+    staging = nas_scope.staging_name()
+    if staging:
+        if m.scope == "root":
+            # Nextcloud and friends mount the entire tree and scope it
+            # internally. There is nothing to scope here, and quietly handing
+            # over a staging directory would present an empty NAS as if it were
+            # the real one. Refuse and say why.
+            raise RuntimeError(
+                f"{app_id or 'this app'} mounts the whole NAS, which an app-only "
+                f"node cannot see — run it on a trusted node, or raise this "
+                f"node's NAS trust")
+        if m.scope == "per-user" and m.name == "home":
+            from . import registry
+            return registry.instance_name(app_id, user), \
+                f"sm-nfs-staged-{_safe(app_id)}-{_safe(user)}"
+        # Settings, caches and logs must NOT live in staging: staging is cleared
+        # when the app stops, which would wipe the user's app configuration
+        # every single time. Fall back to a node-local volume for those.
+        return "", ""
     if m.scope == "root":
         return "", "sm-nfs-root"
     if m.scope == "shared":
@@ -346,12 +372,14 @@ def _nfs_volume_create(vol: str, device: str, host: str | None = None) -> None:
                  "--opt", f"device={device}", vol], timeout=15, host=host)
 
 
-def _ensure_nfs(user: str, m, host: str | None = None) -> str:
+def _ensure_nfs(user: str, m, host: str | None = None, app_id: str = "") -> str:
     """Ensure the NAS dir exists + an NFS-backed docker volume for it, in the
     given daemon; return the volume name. The dir is created via a throwaway
     mount of the NFS root, so this works from ANY node/daemon (the app node
     need not be the NAS)."""
-    subpath, vol = _nfs_target(user, m)
+    subpath, vol = _nfs_target(user, m, app_id=app_id)
+    if not vol:
+        return ""          # app-only node: caller falls back to a local volume
     _nfs_volume_create("sm-nfs-root", ":/", host=host)       # NFSv4 pseudo-root
     # A brand-new NFSv4 client establishing its first session/lease against the
     # NAS can occasionally take well over 45s under load (observed live, not
@@ -381,7 +409,13 @@ def _mount_args(app_id: str, user: str, mounts, host: str | None = None) -> list
         if mode == "usb" and usb_uuid:
             vol = ensure_usb_volume(usb_uuid, app_id, user, m, host=host)
         elif mode == "nfs" and config.NAS_ENABLED:
-            vol = _ensure_nfs(user, m, host=host)           # fleet NAS over NFSv4
+            vol = _ensure_nfs(user, m, host=host, app_id=app_id)  # fleet NAS over NFSv4
+            if not vol:
+                # App-only node, and this mount is not the user's files (it is
+                # settings/logs/cache). Those stay node-local — putting them in
+                # staging would delete the user's app configuration every time
+                # the app stops.
+                vol = registry.resolve_volume(app_id, user, m)
         else:
             vol = registry.resolve_volume(app_id, user, m)  # node-local docker volume
         out += ["-v", f"{vol}:{m.path}" + (":ro" if m.ro else "")]
