@@ -86,6 +86,12 @@ def _autostart_apps() -> None:
     threading.Thread(target=_run, daemon=True, name="sm-autostart").start()
 
 
+# How often the NAS host re-pulls its export policy from the Hub. Fifteen
+# minutes bounds the window in which a missed push (node down, tunnel flapping,
+# Hub restarted mid-push) leaves a stale export live. Overridable so the loop
+# can be exercised in seconds rather than by waiting out a real interval.
+_NAS_RESYNC_INTERVAL = int(os.environ.get("SM_NAS_RESYNC_INTERVAL") or 900)
+
 @app.on_event("startup")
 def _startup() -> None:
     usb_storage.start_poller()   # auto-mount marked USB drives
@@ -112,17 +118,41 @@ def _resync_nas_policy_if_host() -> None:
         return
     if not config.NAS_ENABLED or config.NAS_HOST != config.LAN_IP:
         return                      # not the NAS host — nothing to apply
-    def _run() -> None:
+    def _once() -> bool:
         try:
             r = subprocess.run(["bash", str(script)], capture_output=True,
                                text=True, timeout=120)
             if r.returncode == 0:
-                print("[nas] export policy re-applied from the Hub")
-            else:
-                print(f"[nas] policy resync skipped: "
-                      f"{(r.stderr or r.stdout or '').strip()[:200]}")
+                return True
+            print(f"[nas] policy resync skipped: "
+                  f"{(r.stderr or r.stdout or '').strip()[:200]}")
         except Exception as e:      # noqa: BLE001
             print(f"[nas] policy resync failed: {e}")
+        return False
+
+    def _run() -> None:
+        """Apply at boot, then keep re-applying on a slow timer.
+
+        The Hub pushes on every trust change, so this is the backstop for the
+        pushes that never arrive: this node down at the moment of the change, a
+        tunnel that was flapping, a Hub restart mid-push. Without it a revocation
+        can sit unapplied indefinitely and nothing anywhere reports a problem —
+        the exports simply stay as they were, which for a revocation is the
+        dangerous direction to fail in.
+
+        Interval is deliberately long. The push path is what makes changes
+        prompt; this only bounds how long a *missed* push can persist, and
+        polling the Hub harder would cost every node a request for something
+        that is almost always a no-op.
+        """
+        first = True
+        while True:
+            if not first:
+                time.sleep(_NAS_RESYNC_INTERVAL)
+            if _once() and first:
+                print("[nas] export policy re-applied from the Hub")
+            first = False
+
     # Off the startup path: the Hub may not be reachable the instant this boots,
     # and blocking here would delay every other service this node provides.
     threading.Thread(target=_run, daemon=True).start()
@@ -573,6 +603,26 @@ def sm_ssh_authorize(request: Request, body: _SshAuthorizeBody):
             f.write(key + "\n")
         auth_file.chmod(0o600)
     return {"ok": True, "user": getpass.getuser(), "ssh_port": config.SSH_PORT}
+
+
+@app.get("/api/apps/{app_id}/instance-name")
+def sm_instance_name(app_id: str, request: Request):
+    """The container/staging identity this node would use for this caller.
+
+    Exists so the Hub can stage files under the SAME name that registry.stop()
+    later clears. The Hub cannot derive it: the name depends on whether this
+    app's AppDef is `mode="shared"` (no user suffix) and on this node's own
+    identifier sanitiser. Guessing it produces a staging directory that nothing
+    ever cleans up — files left behind after a job is exactly the standing
+    access staging exists to remove.
+    """
+    ident = _require_identity(request)
+    if app_id not in registry.APPS:
+        raise HTTPException(404, "unknown app")
+    user = ident.get("username", "")
+    return {"app_id": app_id, "user": user,
+            "instance": registry.instance_name(app_id, user),
+            "node": config.NODE_NAME}
 
 
 class _StageBody(BaseModel):
