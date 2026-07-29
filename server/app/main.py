@@ -7,6 +7,7 @@ cookie so per-user instances are demonstrable on the LAN.
 """
 from __future__ import annotations
 import getpass
+import json
 import os
 import subprocess
 import threading
@@ -556,6 +557,13 @@ def sm_info():
         # node silently defaulting to itself and mounting nothing.
         "nas_enabled": config.NAS_ENABLED,
         "nas_host": config.NAS_HOST,
+        # This node's contribution to the mesh NAS pool, so the Hub can build
+        # the fleet-wide picture from the probe it already makes rather than a
+        # second round-trip per node. Never raises: a node with no helper, or a
+        # pool that failed to mount, must still report everything else about
+        # itself — losing a whole node from the fleet view because its storage
+        # is unavailable would hide the very problem worth seeing.
+        "pool": _pool_status_safe(),
         "metrics": metrics.collect(),
         "apps": [
             {"id": a.id, "label": a.label, "kind": a.kind, "mode": a.mode,
@@ -716,6 +724,107 @@ def sm_nas_unstage(body: _InstanceBody, request: Request):
 
 class _NodeBody(BaseModel):
     node: str
+
+
+# ── Mesh NAS pool: this node's contributed storage ───────────────────────────
+_POOL_HELPER = "/usr/local/lib/sandos-sm-pool"
+
+
+def _pool_call(*args: str) -> dict:
+    """Run the privileged pool helper and parse its JSON.
+
+    stdout is the document; everything the underlying tools print goes to
+    stderr, so a resize2fs banner cannot corrupt the reply (it did, before).
+    """
+    if not os.path.exists(_POOL_HELPER):
+        raise HTTPException(501, "this node has no NAS pool helper installed")
+    r = subprocess.run(["sudo", "-n", _POOL_HELPER, *args],
+                       capture_output=True, text=True, timeout=900)
+    if r.returncode != 0:
+        detail = (r.stderr or r.stdout or "pool command failed").strip()
+        raise HTTPException(400, detail.replace("sandos-sm-pool: ", "")[:300])
+    try:
+        return json.loads(r.stdout or "{}")
+    except ValueError:
+        raise HTTPException(500, f"pool helper returned unparseable output: {r.stdout[:200]}")
+
+
+def _pool_status_safe() -> dict:
+    """Pool status for the probe payload, or a "not contributing" shape."""
+    none = {"exists": False, "mounted": False, "image_bytes": 0,
+            "used_bytes": 0, "avail_bytes": 0, "host_avail_bytes": 0,
+            "supported": os.path.exists(_POOL_HELPER)}
+    if not os.path.exists(_POOL_HELPER):
+        return none
+    try:
+        d = _pool_call("status")
+        d["supported"] = True
+        return d
+    except Exception:  # noqa: BLE001
+        return none
+
+
+@app.get("/api/sm/pool")
+def sm_pool_status(request: Request):
+    """This node's NAS contribution: size, used, free, and the host's own free
+    space — the last being what bounds how far it could be grown."""
+    _require_identity(request)
+    try:
+        return _pool_call("status")
+    except HTTPException as e:
+        if e.status_code == 501:
+            return {"exists": False, "mounted": False, "image_bytes": 0,
+                    "used_bytes": 0, "avail_bytes": 0, "host_avail_bytes": 0,
+                    "supported": False}
+        raise
+
+
+class _PoolSizeBody(BaseModel):
+    size: str          # "20G", "512M", or raw bytes
+
+
+@app.post("/api/sm/pool/reserve")
+def sm_pool_reserve(body: _PoolSizeBody, request: Request):
+    """Create, grow or shrink this node's contribution to the requested size.
+
+    One entry point rather than three, because the caller is expressing a
+    desired size, not an operation — and which of create/grow/shrink achieves
+    it is this node's business, not the Hub's.
+    """
+    ident = _require_identity(request)
+    if ident.get("role") != "admin":
+        raise HTTPException(403, "changing this node's storage contribution is admin only")
+    cur = _pool_call("status")
+    if not cur.get("exists"):
+        return _pool_call("create", body.size)
+    want = _pool_bytes(body.size)   # resolved at call time; defined below
+    have = int(cur.get("image_bytes") or 0)
+    if want == have:
+        return cur
+    return _pool_call("grow" if want > have else "shrink", body.size)
+
+
+def _pool_bytes(size: str) -> int:
+    """Same size grammar the helper accepts, so the two cannot disagree about
+    what "20G" means when deciding whether this is a grow or a shrink."""
+    v = (size or "").strip()
+    if not v:
+        raise HTTPException(400, "no size given")
+    unit = v[-1].upper()
+    mult = {"G": 1024 ** 3, "M": 1024 ** 2, "T": 1024 ** 4}.get(unit)
+    try:
+        return int(v[:-1]) * mult if mult else int(v)
+    except ValueError:
+        raise HTTPException(400, f"unrecognised size: {size!r}")
+
+
+@app.post("/api/sm/pool/release")
+def sm_pool_release(request: Request):
+    """Give this node's contributed space back to the machine."""
+    ident = _require_identity(request)
+    if ident.get("role") != "admin":
+        raise HTTPException(403, "releasing storage is admin only")
+    return _pool_call("destroy")
 
 
 @app.post("/api/sm/nas/deposit")

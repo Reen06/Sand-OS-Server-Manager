@@ -978,8 +978,23 @@ $SUDO systemctl enable "$UNIT_NAME"
 # both features appearing to work off a coincidentally-still-warm cached
 # sudo credential rather than a real permanent rule).
 info "Granting passwordless restart permission (needed for the Hub restart button + auto-update)…"
+# Mesh NAS pool helper: creating, growing and shrinking a loop-mounted storage
+# reservation needs root. Installed as a fixed, root-owned script with a narrow
+# sudoers entry rather than granting the service user general privileges — the
+# same pattern the Sand-OS node uses for its sand-* helpers.
+POOL_HELPER=/usr/local/lib/sandos-sm-pool
+if [ -f "${REPO_ROOT}/scripts/sandos-sm-pool" ]; then
+  $SUDO install -o root -g root -m 0750 "${REPO_ROOT}/scripts/sandos-sm-pool" "$POOL_HELPER"
+  ok "NAS pool helper installed at ${POOL_HELPER}"
+else
+  warn "scripts/sandos-sm-pool not found — this node cannot contribute NAS storage"
+fi
+
 _sudoers_tmp=$(mktemp)
-echo "${CURRENT_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl restart ${UNIT_NAME}" > "$_sudoers_tmp"
+{
+  echo "${CURRENT_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl restart ${UNIT_NAME}"
+  [ -f "$POOL_HELPER" ] && echo "${CURRENT_USER} ALL=(root) NOPASSWD: ${POOL_HELPER}"
+} > "$_sudoers_tmp"
 # Validate BEFORE it ever touches /etc/sudoers.d — a malformed file there can
 # break sudo system-wide, so a bad rule must never be written live even
 # briefly, not just cleaned up after the fact.

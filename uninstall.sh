@@ -209,6 +209,26 @@ fi
 header
 step 4 "Remove Sudoers Rule"
 
+# The NAS pool holds a preallocated image that is REAL disk space — leaving it
+# behind means an uninstalled node keeps tens of gigabytes hostage with nothing
+# left on the machine to explain what took them. Only under --purge, though:
+# a plain uninstall is usually a prelude to reinstalling on the same box, and
+# silently discarding contributed storage would be a nasty surprise.
+POOL_HELPER=/usr/local/lib/sandos-sm-pool
+if [ -x "$POOL_HELPER" ]; then
+  if [ "$PURGE" -eq 1 ]; then
+    if $SUDO "$POOL_HELPER" destroy >/dev/null 2>&1; then
+      ok "NAS pool storage released back to this machine"
+    else
+      warn "Could not release the NAS pool (still in use?) — run:"
+      warn "  sudo ${POOL_HELPER} destroy"
+    fi
+    $SUDO rm -f "$POOL_HELPER"
+  else
+    warn "NAS pool image left in place (use --purge to reclaim that space)"
+  fi
+fi
+
 if [ -f "$SUDOERS_FILE" ]; then
   $SUDO rm -f "$SUDOERS_FILE"
   ok "Removed ${SUDOERS_FILE}"
