@@ -564,6 +564,10 @@ def sm_info():
         # itself — losing a whole node from the fleet view because its storage
         # is unavailable would hide the very problem worth seeing.
         "pool": _pool_status_safe(),
+        # Full per-source breakdown, so the Hub can build the mesh-wide storage
+        # picture from the probe it already makes. Guarded like the rest: a
+        # node whose drives are unreadable must still report itself.
+        "pool_sources": _pool_sources_safe(),
         "metrics": metrics.collect(),
         "apps": [
             {"id": a.id, "label": a.label, "kind": a.kind, "mode": a.mode,
@@ -749,6 +753,17 @@ def _pool_call(*args: str) -> dict:
         raise HTTPException(500, f"pool helper returned unparseable output: {r.stdout[:200]}")
 
 
+def _pool_sources_safe() -> dict:
+    """Per-source summary for the probe payload; never raises."""
+    try:
+        from . import pool_sources
+        return pool_sources.summary()
+    except Exception:  # noqa: BLE001
+        return {"sources": [], "total_bytes": 0, "used_bytes": 0,
+                "free_bytes": 0, "posix_free_bytes": 0,
+                "offline_sources": [], "app_hosting_bytes": 0}
+
+
 def _pool_status_safe() -> dict:
     """Pool status for the probe payload, or a "not contributing" shape."""
     none = {"exists": False, "mounted": False, "image_bytes": 0,
@@ -777,6 +792,20 @@ def sm_pool_status(request: Request):
                     "used_bytes": 0, "avail_bytes": 0, "host_avail_bytes": 0,
                     "supported": False}
         raise
+
+
+@app.get("/api/sm/pool/sources")
+def sm_pool_sources(request: Request):
+    """Every storage source this node contributes, with per-source capability.
+
+    Not merged into one figure: a node can offer an image-backed reservation on
+    its system disk and one or more assigned drives, and they differ in ways
+    placement has to see — whether the size can be changed, and whether the
+    filesystem can record who owns a file.
+    """
+    _require_identity(request)
+    from . import pool_sources
+    return pool_sources.summary()
 
 
 class _PoolSizeBody(BaseModel):

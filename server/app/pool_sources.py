@@ -1,0 +1,164 @@
+"""Everything this node contributes to the mesh NAS pool.
+
+A node's contribution is not one number. It can be:
+
+  - its **internal reservation** — a preallocated ext4 image on the system disk
+    (scripts/sandos-sm-pool). Image-backed because that disk is shared with the
+    OS and other users, so the space has to be genuinely taken to be safe to
+    promise. Resizable in both directions.
+
+  - each **assigned USB partition** — already exclusively the pool's, so it is
+    used directly at its natural size. Wrapping a partition in an image would
+    add a layer, cost the same space, and make resizing harder rather than
+    easier.
+
+The distinction the pool actually cares about is not "internal vs USB" but
+whether a source can hold POSIX ownership and symlinks. exFAT and vfat cannot.
+A drive formatted that way stays readable on a Windows machine — which is why
+it is worth keeping that way — but it can carry bulk media only, never user
+homes, whose whole model is per-user ownership. Placement must respect that or
+it will write files nobody can be shown to own.
+"""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+
+from . import config, usb_storage
+
+_POOL_HELPER = "/usr/local/lib/sandos-sm-pool"
+
+
+def _fs_usage(path: str) -> tuple[int, int, int]:
+    """(total, used, free) for the filesystem holding `path`, zeros if gone."""
+    try:
+        u = shutil.disk_usage(path)
+        return u.total, u.used, u.free
+    except OSError:
+        return 0, 0, 0
+
+
+def _internal() -> dict | None:
+    """This node's image-backed reservation, or None if it contributes none."""
+    if not os.path.exists(_POOL_HELPER):
+        return None
+    try:
+        import json
+        r = subprocess.run(["sudo", "-n", _POOL_HELPER, "status"],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            return None
+        d = json.loads(r.stdout or "{}")
+    except Exception:  # noqa: BLE001
+        return None
+    if not d.get("exists"):
+        return None
+    return {
+        "id": f"{config.NODE_NAME}:internal",
+        "node": config.NODE_NAME,
+        "kind": "internal",
+        "role": "nas",
+        "label": "Internal reservation",
+        "path": d.get("mount") or "",
+        "fstype": "ext4",
+        "posix": True,
+        "resizable": True,          # the only source with a size the Hub may change
+        "online": bool(d.get("mounted")),
+        "total_bytes": int(d.get("image_bytes") or 0),
+        "used_bytes": int(d.get("used_bytes") or 0),
+        "free_bytes": int(d.get("avail_bytes") or 0),
+        # How much further this source COULD grow, which is a property of the
+        # host disk rather than of the pool — the Hub needs it to offer a
+        # sensible maximum instead of letting someone fill the machine.
+        "growth_headroom_bytes": int(d.get("host_avail_bytes") or 0),
+    }
+
+
+def _usb() -> list[dict]:
+    """Assigned USB partitions that are currently mounted and usable."""
+    out: list[dict] = []
+    try:
+        parts = usb_storage.usb_partitions()
+        state = usb_storage._load_state()
+    except Exception:  # noqa: BLE001
+        return out
+    for p in parts:
+        entry = (state.get(p["uuid"]) or {}) if isinstance(state, dict) else {}
+        # Only drives the operator actually assigned. An unassigned drive is
+        # someone's photo stick that happens to be plugged in, and quietly
+        # counting it as fleet storage would be both wrong and alarming.
+        if not entry.get("assign"):
+            continue
+        mnt = p.get("mountpoint")
+        online = bool(mnt and os.path.ismount(mnt))
+        total, used, free = _fs_usage(mnt) if online else (0, 0, 0)
+        fstype = (p.get("fstype") or "").lower()
+        # A drive given over to app hosting runs its own dockerd and stores
+        # images and container volumes. Its space is spoken for, so it is
+        # reported for visibility but never counted as pool capacity — doing so
+        # would promise the same gigabytes to both Docker and the NAS.
+        role = "apps" if entry.get("app_hosting") else "nas"
+        out.append({
+            "id": f"{config.NODE_NAME}:usb:{p['uuid']}",
+            "node": config.NODE_NAME,
+            "kind": "usb",
+            "role": role,
+            "label": p.get("label") or p["name"],
+            "path": mnt or "",
+            "fstype": fstype,
+            # The property placement turns on. A non-POSIX filesystem cannot
+            # record who owns a file, so it can hold shared bulk data but never
+            # per-user homes.
+            "posix": fstype not in usb_storage._NON_POSIX_FSTYPES,
+            "resizable": False,     # the partition IS the contribution
+            "online": online,
+            "total_bytes": total,
+            "used_bytes": used,
+            "free_bytes": free,
+            "growth_headroom_bytes": 0,
+            "uuid": p["uuid"],
+            "assigned_to": entry.get("assign"),
+            # Surfaced so the dashboard can say WHY a drive cannot hold homes,
+            # rather than silently offering fewer options than another drive.
+            "limits": ([] if fstype not in usb_storage._NON_POSIX_FSTYPES else
+                       [f"{fstype} keeps no file ownership — bulk data only, no user homes"]),
+        })
+    return out
+
+
+def sources() -> list[dict]:
+    """Every pool source on this node, internal first."""
+    out = []
+    internal = _internal()
+    if internal:
+        out.append(internal)
+    out.extend(_usb())
+    return out
+
+
+def summary() -> dict:
+    """Node-level totals, counting only sources that are actually online.
+
+    Offline sources are reported separately rather than folded into the totals:
+    an unplugged drive's capacity is not capacity, and adding it to the pool
+    figure would promise space that cannot be written to right now.
+    """
+    src = sources()
+    # Only NAS-role sources are capacity. App-hosting drives appear in `sources`
+    # so the dashboard can show where a machine's storage actually went, but
+    # they are not part of the pool.
+    live = [s for s in src if s["online"] and s.get("role", "nas") == "nas"]
+    return {
+        "node": config.NODE_NAME,
+        "sources": src,
+        "total_bytes": sum(s["total_bytes"] for s in live),
+        "used_bytes": sum(s["used_bytes"] for s in live),
+        "free_bytes": sum(s["free_bytes"] for s in live),
+        "posix_free_bytes": sum(s["free_bytes"] for s in live if s["posix"]),
+        "offline_sources": [s["label"] for s in src if not s["online"]],
+        # Shown alongside the pool so a machine's storage adds up on screen:
+        # without it, a 100G drive simply vanishes from the picture.
+        "app_hosting_bytes": sum(s["total_bytes"] for s in src
+                                 if s["online"] and s.get("role") == "apps"),
+    }
