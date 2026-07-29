@@ -946,6 +946,33 @@ def stop(app_id: str, request: Request):
     return {"ok": True, "status": "stopped"}
 
 
+class _StopUserBody(BaseModel):
+    user: str
+
+
+@app.post("/api/apps/{app_id}/stop-user")
+def stop_app_for_user(app_id: str, body: _StopUserBody, request: Request):
+    """Stop ONE named user's instance of an app on this node.
+
+    Sits between the two existing stops: /stop only ever touches the caller's
+    own instance, and /stop-all takes down everyone's. The Fleet page needs to
+    act on a specific row when several users are running the same app, without
+    that meaning "stop everybody".
+
+    An admin may target anyone; anyone else may only name themselves. Without
+    that second clause this would be an admin-only control, and a normal user
+    could not stop their own instance from the Fleet page at all.
+    """
+    ident = _require_identity(request)
+    target = (body.user or "").strip()
+    if not target:
+        raise HTTPException(400, "no user named")
+    if ident.get("role") != "admin" and target != ident.get("username"):
+        raise HTTPException(403, "you can only stop your own instance")
+    registry.stop(app_id, target)
+    return {"ok": True, "stopped": registry.instance_name(app_id, target)}
+
+
 @app.post("/api/apps/{app_id}/stop-all")
 def stop_app_all(app_id: str, request: Request):
     """Admin-only: stop EVERY running instance of this one app on this node,
