@@ -746,8 +746,12 @@ def _pool_call(*args: str) -> dict:
     """
     if not os.path.exists(_POOL_HELPER):
         raise HTTPException(501, "this node has no NAS pool helper installed")
-    r = subprocess.run(["sudo", "-n", _POOL_HELPER, *args],
-                       capture_output=True, text=True, timeout=900)
+    # Root installs (provisioning scripts, root-login distributions like
+    # Proxmox) need no sudo, and some of those images do not ship it — see
+    # pool_sources._helper_cmd.
+    cmd = ([_POOL_HELPER, *args] if os.geteuid() == 0
+           else ["sudo", "-n", _POOL_HELPER, *args])
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     if r.returncode != 0:
         detail = (r.stderr or r.stdout or "pool command failed").strip()
         raise HTTPException(400, detail.replace("sandos-sm-pool: ", "")[:300])

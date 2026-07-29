@@ -37,6 +37,17 @@ _bytes() {   # accept 200G / 512M / raw bytes
 
 _is_mounted() { mountpoint -q "$POOL_MNT"; }
 
+# A pool can be backed two ways, and the difference is not cosmetic.
+#
+#   image      an ext4 file on a shared system disk. The file exists so the
+#              space is genuinely taken from a disk other things also use.
+#   dedicated  a whole volume or partition that is already exclusively ours —
+#              an LVM volume, a USB partition. Wrapping one in an image would
+#              add a layer, cost the same space, and make resizing harder.
+#
+# Anything already mounted at POOL_MNT with no image behind it is dedicated.
+_is_dedicated() { [[ ! -f "$POOL_IMG" ]] && mountpoint -q "$POOL_MNT"; }
+
 _mount_pool() {
   # Single entry point for mounting. Doing it ad-hoc in several places allowed a
   # second loop device to be bound to the same image while the first was still
@@ -74,6 +85,17 @@ _ensure_fstab() {
 
 cmd_status() {
   local size used avail mounted=false
+  if _is_dedicated; then
+    # The volume IS the contribution: its own size is the pool size, and there
+    # is no headroom to grow into from here — that is an LVM/partition
+    # operation, not something this script should reach for behind your back.
+    size=$(df -B1 --output=size "$POOL_MNT" | tail -1 | tr -d ' ')
+    used=$(df -B1 --output=used "$POOL_MNT" | tail -1 | tr -d ' ')
+    avail=$(df -B1 --output=avail "$POOL_MNT" | tail -1 | tr -d ' ')
+    printf '{"exists":true,"mounted":true,"backing":"dedicated","image_bytes":%s,"used_bytes":%s,"avail_bytes":%s,"host_avail_bytes":0,"mount":"%s","image":""}\n' \
+      "$size" "$used" "$avail" "$POOL_MNT"
+    return 0
+  fi
   size=$(_img_bytes)
   if _is_mounted; then
     mounted=true
@@ -82,7 +104,7 @@ cmd_status() {
   else
     used=0; avail=0
   fi
-  printf '{"exists":%s,"mounted":%s,"image_bytes":%s,"used_bytes":%s,"avail_bytes":%s,"host_avail_bytes":%s,"mount":"%s","image":"%s"}\n' \
+  printf '{"exists":%s,"mounted":%s,"backing":"image","image_bytes":%s,"used_bytes":%s,"avail_bytes":%s,"host_avail_bytes":%s,"mount":"%s","image":"%s"}\n' \
     "$([[ -f $POOL_IMG ]] && echo true || echo false)" \
     "$mounted" "$size" "${used:-0}" "${avail:-0}" "$(_host_avail_bytes)" \
     "$POOL_MNT" "$POOL_IMG"
@@ -90,6 +112,7 @@ cmd_status() {
 
 cmd_create() {
   local want; want=$(_bytes "${1:-}")
+  _is_dedicated && die "${POOL_MNT} is already a dedicated volume — it IS the pool, nothing to create"
   [[ -f "$POOL_IMG" ]] && die "pool already exists — use grow/shrink"
   local avail; avail=$(_host_avail_bytes)
   # Leave the host a margin. A pool that consumes the last byte of the disk
@@ -124,6 +147,7 @@ cmd_create() {
 
 cmd_grow() {
   local want; want=$(_bytes "${1:-}")
+  _is_dedicated && die "${POOL_MNT} is a dedicated volume — resize it with LVM or a partition tool, not here"
   [[ -f "$POOL_IMG" ]] || die "no pool here yet — create first"
   local cur; cur=$(_img_bytes)
   (( want > cur )) || die "grow target must exceed the current $((cur/1024/1024/1024))G"
@@ -147,6 +171,7 @@ cmd_grow() {
 
 cmd_shrink() {
   local want; want=$(_bytes "${1:-}")
+  _is_dedicated && die "${POOL_MNT} is a dedicated volume — resize it with LVM or a partition tool, not here"
   [[ -f "$POOL_IMG" ]] || die "no pool here yet"
   local cur; cur=$(_img_bytes)
   (( want < cur )) || die "shrink target must be below the current $((cur/1024/1024/1024))G"

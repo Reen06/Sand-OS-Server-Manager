@@ -281,6 +281,17 @@ INTRO
 
 command -v docker &>/dev/null || die "Docker is required but not installed. Install Docker first."
 command -v python3 &>/dev/null || die "python3 is required but not found."
+# Having python3 is not the same as being able to build a venv. Debian ships
+# them as separate packages, so a bare Debian or Proxmox host passes the check
+# above and then fails several steps later, halfway through the install, with an
+# ensurepip error that reads like a Python bug rather than a missing package.
+# Check the capability, not the binary, and say exactly what to install.
+if ! python3 -c "import ensurepip" &>/dev/null; then
+  _pyver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo 3)"
+  die "python3 is present but cannot create virtual environments.
+     Install it first:  sudo apt install python${_pyver}-venv
+     (on Debian and Proxmox this ships separately from python3 itself)"
+fi
 ok "Docker    $(docker --version 2>/dev/null | head -1)"
 ok "Python    $(python3 --version 2>/dev/null)"
 blank

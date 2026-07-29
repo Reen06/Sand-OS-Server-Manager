@@ -30,6 +30,20 @@ from . import config, usb_storage
 _POOL_HELPER = "/usr/local/lib/sandos-sm-pool"
 
 
+def _helper_cmd(*args: str) -> list[str]:
+    """The helper invocation for this process.
+
+    Only reaches for sudo when it is actually needed. A Server Manager
+    installed by a provisioning script or on a root-login distribution runs AS
+    root, and some of those images — Proxmox among them — ship no sudo at all.
+    Prefixing it unconditionally turned a working helper into a hard failure
+    that surfaced only as "this node contributes no storage".
+    """
+    if os.geteuid() == 0:
+        return [_POOL_HELPER, *args]
+    return ["sudo", "-n", _POOL_HELPER, *args]
+
+
 def _fs_usage(path: str) -> tuple[int, int, int]:
     """(total, used, free) for the filesystem holding `path`, zeros if gone."""
     try:
@@ -45,7 +59,7 @@ def _internal() -> dict | None:
         return None
     try:
         import json
-        r = subprocess.run(["sudo", "-n", _POOL_HELPER, "status"],
+        r = subprocess.run(_helper_cmd("status"),
                            capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
             return None
@@ -59,11 +73,16 @@ def _internal() -> dict | None:
         "node": config.NODE_NAME,
         "kind": "internal",
         "role": "nas",
-        "label": "Internal reservation",
+        "label": ("Dedicated volume" if d.get("backing") == "dedicated"
+                  else "Internal reservation"),
         "path": d.get("mount") or "",
         "fstype": "ext4",
         "posix": True,
-        "resizable": True,          # the only source with a size the Hub may change
+        # Only an image-backed pool can be resized from here. A dedicated volume
+        # (an LVM LV, a partition) is grown with LVM or a partition tool — the
+        # service resizing storage it does not own would be overreach.
+        "resizable": d.get("backing") != "dedicated",
+        "backing": d.get("backing") or "image",
         "online": bool(d.get("mounted")),
         "total_bytes": int(d.get("image_bytes") or 0),
         "used_bytes": int(d.get("used_bytes") or 0),
