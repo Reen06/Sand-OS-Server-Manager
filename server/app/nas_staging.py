@@ -27,6 +27,11 @@ from .files import _safe_user
 # on the same node cannot see the first one's files.
 _STAGING = "staging"
 
+# Where a node's write-backs land. One well-known folder, so a file that appeared
+# from an app is always explicable — rather than results scattered through the
+# home with nothing marking where they came from.
+_DEPOSIT_DIR = "Saved from apps"
+
 
 def _safe_component(name: str) -> str:
     """One path segment, with no way out of it.
@@ -223,3 +228,46 @@ def prune_orphans(known_nodes: list[str]) -> list[str]:
         shutil.rmtree(d, ignore_errors=True)
         removed.append(name)
     return removed
+
+
+def deposit(user: str, filename: str, data: bytes, subdir: str = "") -> dict:
+    """Write one file into a user's NAS home on behalf of a node.
+
+    This is the write half of brokered access, and it is deliberately not the
+    mirror of the read half. Reading is scoped — an app-only node sees just its
+    staging directory — but producing a result should not require the node to
+    see anything at all. A node with no read access whatsoever can still hand
+    back a finished file, because the NAS host does the write itself; the node
+    never holds a writable mount over the user's files.
+
+    Lands under `Saved from apps/` rather than at the root of the home, and
+    never overwrites: a colliding name gains a numeric suffix. A node that can
+    silently replace an arbitrary path in someone's home is a node that can
+    destroy their library one file at a time, which is exactly the power the
+    read scoping was put in place to withhold.
+    """
+    home = os.path.realpath(
+        os.path.join(config.NAS_ROOT, config.NAS_USERS_SUBPATH, _safe_user(user)))
+    if not os.path.isdir(home):
+        raise ValueError(f"no NAS home for {user!r}")
+    dest_dir = os.path.join(home, _DEPOSIT_DIR)
+    if subdir:
+        # One level, and only a name — not a path. A caller passing "a/b" or
+        # ".." is not choosing a layout, it is trying to leave the folder.
+        dest_dir = os.path.join(dest_dir, _safe_component(subdir))
+    dest_dir = os.path.realpath(dest_dir)
+    if dest_dir != home and not dest_dir.startswith(home + os.sep):
+        raise ValueError("destination escapes the user's home")
+    os.makedirs(dest_dir, exist_ok=True)
+
+    name = _safe_component(os.path.basename(filename or "untitled"))
+    stem, ext = os.path.splitext(name)
+    final = os.path.join(dest_dir, name)
+    n = 1
+    while os.path.exists(final):
+        final = os.path.join(dest_dir, f"{stem} ({n}){ext}")
+        n += 1
+    with open(final, "wb") as f:
+        f.write(data)
+    return {"ok": True, "name": os.path.basename(final),
+            "path": os.path.relpath(final, home), "bytes": len(data)}

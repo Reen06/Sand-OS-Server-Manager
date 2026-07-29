@@ -718,6 +718,37 @@ class _NodeBody(BaseModel):
     node: str
 
 
+@app.post("/api/sm/nas/deposit")
+async def sm_nas_deposit(request: Request):
+    """Write a file into the caller's NAS home. Only runs on the NAS host.
+
+    Multipart rather than JSON: this carries file bytes, and base64 in a JSON
+    body would inflate every upload by a third and buffer it twice.
+
+    The owner is taken from the session, never from the request — otherwise any
+    node could write into anyone's home by naming them.
+    """
+    ident = _require_identity(request)
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        raise HTTPException(400, "no file uploaded")
+    data = await upload.read()
+    if len(data) > config.NAS_DEPOSIT_MAX_BYTES:
+        raise HTTPException(
+            413, f"file is larger than the {config.NAS_DEPOSIT_MAX_BYTES // (1024*1024)} MB "
+                 "save-to-NAS limit")
+    from . import nas_staging
+    try:
+        return nas_staging.deposit(
+            ident.get("username", ""),
+            str(form.get("filename") or getattr(upload, "filename", "") or "untitled"),
+            data,
+            str(form.get("subdir") or ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/sm/nas/clear-node")
 def sm_nas_clear_node(body: _NodeBody, request: Request):
     """Drop a decommissioned node's whole staging tree."""

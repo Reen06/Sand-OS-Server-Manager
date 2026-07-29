@@ -329,3 +329,8 @@ LLM_API_KEY = os.environ.get("SM_LLM_API_KEY", "")
 from urllib.parse import urlparse as _urlparse
 HUB_HOST = _urlparse(HUB_URL).hostname or "" if HUB_URL else ""
 HUB_INTERNAL_IP = _urlparse(HUB_INTERNAL_URL).hostname or "" if HUB_INTERNAL_URL else ""
+
+# Ceiling on a single save-to-NAS write. The whole body is held in memory while
+# it is written, so this bounds what one request can cost the NAS host — which
+# on this fleet is also the machine running most of the apps.
+NAS_DEPOSIT_MAX_BYTES = int(os.environ.get("SM_NAS_DEPOSIT_MAX_BYTES") or 512 * 1024 * 1024)
