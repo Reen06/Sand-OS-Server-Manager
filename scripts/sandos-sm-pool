@@ -220,6 +220,50 @@ cmd_nas_role() {
   printf '{"ok":true,"nas_host":"%s","nas_root":"%s"}\n' "$host" "$root"
 }
 
+cmd_pull_nas() {
+  # Copy the fleet NAS from the current host into this node's pool, in
+  # preparation for taking over the NAS role.
+  #
+  # Pulled by the TARGET over NFS rather than pushed through the Hub. The Hub is
+  # a Raspberry Pi; streaming the whole tree through it buffered gigabytes in
+  # its memory and simply died. This moves the bytes directly between the two
+  # machines that care, over a mount this node is ALREADY entitled to as a
+  # trusted NAS client — so it needs no new credential, no SSH trust between
+  # nodes, and no third machine in the path.
+  local src="${1:-}" dst="${2:-}"
+  [[ "$src" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "source must be an IPv4 address"
+  [[ "$dst" =~ ^/[A-Za-z0-9._/-]*$ ]] || die "destination must be a plain absolute path"
+  [[ "$dst" == "/" ]] && die "refusing / as a destination"
+  command -v rsync >/dev/null || die "rsync is not installed on this node"
+  local mnt="/mnt/.sandos-nas-migrate"
+  mkdir -p "$mnt" "$dst"
+  mountpoint -q "$mnt" && umount "$mnt"
+  mount -t nfs4 -o ro,nfsvers=4 "${src}:/" "$mnt" || die "could not mount ${src}:/ — is this node a trusted NAS client?"
+  # --numeric-ids: the export squashes to one anon uid, and resolving names
+  # against THIS machine's passwd would silently retag every file's owner.
+  # -H preserves hardlinks; without it a deduplicated tree inflates on arrival.
+  local rc=0
+  # Excluded on purpose:
+  #   staging/     transient per-job copies; they belong to jobs that are stopped
+  #   shared/media/USB-*  drives PHYSICALLY attached to the old host and grafted
+  #                into its tree. They are not the NAS's data, they cannot follow
+  #                over a network, and one of them is a 28G Docker app store that
+  #                would not fit here anyway. They stay where the hardware is.
+  #
+  # No -A/-X: the export squashes every owner to one anon uid, so ACLs and
+  # xattrs cannot survive the trip. Asking for them makes rsync fail on files it
+  # is not permitted to read them from, which is what it did here.
+  local rc=0
+  rsync -aH --numeric-ids --delete-after \
+        --exclude='staging/***' --exclude='shared/media/USB-*' \
+        "$mnt"/ "$dst"/ || rc=$?
+  umount "$mnt" || true
+  rmdir "$mnt" 2>/dev/null || true
+  (( rc == 0 )) || die "rsync failed with status ${rc}"
+  local bytes; bytes=$(du -sb "$dst" 2>/dev/null | cut -f1)
+  printf '{"ok":true,"source":"%s","dest":"%s","bytes":%s}\n' "$src" "$dst" "${bytes:-0}"
+}
+
 case "${1:-}" in
   status)  cmd_status ;;
   create)  cmd_create "${2:-}" ;;
@@ -227,5 +271,6 @@ case "${1:-}" in
   shrink)  cmd_shrink "${2:-}" ;;
   destroy) cmd_destroy ;;
   nas-role) cmd_nas_role "${2:-}" "${3:-}" ;;
-  *) die "usage: sandos-sm-pool {status|create <size>|grow <size>|shrink <size>|destroy|nas-role <ip> <path>}" ;;
+  pull-nas) cmd_pull_nas "${2:-}" "${3:-}" ;;
+  *) die "usage: sandos-sm-pool {status|create <size>|grow <size>|shrink <size>|destroy|nas-role <ip> <path>|pull-nas <src-ip> <path>}" ;;
 esac
