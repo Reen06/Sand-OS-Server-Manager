@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# Sand-OS Server Manager — mesh NAS pool storage on this node.
+#
+# A node contributes a fixed slice of its disk to the mesh NAS. That slice is a
+# preallocated ext4 image, loop-mounted. The image exists so the contribution is
+# REAL: `fallocate` takes the blocks from the host filesystem immediately, so
+# another user filling their home directory cannot quietly starve the pool, and
+# the pool cannot spill past its allotment into the rest of the machine. A
+# directory with a quota would cap growth but reserve nothing — the space would
+# still be there for anyone else to take first.
+#
+# ext4 rather than XFS specifically because XFS cannot shrink. Giving space back
+# has to be possible, or every sizing decision becomes permanent.
+#
+# Runs as root via a sudoers rule (see install.sh). Every subcommand is
+# idempotent and refuses rather than guesses.
+set -euo pipefail
+
+POOL_DIR="${SM_POOL_DIR:-/var/lib/sandos-sm-pool}"
+POOL_IMG="${POOL_DIR}/pool.img"
+POOL_MNT="${SM_POOL_MOUNT:-/srv/sandos-pool}"
+FSTAB_TAG="# sandos-sm-pool"
+
+die() { echo "sandos-sm-pool: $*" >&2; exit 1; }
+
+_bytes() {   # accept 200G / 512M / raw bytes
+  local v="${1:-}"
+  [[ -n "$v" ]] || die "no size given"
+  case "$v" in
+    *[Gg]) echo $(( ${v%[Gg]} * 1024 * 1024 * 1024 )) ;;
+    *[Mm]) echo $(( ${v%[Mm]} * 1024 * 1024 )) ;;
+    *[Tt]) echo $(( ${v%[Tt]} * 1024 * 1024 * 1024 * 1024 )) ;;
+    *[!0-9]*) die "unrecognised size: $v" ;;
+    *) echo "$v" ;;
+  esac
+}
+
+_is_mounted() { mountpoint -q "$POOL_MNT"; }
+
+_mount_pool() {
+  # Single entry point for mounting. Doing it ad-hoc in several places allowed a
+  # second loop device to be bound to the same image while the first was still
+  # attached — two views of one filesystem, where writes through one simply do
+  # not exist in the other. Observed live as a pool that came back empty after a
+  # resize.
+  _is_mounted && return 0
+  mkdir -p "$POOL_MNT"
+  mount "$POOL_MNT" >/dev/null 2>&1 && return 0    # via the fstab entry
+  mount -o loop,noatime "$POOL_IMG" "$POOL_MNT" >&2
+}
+
+_host_avail_bytes() {
+  # Free space on the filesystem that HOLDS the image — the number that decides
+  # whether a grow can actually be satisfied. Walks up to a directory that
+  # exists, because before the first create POOL_DIR is not there yet and df
+  # would emit nothing, producing a malformed status document.
+  local d="$POOL_DIR"
+  while [[ ! -d "$d" && "$d" != "/" ]]; do d=$(dirname "$d"); done
+  local v
+  v=$(df -B1 --output=avail "$d" 2>/dev/null | tail -1 | tr -d ' ')
+  echo "${v:-0}"
+}
+
+_img_bytes() { [[ -f "$POOL_IMG" ]] && stat -c %s "$POOL_IMG" || echo 0; }
+
+_ensure_fstab() {
+  grep -q "$FSTAB_TAG" /etc/fstab 2>/dev/null && return 0
+  # nofail: a node must still boot if this image is missing or damaged. A pool
+  # that fails to mount should cost the fleet one node's contribution, not leave
+  # the machine sitting in emergency mode where nobody can reach it.
+  printf '%s\n%s %s ext4 loop,nofail,noatime 0 0\n' \
+    "$FSTAB_TAG" "$POOL_IMG" "$POOL_MNT" >> /etc/fstab
+}
+
+cmd_status() {
+  local size used avail mounted=false
+  size=$(_img_bytes)
+  if _is_mounted; then
+    mounted=true
+    used=$(df -B1 --output=used "$POOL_MNT" | tail -1 | tr -d ' ')
+    avail=$(df -B1 --output=avail "$POOL_MNT" | tail -1 | tr -d ' ')
+  else
+    used=0; avail=0
+  fi
+  printf '{"exists":%s,"mounted":%s,"image_bytes":%s,"used_bytes":%s,"avail_bytes":%s,"host_avail_bytes":%s,"mount":"%s","image":"%s"}\n' \
+    "$([[ -f $POOL_IMG ]] && echo true || echo false)" \
+    "$mounted" "$size" "${used:-0}" "${avail:-0}" "$(_host_avail_bytes)" \
+    "$POOL_MNT" "$POOL_IMG"
+}
+
+cmd_create() {
+  local want; want=$(_bytes "${1:-}")
+  [[ -f "$POOL_IMG" ]] && die "pool already exists — use grow/shrink"
+  local avail; avail=$(_host_avail_bytes)
+  # Leave the host a margin. A pool that consumes the last byte of the disk
+  # takes the whole machine down with it, including the service that would let
+  # you shrink it again.
+  local margin=$(( 2 * 1024 * 1024 * 1024 ))
+  (( want + margin < avail )) || die "only $((avail/1024/1024/1024))G free here; leave at least 2G headroom"
+  mkdir -p "$POOL_DIR" "$POOL_MNT"
+  # fallocate, not truncate: the blocks must actually be taken, or this reserves
+  # nothing and the whole point is lost.
+  fallocate -l "$want" "$POOL_IMG" || die "could not allocate ${want} bytes"
+  # -E nodiscard is load-bearing, not tuning. mke2fs discards the device by
+  # default, which on a regular file means punching holes — it hands every block
+  # fallocate just claimed straight back to the filesystem. Measured: a 4G image
+  # occupied 68M on disk afterwards, so the "reservation" reserved nothing and
+  # another user could still have filled the machine.
+  mkfs.ext4 -q -m 0 -F -E nodiscard "$POOL_IMG" >&2   # -m 0: no root reserve, not a system fs
+  # Re-assert the allocation after mkfs, so the claim holds regardless of what
+  # any future mke2fs default does.
+  fallocate -l "$want" "$POOL_IMG" 2>/dev/null || true
+  # du WITHOUT --apparent-size: the blocks genuinely committed on disk, which is
+  # the only number that proves the reservation happened.
+  local on_disk; on_disk=$(du -B1 "$POOL_IMG" | cut -f1)
+  if (( on_disk < want / 2 )); then
+    rm -f "$POOL_IMG"
+    die "could not truly reserve ${want} bytes (only ${on_disk} allocated) — refusing to pretend"
+  fi
+  _ensure_fstab
+  _mount_pool
+  cmd_status
+}
+
+cmd_grow() {
+  local want; want=$(_bytes "${1:-}")
+  [[ -f "$POOL_IMG" ]] || die "no pool here yet — create first"
+  local cur; cur=$(_img_bytes)
+  (( want > cur )) || die "grow target must exceed the current $((cur/1024/1024/1024))G"
+  local extra=$(( want - cur ))
+  local avail; avail=$(_host_avail_bytes)
+  (( extra + 1024*1024*1024 < avail )) || die "not enough free space on this disk for +$((extra/1024/1024/1024))G"
+  fallocate -l "$want" "$POOL_IMG" || die "could not extend the image"
+  if _is_mounted; then
+    # Online growth: tell the loop device its backing file changed, then let
+    # ext4 take the new space with the filesystem still in use.
+    local dev; dev=$(losetup -j "$POOL_IMG" | cut -d: -f1)
+    [[ -n "$dev" ]] || die "image is mounted but has no loop device"
+    losetup -c "$dev"
+    resize2fs "$dev" >&2 || die "resize2fs failed"
+  else
+    e2fsck -fy "$POOL_IMG" >&2 2>&1 || true
+    resize2fs "$POOL_IMG" >&2 || die "resize2fs failed"
+  fi
+  cmd_status
+}
+
+cmd_shrink() {
+  local want; want=$(_bytes "${1:-}")
+  [[ -f "$POOL_IMG" ]] || die "no pool here yet"
+  local cur; cur=$(_img_bytes)
+  (( want < cur )) || die "shrink target must be below the current $((cur/1024/1024/1024))G"
+
+  # Refuse to shrink below what is stored, with room to spare. resize2fs would
+  # refuse too, but it would do so after unmounting the pool — this way running
+  # apps are never interrupted for a request that was never going to succeed.
+  if _is_mounted; then
+    local used; used=$(df -B1 --output=used "$POOL_MNT" | tail -1 | tr -d ' ')
+    local floor=$(( used + used / 10 + 512 * 1024 * 1024 ))
+    (( want > floor )) || die "pool holds $((used/1024/1024))M — cannot shrink below ~$((floor/1024/1024))M"
+    umount "$POOL_MNT" || die "pool is busy — stop the apps using it and retry"
+  fi
+  # Shrinking ext4 is offline-only, and fsck first is mandatory: resize2fs
+  # refuses on an unchecked filesystem, and forcing past that risks the data.
+  e2fsck -fy "$POOL_IMG" >&2 2>&1 || true
+  local blocks=$(( want / 4096 ))
+  if ! resize2fs "$POOL_IMG" "${blocks}" >&2; then
+    _mount_pool
+    die "resize2fs refused to shrink — pool remounted unchanged"
+  fi
+  # Only now is it safe to give the blocks back.
+  truncate -s "$want" "$POOL_IMG"
+  _mount_pool
+  cmd_status
+}
+
+cmd_destroy() {
+  _is_mounted && { umount "$POOL_MNT" || die "pool is busy"; }
+  sed -i "\|${FSTAB_TAG}|,+1d" /etc/fstab 2>/dev/null || true
+  rm -f "$POOL_IMG"
+  rmdir "$POOL_MNT" 2>/dev/null || true
+  echo '{"destroyed":true}'
+}
+
+case "${1:-}" in
+  status)  cmd_status ;;
+  create)  cmd_create "${2:-}" ;;
+  grow)    cmd_grow "${2:-}" ;;
+  shrink)  cmd_shrink "${2:-}" ;;
+  destroy) cmd_destroy ;;
+  *) die "usage: sandos-sm-pool {status|create <size>|grow <size>|shrink <size>|destroy}" ;;
+esac
