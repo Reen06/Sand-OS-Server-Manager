@@ -557,6 +557,10 @@ def sm_info():
         # node silently defaulting to itself and mounting nothing.
         "nas_enabled": config.NAS_ENABLED,
         "nas_host": config.NAS_HOST,
+        # Where this node's NAS tree lives. Only meaningful on the host itself,
+        # but the Hub needs it to know what to copy FROM when the NAS role moves
+        # to another machine — guessing that path would be guessing at data.
+        "nas_root": config.NAS_ROOT,
         # This node's contribution to the mesh NAS pool, so the Hub can build
         # the fleet-wide picture from the probe it already makes rather than a
         # second round-trip per node. Never raises: a node with no helper, or a

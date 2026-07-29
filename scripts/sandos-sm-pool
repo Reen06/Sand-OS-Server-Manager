@@ -182,11 +182,50 @@ cmd_destroy() {
   echo '{"destroyed":true}'
 }
 
+# ── NAS role ────────────────────────────────────────────────────────────────
+# Which machine serves the fleet NAS is a setting, not a code change, so it has
+# to be writable at runtime. The env file is root-owned; this is the narrow,
+# validated way the service is allowed to edit it — only these three keys, only
+# with values that pass inspection.
+ENV_FILE="${SM_ENV_FILE:-/etc/sandos-server-manager.env}"
+
+_set_env_key() {
+  local key="$1" val="$2"
+  [[ -f "$ENV_FILE" ]] || die "no env file at $ENV_FILE"
+  if grep -q "^${key}=" "$ENV_FILE"; then
+    # The value is written via a temp file rather than sed -i with the value
+    # interpolated into the expression: a path containing / or & would otherwise
+    # be interpreted as sed syntax and silently corrupt the line.
+    local tmp; tmp=$(mktemp)
+    awk -v k="$key" -v v="$val" \
+        'BEGIN{FS=OFS="="} $1==k {print k "=" v; next} {print}' "$ENV_FILE" > "$tmp"
+    cat "$tmp" > "$ENV_FILE"; rm -f "$tmp"
+  else
+    printf '%s=%s\n' "$key" "$val" >> "$ENV_FILE"
+  fi
+}
+
+cmd_nas_role() {
+  local host="${1:-}" root="${2:-}"
+  [[ "$host" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "NAS host must be an IPv4 address, got: ${host}"
+  # Reject anything that is not a plain absolute path. This value ends up in a
+  # docker --mount and a shell script; a path with quotes, spaces or $ in it is
+  # not a legitimate NAS root and is the shape an injection attempt takes.
+  [[ "$root" =~ ^/[A-Za-z0-9._/-]*$ ]] || die "NAS root must be a plain absolute path, got: ${root}"
+  [[ "$root" == "/" ]] && die "refusing to use / as the NAS root"
+  mkdir -p "$root"
+  _set_env_key SM_NAS_HOST "$host"
+  _set_env_key SM_NAS_ROOT "$root"
+  _set_env_key SM_NAS_ENABLED true
+  printf '{"ok":true,"nas_host":"%s","nas_root":"%s"}\n' "$host" "$root"
+}
+
 case "${1:-}" in
   status)  cmd_status ;;
   create)  cmd_create "${2:-}" ;;
   grow)    cmd_grow "${2:-}" ;;
   shrink)  cmd_shrink "${2:-}" ;;
   destroy) cmd_destroy ;;
-  *) die "usage: sandos-sm-pool {status|create <size>|grow <size>|shrink <size>|destroy}" ;;
+  nas-role) cmd_nas_role "${2:-}" "${3:-}" ;;
+  *) die "usage: sandos-sm-pool {status|create <size>|grow <size>|shrink <size>|destroy|nas-role <ip> <path>}" ;;
 esac
