@@ -561,6 +561,12 @@ def sm_info():
             {"id": a.id, "label": a.label, "kind": a.kind, "mode": a.mode,
              "gpu": a.gpu, "icon": a.icon, "color": a.color, "desc": a.desc,
              "image_installed": registry.image_installed(a),
+             # Whether staged files can actually reach this app — it needs a
+             # per-user `home` mount on the NAS, the one mount an app-only node
+             # resolves to its staging directory. Drives the Hub's launch-time
+             # file picker, so it must travel with the app metadata the Hub
+             # caches, not just the per-user listing.
+             "takes_staged_files": registry.takes_staged_files(a.id),
              # Lets the Hub's proxy know this app's own manifest.json/static/*
              # (icons, favicons) are safe to serve WITHOUT the hub_session
              # cookie — browsers fetch a PWA's install assets unauthenticated
@@ -650,7 +656,11 @@ def sm_instance_name(app_id: str, request: Request):
     user = ident.get("username", "")
     return {"app_id": app_id, "user": user,
             "instance": registry.instance_name(app_id, user),
-            "node": config.NODE_NAME}
+            "node": config.NODE_NAME,
+            # Whether staged files can actually reach this app here. The Hub
+            # refuses to stage when this is false rather than copying files into
+            # a directory nothing will mount.
+            "takes_staged_files": registry.takes_staged_files(app_id)}
 
 
 class _StageBody(BaseModel):

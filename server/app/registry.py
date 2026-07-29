@@ -1165,6 +1165,28 @@ def image_installed(app: AppDef) -> bool:
     return installed
 
 
+def takes_staged_files(app_id: str) -> bool:
+    """Whether staging files for this app can actually reach it.
+
+    True only when the AppDef declares a per-user `home` mount backed by the
+    NAS — that is the one mount an app-only node resolves to its staging
+    directory (docker_backend._nfs_target). An app without it, like a browser
+    upload tool or a chat UI, would have files staged into a directory nothing
+    ever mounts: the user is asked to choose files, told they were sent, and the
+    app never sees them.
+
+    Derived from the AppDef rather than listed by hand so it cannot drift as the
+    catalogue changes. A hand-maintained list was wrong in both directions when
+    checked against the real catalogue.
+    """
+    app = APPS.get(app_id) or CATALOG.get(app_id)
+    if not app:
+        return False
+    return any(m.scope == "per-user" and m.name == "home"
+               and getattr(m, "storage", "local") == "nfs"
+               for m in (app.mounts or []))
+
+
 def list_for_user(user: str) -> list[dict]:
     """App catalogue with this user's per-app status + URL (if running)."""
     out = []
@@ -1175,6 +1197,8 @@ def list_for_user(user: str) -> list[dict]:
             "id": app.id, "label": app.label, "icon": app.icon,
             "color": app.color, "desc": app.desc, "kind": app.kind,
             "status": st, "image_installed": image_installed(app),
+            # Drives the Hub's launch-time file picker — see takes_staged_files.
+            "takes_staged_files": takes_staged_files(app.id),
             "url": url_for(inst) if (inst and st != "stopped") else None,
         })
     return out
