@@ -170,3 +170,53 @@ def drives_with_apps() -> list[dict]:
             "runnable_count": sum(1 for a in apps if a["runnable"]),
         })
     return out
+
+
+def running_from(uuid: str) -> list[dict]:
+    """Instances currently running out of this drive's Docker root.
+
+    Asked of Docker on the drive's own daemon rather than inferred from our
+    records: what matters before pulling a drive out is what is running NOW.
+    """
+    from . import usb_storage
+    sock = usb_storage.dockerd_socket_path(uuid)
+    if not sock or not os.path.exists(sock):
+        return []
+    try:
+        r = subprocess.run(
+            ["docker", "-H", f"unix://{sock}", "ps", "--format", "{{.Names}}\t{{.Image}}"],
+            capture_output=True, text=True, timeout=20)
+        if r.returncode != 0:
+            return []
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for line in (r.stdout or "").splitlines():
+        name, _, image = line.partition("\t")
+        if name.strip():
+            out.append({"container": name.strip(), "image": image.strip()})
+    return out
+
+
+def removal_report(uuid: str, label: str, was_running: list[dict]) -> dict:
+    """What the loss of this drive means, in terms someone can act on.
+
+    A container started from the drive keeps its image layers open on it. Some
+    survive losing the drive — anything already resident and not touching disk —
+    and some do not. We cannot tell which from here, and guessing either way
+    would be worse than saying so: killing a container that would have been fine
+    destroys work, and claiming all is well hides the ones now broken.
+    """
+    return {
+        "uuid": uuid,
+        "label": label,
+        "at": int(time.time()),
+        "was_running": was_running,
+        "message": (
+            f"Drive '{label}' was removed while {len(was_running)} app(s) were running "
+            f"from it. Apps that had everything they need in memory may keep working; "
+            f"any that read from the drive will fail. Re-inserting the drive restores it."
+            if was_running else
+            f"Drive '{label}' was removed. No apps were running from it."
+        ),
+    }

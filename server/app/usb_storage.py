@@ -428,10 +428,32 @@ def format_drive(uuid: str, fs: str = "vfat") -> dict:
     return {"uuid": uuid, "formatted": True, "fs": fs}
 
 
-def eject(uuid: str) -> dict:
+def eject(uuid: str, force: bool = False) -> dict:
+    """Unmount a drive cleanly.
+
+    Refuses while apps are running from it, unless forced. Pulling the Docker
+    root out from under a live container is the failure mode this button exists
+    to avoid — silently doing it would make "safely remove" a lie. Forcing stays
+    available because sometimes the drive is already gone in practice and the
+    operator just needs the records tidied.
+    """
     part = next((p for p in usb_partitions() if p["uuid"] == uuid), None)
     if part is None:
         raise FileNotFoundError(uuid)
+    from . import usb_apps
+    running = usb_apps.running_from(uuid)
+    if running and not force:
+        raise RuntimeError(
+            f"{len(running)} app(s) are running from this drive "
+            f"({', '.join(r['container'] for r in running[:3])}). Stop them first, "
+            f"or eject with force to stop them as part of ejecting.")
+    if running and force:
+        # Stopping through the drive's own daemon gives containers a chance to
+        # shut down properly, which yanking the filesystem never would.
+        sock = dockerd_socket_path(uuid)
+        for r in running:
+            subprocess.run(["docker", "-H", f"unix://{sock}", "stop", "-t", "10",
+                            r["container"]], capture_output=True, timeout=60)
     known = _load_state().get(uuid, {})
     if known.get("assign"):
         _ungraft(known["assign"], known.get("label") or part["label"])
@@ -622,10 +644,46 @@ def _ensure_dockerd_running(uuid: str, mountpoint: str, info: dict) -> None:
     pending_imports.scan_drive(uuid, mountpoint)
 
 
+# Drives seen on the previous pass, so a disappearance can be noticed. Without
+# this the poller only ever reacted to drives ARRIVING — a drive pulled out
+# mid-use produced no event at all, and the first anyone knew was an app
+# failing for no stated reason.
+_seen_drives: dict[str, str] = {}      # uuid -> label
+_removal_log: list[dict] = []          # most recent first, capped
+
+
+def recent_removals() -> list[dict]:
+    """Drives removed since this service started, newest first."""
+    return list(_removal_log)
+
+
+def _note_removal(uuid: str, label: str) -> None:
+    from . import usb_apps
+    try:
+        running = usb_apps.running_from(uuid)
+    except Exception:  # noqa: BLE001
+        running = []
+    report = usb_apps.removal_report(uuid, label, running)
+    _removal_log.insert(0, report)
+    del _removal_log[20:]              # a log nobody prunes becomes a leak
+    print(f"[usb] {report['message']}")
+    # The daemon's data-root has gone; leaving it running gives confusing
+    # errors on every later docker call against a root that is not there.
+    try:
+        _stop_dockerd(uuid)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _poll_loop() -> None:
     while True:
         try:
             state = _load_state()
+            present = {p["uuid"]: (p.get("label") or p["name"])
+                       for p in usb_partitions() if p.get("mountpoint")}
+            for gone_uuid in [u for u in _seen_drives if u not in present]:
+                _note_removal(gone_uuid, _seen_drives.pop(gone_uuid))
+            _seen_drives.update(present)
             for part in usb_partitions():
                 if part["mountpoint"] is None and part["uuid"] in state:
                     mp = _mount(part["name"])  # re-inserted known drive

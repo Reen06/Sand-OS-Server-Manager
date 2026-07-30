@@ -294,13 +294,38 @@ def usb_format(request: Request, body: _UsbFormatBody):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
+class _UsbEjectBody(BaseModel):
+    uuid: str
+    force: bool = False
+
+
 @app.post("/api/nas/usb/eject")
-def usb_eject(request: Request, body: _UsbAssignBody):
+def usb_eject(request: Request, body: _UsbEjectBody):
+    """Safely remove a drive.
+
+    Refuses while apps are running from it rather than pulling the Docker root
+    out from under live containers — 409 so the UI can offer to stop them, which
+    is a different answer from "that drive is not here" (404).
+    """
     _require_admin(request)
     try:
-        return {"ok": True, **usb_storage.eject(body.uuid)}
+        return {"ok": True, **usb_storage.eject(body.uuid, force=bool(body.force))}
     except FileNotFoundError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
+    except RuntimeError as e:
+        return JSONResponse({"ok": False, "error": str(e), "needs_force": True},
+                            status_code=409)
+
+
+@app.get("/api/sm/usb-apps/removals")
+def sm_usb_removals(request: Request):
+    """Drives removed since this service started, and what was running on them.
+
+    Surfaced so an app that died because someone unplugged a drive has a stated
+    cause, instead of looking like an unexplained crash.
+    """
+    _require_identity(request)
+    return {"removals": usb_storage.recent_removals()}
 
 
 @app.get("/api/nas/usb/disks")
