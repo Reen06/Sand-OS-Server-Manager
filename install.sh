@@ -1011,11 +1011,22 @@ if [ -f "${REPO_ROOT}/scripts/sandos-sm-gateway" ]; then
   ok "Mesh gateway helper installed at ${GATEWAY_HELPER}"
 fi
 
+# Per-drive cluster allocation helper. A server may contribute from several
+# drives at different amounts, and which drives those are is set from the Hub
+# after install — so like the gateway helper, it goes on every node and simply
+# goes unused on one that stores nothing.
+CLUSTER_HELPER=/usr/local/lib/sandos-sm-cluster
+if [ -f "${REPO_ROOT}/scripts/sandos-sm-cluster" ]; then
+  $SUDO install -o root -g root -m 0750 "${REPO_ROOT}/scripts/sandos-sm-cluster" "$CLUSTER_HELPER"
+  ok "Cluster allocation helper installed at ${CLUSTER_HELPER}"
+fi
+
 _sudoers_tmp=$(mktemp)
 {
   echo "${CURRENT_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl restart ${UNIT_NAME}"
   [ -f "$POOL_HELPER" ] && echo "${CURRENT_USER} ALL=(root) NOPASSWD: ${POOL_HELPER}"
   [ -f "$GATEWAY_HELPER" ] && echo "${CURRENT_USER} ALL=(root) NOPASSWD: ${GATEWAY_HELPER}"
+  [ -f "$CLUSTER_HELPER" ] && echo "${CURRENT_USER} ALL=(root) NOPASSWD: ${CLUSTER_HELPER}"
 } > "$_sudoers_tmp"
 # Validate BEFORE it ever touches /etc/sudoers.d — a malformed file there can
 # break sudo system-wide, so a bad rule must never be written live even
