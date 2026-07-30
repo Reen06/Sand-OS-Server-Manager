@@ -572,6 +572,10 @@ def sm_info():
         # picture from the probe it already makes. Guarded like the rest: a
         # node whose drives are unreadable must still report itself.
         "pool_sources": _pool_sources_safe(),
+        # How this node reaches the mesh NAS, and whether it needs a gateway to
+        # do so. Reported so the Hub can arrange one automatically rather than
+        # someone remembering to configure it by hand.
+        "mesh": _mesh_status_safe(),
         "metrics": metrics.collect(),
         "apps": [
             {"id": a.id, "label": a.label, "kind": a.kind, "mode": a.mode,
@@ -759,6 +763,15 @@ def _pool_call(*args: str) -> dict:
         return json.loads(r.stdout or "{}")
     except ValueError:
         raise HTTPException(500, f"pool helper returned unparseable output: {r.stdout[:200]}")
+
+
+def _mesh_status_safe() -> dict:
+    """Mesh reachability for the probe payload; never raises."""
+    try:
+        from . import mesh_client
+        return mesh_client.status()
+    except Exception:  # noqa: BLE001
+        return {"mounted": False, "can_mount_natively": True, "needs_gateway": False}
 
 
 def _pool_sources_safe() -> dict:

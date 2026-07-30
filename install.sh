@@ -1001,10 +1001,21 @@ else
   warn "scripts/sandos-sm-pool not found — this node cannot contribute NAS storage"
 fi
 
+# Mesh NAS gateway helper. Installed everywhere rather than only where it is
+# needed: which node ends up serving a gateway is the Hub's decision, made after
+# install from the whole fleet's state, so any node may be asked. A node never
+# chosen simply never runs it.
+GATEWAY_HELPER=/usr/local/lib/sandos-sm-gateway
+if [ -f "${REPO_ROOT}/scripts/sandos-sm-gateway" ]; then
+  $SUDO install -o root -g root -m 0750 "${REPO_ROOT}/scripts/sandos-sm-gateway" "$GATEWAY_HELPER"
+  ok "Mesh gateway helper installed at ${GATEWAY_HELPER}"
+fi
+
 _sudoers_tmp=$(mktemp)
 {
   echo "${CURRENT_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl restart ${UNIT_NAME}"
   [ -f "$POOL_HELPER" ] && echo "${CURRENT_USER} ALL=(root) NOPASSWD: ${POOL_HELPER}"
+  [ -f "$GATEWAY_HELPER" ] && echo "${CURRENT_USER} ALL=(root) NOPASSWD: ${GATEWAY_HELPER}"
 } > "$_sudoers_tmp"
 # Validate BEFORE it ever touches /etc/sudoers.d — a malformed file there can
 # break sudo system-wide, so a bad rule must never be written live even
