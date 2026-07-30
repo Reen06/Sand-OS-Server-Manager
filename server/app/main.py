@@ -872,6 +872,50 @@ def sm_tiers_prepare(request: Request):
     return {"created": tiers.ensure_tier_dirs(ident.get("username", ""))}
 
 
+@app.get("/api/sm/usb-apps")
+def sm_usb_apps(request: Request):
+    """Apps carried by removable drives currently plugged into this node.
+
+    Includes drives set up elsewhere. That is the point: a drive moved here
+    should announce what it brought, rather than being gigabytes of images the
+    machine has no idea about.
+
+    Each app says whether THIS machine can execute it. An image built for
+    another architecture is reported, not hidden — the drive really does hold
+    that app, and "it is here but this box cannot run it" is a different thing
+    from "it is not here".
+    """
+    _require_identity(request)
+    from . import usb_apps
+    return {"host_arch": usb_apps.host_arch(), "drives": usb_apps.drives_with_apps()}
+
+
+class _UsbManifestBody(BaseModel):
+    uuid: str
+
+
+@app.post("/api/sm/usb-apps/refresh")
+def sm_usb_apps_refresh(body: _UsbManifestBody, request: Request):
+    """Rewrite a drive's manifest from this node's current state.
+
+    Called after an app is moved onto or off the drive, so what the drive claims
+    stays true. A manifest that is merely stale is worse than none: it would
+    offer apps that are no longer there.
+    """
+    ident = _require_identity(request)
+    if ident.get("role") != "admin":
+        raise HTTPException(403, "admin only")
+    from . import usb_apps, usb_storage
+    mnt = None
+    for p in usb_storage.usb_partitions():
+        if p.get("uuid") == body.uuid:
+            mnt = p.get("mountpoint")
+            break
+    if not mnt:
+        raise HTTPException(404, "that drive is not mounted here")
+    return usb_apps.write(body.uuid, mnt)
+
+
 @app.get("/api/sm/pool/sources")
 def sm_pool_sources(request: Request):
     """Every storage source this node contributes, with per-source capability.
