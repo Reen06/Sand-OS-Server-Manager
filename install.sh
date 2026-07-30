@@ -344,6 +344,99 @@ MODE=$(pick "Mode" "$(_env_or SM_MODE lan)" \
 
 AUTO_IP=$(_lan_ip)
 
+# ── Remote-node reachability preflight ────────────────────────────────────────
+# A remote node reaches the Hub over WireGuard, which is UDP. If the network this
+# machine sits on blocks outbound UDP — guest wifi, a corporate LAN, a hotel —
+# nothing here can work, and without this check that discovery happens LATE: the
+# interface comes up (it is just a local device), the installer reports success,
+# and the node then fails to do anything with no obvious cause.
+#
+# Honesty about what each probe proves matters more than a green tick:
+#   * TCP to the Hub is definitive — enrollment itself needs it.
+#   * Outbound UDP in general is definitive when it FAILS. A DNS query that gets
+#     an answer proves UDP leaves this box.
+#   * UDP to the WireGuard port specifically cannot be proven from here.
+#     WireGuard is silent by design: it never answers an unauthenticated packet,
+#     so "no reply" means "open" and "filtered" equally. Only a real handshake
+#     settles it, which is why _verify_wg_handshake() below exists and runs after
+#     the tunnel comes up.
+_preflight_remote() {   # _preflight_remote <hub-host>
+  local host="$1" fail=0
+  blank
+  info "Checking this machine can reach the Hub before changing anything…"
+
+  # 1. TCP to the Hub's dashboard — the enrollment link is fetched over this.
+  if command -v curl &>/dev/null && curl -fsSk --max-time 8 -o /dev/null "https://${host}/" 2>/dev/null; then
+    ok "Hub reachable over HTTPS (${host})"
+  elif command -v nc &>/dev/null && nc -z -w5 "$host" 443 2>/dev/null; then
+    ok "Hub TCP 443 reachable (${host})"
+  else
+    warn "Cannot reach ${host} on TCP 443."
+    warn "The enrollment link is fetched over HTTPS, so this must work first."
+    fail=1
+  fi
+
+  # 2. Does ANY outbound UDP leave this machine? A DNS answer proves it does.
+  #    Failure here is the clearest possible signal: WireGuard cannot work.
+  local udp_ok=0
+  if command -v dig &>/dev/null; then
+    dig +time=3 +tries=1 +short @1.1.1.1 cloudflare.com >/dev/null 2>&1 && udp_ok=1
+  elif command -v nslookup &>/dev/null; then
+    timeout 5 nslookup cloudflare.com 1.1.1.1 >/dev/null 2>&1 && udp_ok=1
+  else
+    udp_ok=2   # no tool to test with
+  fi
+  case "$udp_ok" in
+    1) ok "Outbound UDP works (DNS query answered)" ;;
+    0) warn "No outbound UDP got through (DNS query to 1.1.1.1 failed)."
+       warn "WireGuard is UDP-only, so a tunnel cannot work on this network."
+       fail=1 ;;
+    2) warn "No dig/nslookup here — - skipping the outbound-UDP test." ;;
+  esac
+
+  # 3. The WireGuard port itself. Best effort, and said plainly: a silent result
+  #    is not a pass. An ICMP rejection, though, IS a definite no.
+  if command -v nc &>/dev/null; then
+    if nc -z -u -w3 "$host" "${WG_PORT:-51820}" 2>/dev/null; then
+      info "UDP ${WG_PORT:-51820} to ${host}: no rejection seen (cannot be confirmed until the tunnel handshakes)"
+    else
+      warn "UDP ${WG_PORT:-51820} to ${host} was actively rejected — that port looks blocked."
+      fail=1
+    fi
+  fi
+
+  if [ "$fail" -ne 0 ]; then
+    blank
+    warn "This machine does not look able to reach the Hub the way a remote node must."
+    warn "Common causes: guest/corporate wifi blocking UDP, or the Hub's WireGuard"
+    warn "port (${WG_PORT:-51820}/udp) not forwarded to it."
+    if [ "$UNATTENDED" -eq 1 ]; then
+      die "Refusing to install a remote node that cannot reach the Hub."
+    fi
+    confirm "Continue anyway?" "n" || die "Stopped before changing anything."
+  fi
+}
+
+# Definitive: did the tunnel actually carry a packet both ways? Everything before
+# this is inference; a handshake is proof. Without it the installer would happily
+# finish on a node whose tunnel will never pass traffic.
+_verify_wg_handshake() {   # _verify_wg_handshake <iface> [seconds]
+  local iface="$1" secs="${2:-20}" i hs
+  info "Waiting for the tunnel to complete a handshake…"
+  for ((i = 0; i < secs; i++)); do
+    hs=$($SUDO wg show "$iface" latest-handshakes 2>/dev/null | awk '{print $2}' | sort -rn | head -1)
+    if [ -n "$hs" ] && [ "$hs" -gt 0 ] 2>/dev/null; then
+      ok "Handshake completed — the tunnel is really passing traffic"
+      return 0
+    fi
+    sleep 1
+  done
+  warn "No handshake after ${secs}s. The interface is up, but nothing is getting through."
+  warn "That almost always means outbound UDP ${WG_PORT:-51820} is blocked on this network,"
+  warn "or the Hub's WireGuard port is not reachable from here."
+  return 1
+}
+
 # ── Remote enrollment: paste a one-time link from the Hub's Fleet page and ──
 # this box joins as a scoped WireGuard peer automatically — no manual wg-quick,
 # no hand-typed IP. Only offered for "Remote / VPN" since a same-LAN or
@@ -359,6 +452,18 @@ if [[ "$MODE" == "vpn" ]]; then
 
 DESC
   ENROLL_LINK=$(read_val "Enrollment link (blank to skip)" "$(_env_or SM_ENROLL_LINK "")")
+  
+  # Runs BEFORE anything is installed or configured. The whole point is to fail
+  # here, with a reason, rather than half-way through with a tunnel that will
+  # never carry a packet.
+  _pf_host=""
+  if [ -n "$ENROLL_LINK" ]; then
+    _pf_host=$(printf '%s' "$ENROLL_LINK" | sed -E 's#^[a-z]+://##; s#[/?].*##; s#:.*##')
+  elif [ -n "${SM_HUB_URL:-}" ]; then
+    _pf_host=$(printf '%s' "$SM_HUB_URL" | sed -E 's#^[a-z]+://##; s#[/?].*##; s#:.*##')
+  fi
+  [ -n "$_pf_host" ] && _preflight_remote "$_pf_host"
+  
   if [ -n "$ENROLL_LINK" ]; then
     blank
     info "Setting up the WireGuard enrollment tunnel…"
@@ -388,6 +493,17 @@ DESC
       | sed -E 's/.*=\s*//; s#/.*##' | tr -d '[:space:]')
     [ -n "$ENROLL_WG_IP" ] || die "Tunnel came up but its address couldn't be read — check: sudo wg show sandos-hub"
     ok "Tunnel up — this machine's WireGuard IP is ${ENROLL_WG_IP}"
+
+    # An interface existing proves nothing — it is a local device that appears
+    # whether or not a single packet reaches the Hub. Everything after this point
+    # assumes the tunnel carries traffic, so prove it before building on it.
+    if ! _verify_wg_handshake sandos-hub 20; then
+      if [ "${UNATTENDED:-0}" -eq 1 ]; then
+        die "Tunnel never handshook — refusing to continue on an unreachable node."
+      fi
+      confirm "Carry on with a tunnel that is not passing traffic?" "n" \
+        || die "Stopped. Fix outbound UDP ${WG_PORT:-51820} to the Hub, then re-run."
+    fi
     AUTO_IP="$ENROLL_WG_IP"
 
     # Talk to the Hub over the TUNNEL from here on, not the public hostname the
