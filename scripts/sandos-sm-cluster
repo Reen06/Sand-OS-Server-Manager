@@ -182,9 +182,15 @@ cmd_apply() {
     return
   fi
 
-  local ip rack
+  local ip rack memmax memhigh
   ip=$(_node_ip); rack=$(_rack)
   [[ -n "$ip" ]] || die "could not determine this node's address"
+  # Sized from the machine rather than fixed: these nodes range from a 4GB Pi to
+  # an 11GB mini PC, and one number would either strangle the small ones or fail
+  # to protect the large ones.
+  local totalkb; totalkb=$(awk '/MemTotal/{print $2}' /proc/meminfo)
+  memmax="$(( totalkb * 60 / 100 / 1024 ))M"
+  memhigh="$(( totalkb * 45 / 100 / 1024 ))M"
 
   install -m 0644 /dev/stdin "$UNIT" <<UNITEOF
 [Unit]
@@ -201,6 +207,18 @@ ExecStart=/usr/local/bin/weed volume -mserver=${MASTER} -ip=${ip} -port=8080 \\
   -dir=${dirs} -max=${maxes} -dataCenter=home -rack=${rack}
 Restart=on-failure
 RestartSec=5
+# A volume server buffers incoming chunks in memory while it replicates them to
+# the other copies. If a replica is slow to accept — an SD-backed node, say —
+# that buffer grows with no bound of its own, and the process can consume the
+# whole machine and be OOM-killed. Observed: 10.9 GB RSS on an 11 GB host,
+# killed mid-write, taking the node's whole contribution offline until systemd
+# restarted it.
+#
+# Capping it converts that failure into a survivable one: writes slow down or
+# fail individually instead of the server dying. 60%% of RAM leaves room for
+# everything else the machine is doing.
+MemoryMax=${memmax}
+MemoryHigh=${memhigh}
 
 [Install]
 WantedBy=multi-user.target
