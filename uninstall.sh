@@ -260,6 +260,24 @@ if [ -x "$POOL_HELPER" ]; then
   fi
 fi
 
+# The other privileged helpers install.sh places. Removed unconditionally: unlike
+# the pool helper they hold no data and reserve no space, so there is no question
+# to ask — leaving them behind just means a "removed" node still carries root-
+# capable scripts that its sudoers rule no longer scopes.
+#
+# Kept in step with install.sh deliberately: a helper added there and forgotten
+# here is invisible until someone uninstalls and finds it still sitting on disk,
+# which is exactly how sandos-sm-cluster survived a --full teardown.
+for _h in /usr/local/lib/sandos-sm-cluster /usr/local/lib/sandos-sm-gateway; do
+  if [ -e "$_h" ]; then
+    # A node serving the mesh over NFS should stop doing that before its helper
+    # disappears, or the export outlives the thing that manages it.
+    [ "$_h" = /usr/local/lib/sandos-sm-gateway ] && $SUDO "$_h" stop >/dev/null 2>&1
+    $SUDO rm -f "$_h"
+    ok "Removed ${_h}"
+  fi
+done
+
 if [ -f "$SUDOERS_FILE" ]; then
   $SUDO rm -f "$SUDOERS_FILE"
   ok "Removed ${SUDOERS_FILE}"
