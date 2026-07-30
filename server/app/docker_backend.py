@@ -327,6 +327,59 @@ def ensure_nfs_volume(user: str, m, host: str | None = None, app_id: str = "") -
 _SKIP_MOUNT = "\x00skip"
 
 
+# ── Mesh NAS (SeaweedFS) ─────────────────────────────────────────────────────
+# Every node mounts the mesh NAS locally, so an app's NAS-backed mount is now a
+# plain bind of a local path rather than an NFS volume pointed at one server.
+#
+# That is not merely simpler. The NFS volume embedded ONE server's address, so
+# every app on every machine read through that single box — and moving the NAS
+# meant recreating every volume in the fleet. A local mount reads chunks from
+# whichever volume servers hold them, so the data path is direct and moving
+# storage no longer touches the apps at all.
+MESH_MOUNT = os.environ.get("SM_MESH_NAS_MOUNT", "/mnt/sandos-nas")
+
+
+def _mesh_available() -> bool:
+    """Is the mesh NAS actually mounted here?
+
+    Checked rather than assumed: a node whose mount is down must fall back to
+    the old NFS path instead of bind-mounting an empty directory, which would
+    present every app with a NAS that looks intact and contains nothing.
+    """
+    try:
+        return os.path.ismount(MESH_MOUNT) and bool(os.listdir(MESH_MOUNT))
+    except OSError:
+        return False
+
+
+def _mesh_path(user: str, m, app_id: str = "") -> str | None:
+    """Where this mount lives inside the mesh NAS, or None if it has no place."""
+    if m.scope == "root":
+        return MESH_MOUNT
+    if m.scope == "shared":
+        return os.path.join(MESH_MOUNT, config.NAS_SHARED_SUBPATH, _safe(m.name))
+    if m.name != "home":
+        # A named per-user mount is this app's settings for this user, kept in a
+        # private corner of their home so it follows them between machines.
+        return os.path.join(MESH_MOUNT, config.NAS_USERS_SUBPATH, _safe(user),
+                            ".appdata", _safe(m.name))
+    return os.path.join(MESH_MOUNT, config.NAS_USERS_SUBPATH, _safe(user))
+
+
+def _mesh_target(user: str, m, app_id: str = "") -> str | None:
+    """Create and return the host path to bind-mount, or None if unavailable."""
+    if not _mesh_available():
+        return None
+    path = _mesh_path(user, m, app_id)
+    if not path:
+        return None
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        return None
+    return path
+
+
 def _nfs_target(user: str, m, app_id: str = "") -> tuple[str, str]:
     """(export subpath, docker volume name) for an NFS mount. per-user → the
     user's NAS home (same files across ALL their apps); shared → shared/{name};
@@ -425,8 +478,13 @@ def _mount_args(app_id: str, user: str, mounts, host: str | None = None) -> list
         mode, usb_uuid = app_storage.effective_storage(app_id, user, m)
         if mode == "usb" and usb_uuid:
             vol = ensure_usb_volume(usb_uuid, app_id, user, m, host=host)
+        elif mode == "nfs" and config.NAS_ENABLED and _mesh_target(user, m, app_id):
+            # Mesh NAS: bind the local mount. Preferred over NFS wherever it is
+            # present, so apps read from the whole cluster rather than through
+            # one server.
+            vol = _mesh_target(user, m, app_id)
         elif mode == "nfs" and config.NAS_ENABLED:
-            vol = _ensure_nfs(user, m, host=host, app_id=app_id)  # fleet NAS over NFSv4
+            vol = _ensure_nfs(user, m, host=host, app_id=app_id)  # legacy single-server NFS
             if vol == _SKIP_MOUNT:
                 continue          # fleet-shared data this node may not see
             if not vol:
