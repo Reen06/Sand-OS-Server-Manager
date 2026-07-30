@@ -69,6 +69,24 @@ _env_or() {   # _env_or VARNAME default
   printf '%s' "${_cur:-$_d}"
 }
 
+# Boolean env vars documented as "true | false". Anything else is a mistake, and
+# the point is to SAY so: the old behaviour treated every non-"true" value as
+# false, so `SM_NAS_ENABLED=1` quietly produced an install with the NAS off —
+# the caller asked for a thing and got its opposite, silently. Meanwhile the
+# `pick`-based vars (SM_GPU) rejected the same input loudly. Same class of
+# mistake deserves the same answer, and the loud one is correct.
+_env_bool() {   # _env_bool VARNAME default   -> echoes true|false, exits on junk
+  local _name="$1" _d="${2:-false}" _val
+  _val="$(_env_or "$_name" "$_d")"
+  case "$_val" in
+    true|false) printf '%s' "$_val" ;;
+    *)
+      echo "  ${RED}✗${RST}  Invalid value '${_val}' for ${_name} — expected: true or false" >&2
+      echo "     (1/0/yes/no are not accepted; the same rule as SM_GPU)" >&2
+      exit 1 ;;
+  esac
+}
+
 # ── Colour / terminal helpers ─────────────────────────────────────────────────
 # A real interactive terminal on BOTH ends, not just this process's own stdout —
 # `[ -t 1 ]` alone can be true even when piped through something like
@@ -503,7 +521,7 @@ if [ -n "$SM_HUB_URL" ]; then
   SM_EXTERNAL_BASE=$(read_val "Hub mount path" "$(_env_or SM_EXTERNAL_BASE /apps)")
   blank
   if confirm "Verify the Hub's TLS certificate? (no = accept self-signed Caddy internal CA)" \
-       "$([ "$(_env_or SM_HUB_VERIFY_TLS false)" = "true" ] && echo y || echo n)"; then
+       "$([ "$(_env_bool SM_HUB_VERIFY_TLS false)" = "true" ] && echo y || echo n)"; then
     SM_HUB_VERIFY_TLS="true"
   fi
 else
@@ -560,7 +578,7 @@ except Exception:
 fi
 SM_NAS_HOST="${_discovered_nas_host:-$SM_LAN_IP}"
 
-if confirm "Enable the NAS layer?" "$([ "$(_env_or SM_NAS_ENABLED false)" = "true" ] && echo y || echo n)"; then
+if confirm "Enable the NAS layer?" "$([ "$(_env_bool SM_NAS_ENABLED false)" = "true" ] && echo y || echo n)"; then
   SM_NAS_ENABLED="true"
 
   _nas_root_default="${INVOKING_HOME}/sandos-nas"
