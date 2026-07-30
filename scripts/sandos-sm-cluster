@@ -28,7 +28,107 @@ _node_ip() {
 # satisfied by one machine wearing both names.
 _rack() { hostname | tr '[:upper:]' '[:lower:]'; }
 
+# How this node runs its volume server. Not every node runs it the same way: a
+# systemd unit on machines where SeaweedFS was installed natively, and a Docker
+# container where it was not. Writing a unit on a containerised node would start
+# a SECOND volume server fighting the first for the same port, so the mode is
+# detected rather than assumed.
+CONTAINER=seaweedfs-volume
+
+_mode() {
+  if command -v docker >/dev/null 2>&1 \
+     && docker inspect "$CONTAINER" >/dev/null 2>&1; then
+    echo docker
+  else
+    echo systemd
+  fi
+}
+
+# The container sees its drives at /data0, /data1 … while the Hub and the person
+# using it think in HOST paths. Both directions are needed: status reports host
+# paths (the only ones meaningful outside the container), apply maps them back.
+_docker_hostdirs() {
+  docker inspect "$CONTAINER" --format \
+    '{{range .Mounts}}{{if eq .Type "bind"}}{{.Destination}}={{.Source}}
+{{end}}{{end}}' 2>/dev/null
+}
+
+_docker_arg() {  # _docker_arg -max  ->  the value, or empty
+  docker inspect "$CONTAINER" --format '{{range .Config.Cmd}}{{println .}}{{end}}' 2>/dev/null \
+    | sed -n "s/^$1=//p" | head -1
+}
+
+cmd_status_docker() {
+  local running cdirs maxes dirs="" first=1 usage="["
+  running=$([ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" = true ] \
+            && echo true || echo false)
+  cdirs=$(_docker_arg -dir); maxes=$(_docker_arg -max)
+  local map; map=$(_docker_hostdirs)
+  IFS=',' read -ra _cd <<< "${cdirs:-}"
+  for cd in "${_cd[@]}"; do
+    [[ -z "$cd" ]] && continue
+    # Translate each container path back to the host path it is bound from. A
+    # directory with no bind is reported as-is rather than hidden — it would be
+    # container-local storage, which is a real problem worth seeing.
+    local host; host=$(printf '%s\n' "$map" | sed -n "s|^${cd}=||p" | head -1)
+    host="${host:-$cd}"
+    dirs+="${dirs:+,}$host"
+    local used avail vols
+    used=$(df -B1 --output=used "$host" 2>/dev/null | tail -1 | tr -d ' ')
+    avail=$(df -B1 --output=avail "$host" 2>/dev/null | tail -1 | tr -d ' ')
+    vols=$(find "$host" -maxdepth 1 -name '*.dat' 2>/dev/null | wc -l)
+    (( first )) || usage+=","
+    first=0
+    usage+=$(printf '{"dir":"%s","used_bytes":%s,"avail_bytes":%s,"volumes":%s}' \
+             "$host" "${used:-0}" "${avail:-0}" "$vols")
+  done
+  usage+="]"
+  printf '{"running":%s,"dirs":"%s","max":"%s","mode":"docker","usage":%s}\n' \
+    "$running" "$dirs" "${maxes:-}" "$usage"
+}
+
+cmd_apply_docker() {
+  # $1 = comma-joined HOST dirs, $2 = comma-joined maxes
+  local hostdirs="$1" maxes="$2"
+  local image mserver ip port dc rack restart
+  image=$(docker inspect -f '{{.Config.Image}}' "$CONTAINER")
+  mserver=$(_docker_arg -mserver); ip=$(_docker_arg -ip); port=$(_docker_arg -port)
+  dc=$(_docker_arg -dataCenter); rack=$(_docker_arg -rack)
+  restart=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$CONTAINER")
+  [[ -n "$image" && -n "$mserver" ]] || die "could not read the existing container's settings"
+
+  # Keep the rack EXACTLY as it is. A rack rename would make the cluster treat
+  # this machine as a new place, and a rule asking for copies on two racks could
+  # then be satisfied by one machine wearing both names.
+  # The first drive goes to /data specifically, because the image DECLARES
+  # /data as a volume: leave it unbound and Docker invents an anonymous volume
+  # there on every run, quietly accumulating one per change. Extra drives take
+  # /data1, /data2 … which are not declared and so create nothing.
+  local mounts=() cdirs="" i=0
+  IFS=',' read -ra _hd <<< "$hostdirs"
+  for h in "${_hd[@]}"; do
+    local cpath="/data"; (( i > 0 )) && cpath="/data$i"
+    mounts+=(-v "$h:$cpath")
+    cdirs+="${cdirs:+,}$cpath"
+    i=$((i+1))
+  done
+
+  # Removing the container does NOT touch the data: every drive is a bind mount
+  # living on the host. What is lost is the few seconds the volume server is
+  # down, which is why the Hub says so before doing it.
+  # -v so any anonymous volume the previous container created goes with it.
+  # Bind mounts are unaffected: the drives themselves are never touched.
+  docker rm -f -v "$CONTAINER" >/dev/null
+  docker run -d --name "$CONTAINER" --network host \
+    --restart "${restart:-unless-stopped}" "${mounts[@]}" "$image" \
+    volume -mserver="$mserver" -ip="$ip" -port="$port" \
+    -dir="$cdirs" -max="$maxes" -dataCenter="$dc" -rack="$rack" >/dev/null
+  sleep 3
+  cmd_status_docker
+}
+
 cmd_status() {
+  if [[ "$(_mode)" == docker ]]; then cmd_status_docker; return; fi
   local dirs="" maxes="" running=false
   if [[ -f "$UNIT" ]]; then
     dirs=$(grep -oE '\-dir=[^ ]+' "$UNIT" | head -1 | cut -d= -f2-)
@@ -77,6 +177,11 @@ cmd_apply() {
     maxes+="${maxes:+,}$m"
   done
 
+  if [[ "$(_mode)" == docker ]]; then
+    cmd_apply_docker "$dirs" "$maxes"
+    return
+  fi
+
   local ip rack
   ip=$(_node_ip); rack=$(_rack)
   [[ -n "$ip" ]] || die "could not determine this node's address"
@@ -108,6 +213,15 @@ UNITEOF
   id -u seaweedfs >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin seaweedfs
   IFS=',' read -ra _dd <<< "$dirs"
   for d in "${_dd[@]}"; do chown seaweedfs:seaweedfs "$d" 2>/dev/null || true; done
+
+  # Refuse to add a second volume server. If one is already running outside both
+  # the unit and a container, starting ours would contend for the same port and
+  # the failure would look like a cluster fault rather than two servers.
+  if pgrep -f 'weed .*volume' >/dev/null 2>&1 \
+     && ! systemctl is-active --quiet seaweedfs-volume; then
+    die "a volume server is already running on this node outside systemd — \
+refusing to start a second one that would fight it for port 8080"
+  fi
 
   systemctl daemon-reload
   systemctl enable --now seaweedfs-volume >/dev/null 2>&1 || true
