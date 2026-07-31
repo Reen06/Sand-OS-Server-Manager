@@ -1205,6 +1205,28 @@ def image_installed(app: AppDef) -> bool:
     return installed
 
 
+_IDENT_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def image_ident(app: AppDef) -> dict:
+    """{image_id, image_created} for this app's image here, or {} if absent.
+
+    Cached on the same TTL as image_installed() and for the same reason: the
+    endpoint that serves it is polled every few seconds and the underlying call
+    is a docker subprocess. An auto_pull app that has never been pulled has no
+    local build to identify, and reports nothing rather than guessing.
+    """
+    from . import app_images
+    cached = _IDENT_CACHE.get(app.id)
+    now = time.monotonic()
+    if cached and now - cached[0] < _INSTALLED_TTL:
+        return cached[1]
+    ident = app_images.image_ident(
+        app_images._image_tag(app), app_images.active_docker_host(app.id))
+    _IDENT_CACHE[app.id] = (now, ident)
+    return ident
+
+
 def takes_staged_files(app_id: str) -> bool:
     """Whether staging files for this app can actually reach it.
 

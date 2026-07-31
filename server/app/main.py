@@ -606,6 +606,10 @@ def sm_info():
             {"id": a.id, "label": a.label, "kind": a.kind, "mode": a.mode,
              "gpu": a.gpu, "icon": a.icon, "color": a.color, "desc": a.desc,
              "image_installed": registry.image_installed(a),
+             # Which BUILD, not just whether one exists — the Hub needs this to
+             # tell a current node from one holding a months-old image of the
+             # same tag, and to refuse to launch onto the stale one.
+             **registry.image_ident(a),
              # Whether staged files can actually reach this app — it needs a
              # per-user `home` mount on the NAS, the one mount an app-only node
              # resolves to its staging directory. Drives the Hub's launch-time

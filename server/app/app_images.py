@@ -157,6 +157,34 @@ def _image_exists(tag: str, host: str | None) -> bool:
     return subprocess.run(args, capture_output=True, timeout=15).returncode == 0
 
 
+def image_ident(tag: str, host: str | None) -> dict:
+    """Which BUILD of an image a node has, not merely whether it has one.
+
+    `image_installed` answers "is there something called this tag here", which is
+    not enough to choose where to run an app: two nodes can both report a tag
+    like `open-webui:main` and hold builds seven months apart. Observed live —
+    one node's copy was from 2026-07, another's from 2025-12, same tag.
+
+    The image ID is the identity (content-addressed, so equal IDs really are the
+    same build) and the creation time gives the ordering. Both come from one
+    inspect call, so this costs no more than the check it supplements.
+    """
+    args = ["docker"] + (["-H", host] if host else []) + [
+        "image", "inspect", tag, "--format", "{{.Id}}|{{.Created}}"]
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=15)
+        if r.returncode != 0:
+            return {}
+        raw = (r.stdout or "").strip()
+        img_id, _, created = raw.partition("|")
+        # Short form: the full sha256:… is noise in a UI and in logs, and the
+        # first 12 hex chars are what docker itself shows.
+        short = img_id.split(":")[-1][:12] if img_id else ""
+        return {"image_id": short, "image_created": created} if short else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _image_size(tag: str, host: str | None) -> int | None:
     """Real byte size of the image — the number that actually matters for
     both "how much space will this free up" and "how many bytes will a
