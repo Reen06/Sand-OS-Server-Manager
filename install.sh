@@ -474,7 +474,15 @@ DESC
     else
       if ! command -v wg-quick &>/dev/null; then
         info "Installing wireguard-tools…"
-        $SUDO apt-get update -qq && $SUDO apt-get install -y -qq wireguard-tools
+        # DEBIAN_FRONTEND: without it apt is free to stop and ask — a conffile
+        # difference, a service-restart prompt, or dpkg's "start a shell to
+        # examine the situation" option. In the middle of an installer that is
+        # baffling: the script appears to hang at a root prompt, and only
+        # typing `exit` lets it continue. Answer those the default way instead.
+        $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq \
+          && $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+             -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+             wireguard-tools
       fi
       $SUDO bash "$REPO_ROOT/containers/nfs-server/setup-wg-enroll.sh" >/dev/null
 
@@ -874,7 +882,12 @@ DESC
 
   if ! dpkg -s openssh-server &>/dev/null; then
     info "Installing openssh-server inside WSL…"
-    $SUDO apt-get update -qq && $SUDO apt-get install -y -qq openssh-server
+    # Same reasoning as the wireguard-tools install above: never let apt open an
+    # interactive prompt part-way through an unattended-looking install.
+    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq \
+      && $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+         -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+         openssh-server
   fi
 
   _sshd_dropin="/etc/ssh/sshd_config.d/60-sandos-altport.conf"
