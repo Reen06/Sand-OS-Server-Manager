@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import app_images, app_storage, app_variants, busy, config, docker_backend, dockerhub_apps, files, glances_svc, hub_auth, metrics, nas_shares, ollama_mgr, pending_imports, proxy, pwa, registry, snapshots, usb_storage
+from . import app_images, app_storage, app_variants, busy, config, docker_backend, dockerhub_apps, files, glances_svc, hub_auth, metrics, nas_roster, nas_shares, ollama_mgr, pending_imports, proxy, pwa, registry, snapshots, usb_storage
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -411,6 +411,26 @@ def usb_app_hosting(request: Request, body: _UsbAppHostingBody):
 # The folders two or more people co-own; they appear in each member's Files app
 # as "admin + braeden". Not to be confused with the shared/ tree, which holds
 # APP data (media, open-webui-data) and is not something a person files into.
+@app.get("/api/nas/roster")
+def nas_roster_get(request: Request):
+    """Who the NAS believes can see whose files. Admin-only; read-only view of
+    what the Hub last pushed."""
+    _require_admin(request)
+    return {"users": nas_roster.read_roster()}
+
+
+@app.post("/api/nas/roster")
+async def nas_roster_put(request: Request):
+    """The Hub pushes the account roster here so app launches can resolve
+    visibility without a live Hub call (see nas_roster)."""
+    _require_admin(request)
+    body = await request.json()
+    try:
+        return nas_roster.write_roster(body.get("users") or {})
+    except (ValueError, OSError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
 @app.get("/api/nas/shares")
 def nas_shares_list(request: Request):
     _require_admin(request)

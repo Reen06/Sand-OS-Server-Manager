@@ -73,7 +73,12 @@ class Mount:
     # shares    a placeholder, not a mount: expands at launch into one mount per
     #           shared folder this user belongs to, at `path`/<folder label>.
     #           Dynamic because membership changes without an app redeploy.
-    scope: str = "per-user"      # per-user | shared | user-view | shares
+    # household a placeholder: for an ADMIN only, expands into one read-only
+    #           mount per user whose account is set to Household, at
+    #           `path`/<username>. Empty for everyone else. See nas_roster.
+    # user-home another named user's home; `name` is their username. Only ever
+    #           produced by the household expansion, never written on an AppDef.
+    scope: str = "per-user"      # per-user | shared | user-view | shares | household
     ro: bool = False
     # local  = a Docker volume on the node (fast, node-local, not shared).
     # nfs    = the fleet NAS over NFSv4 — the SAME bytes on every node, no

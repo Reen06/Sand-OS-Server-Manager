@@ -105,10 +105,17 @@ CATALOG: dict[str, AppDef] = {
         #
         # home is still users/{user} — the same bytes FreeCAD and Nextcloud see,
         # one set of files across every app, no duplication.
+        # "Household" only appears for an admin, and only holds the people whose
+        # account is set to Household — nested under one folder so the admin's own
+        # top level stays about their own files. Read-only: being able to SEE a
+        # housemate's files and being able to delete them are different powers,
+        # and only the first was asked for.
         mounts=[
             Mount(name="view", path="/srv", scope="user-view", storage="nfs"),
             Mount(name="home", path="/srv/{user}", scope="per-user", storage="nfs"),
             Mount(name="shares", path="/srv", scope="shares", storage="nfs"),
+            Mount(name="household", path="/srv/Household", scope="household",
+                  storage="nfs", ro=True),
             Mount(name="media", path="/srv/Media (shared)", scope="shared", storage="nfs"),
         ],
         # The wrapper image's entrypoint provisions noauth (the Hub session is the

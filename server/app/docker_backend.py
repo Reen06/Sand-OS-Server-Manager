@@ -350,6 +350,11 @@ def _mesh_path(user: str, m, app_id: str = "") -> str | None:
         return MESH_MOUNT
     if m.scope == "user-view":
         return os.path.join(MESH_MOUNT, config.NAS_VIEWS_SUBPATH, _safe(user))
+    if m.scope == "user-home":
+        # ANOTHER named user's home (m.name is their username, not the viewer's)
+        # — see _expand_mounts' household branch, which only ever emits this for
+        # an admin and always read-only.
+        return os.path.join(MESH_MOUNT, config.NAS_USERS_SUBPATH, _safe(m.name))
     if m.scope == "share":
         # m.name is the share's slug (set by _expand_shares, not by an AppDef).
         return os.path.join(MESH_MOUNT, config.NAS_SHARES_SUBPATH, _safe(m.name))
@@ -390,7 +395,7 @@ def _nfs_target(user: str, m, app_id: str = "") -> tuple[str, str]:
     """
     staging = nas_scope.staging_name()
     if staging:
-        if m.scope in ("user-view", "share"):
+        if m.scope in ("user-view", "share", "user-home"):
             # An app-only node sees a staging directory, not the NAS tree, so
             # there is no per-user view to root a file manager at and no shared
             # folder it is allowed to open. Skipping leaves the file manager
@@ -428,6 +433,8 @@ def _nfs_target(user: str, m, app_id: str = "") -> tuple[str, str]:
         return "", "sm-nfs-root"
     if m.scope == "user-view":
         return f"{config.NAS_VIEWS_SUBPATH}/{_safe(user)}", f"sm-nfs-view-{_safe(user)}"
+    if m.scope == "user-home":
+        return f"{config.NAS_USERS_SUBPATH}/{_safe(m.name)}", f"sm-nfs-users-{_safe(m.name)}"
     if m.scope == "share":
         return f"{config.NAS_SHARES_SUBPATH}/{_safe(m.name)}", f"sm-nfs-share-{_safe(m.name)}"
     if m.scope == "shared":
@@ -486,10 +493,25 @@ def _expand_mounts(user: str, mounts) -> list:
         an app restart, not a redeploy.
     """
     import dataclasses
-    from . import nas_shares
+    from . import nas_roster, nas_shares
 
     out = []
     for m in mounts:
+        if m.scope == "household":
+            # Only an admin sees other people's folders, and only those whose
+            # account is set to Household. Both facts come from the roster the
+            # Hub pushes to the NAS, so this resolves with the Hub unreachable.
+            try:
+                if not nas_roster.is_admin(user):
+                    continue
+                people = nas_roster.household_users(exclude=user)
+            except OSError:
+                continue
+            for name in people:
+                out.append(dataclasses.replace(
+                    m, name=name, scope="user-home", ro=True,
+                    path=os.path.join(m.path, name)))
+            continue
         if m.scope == "shares":
             try:
                 shares = nas_shares.shares_for(user)
@@ -504,6 +526,27 @@ def _expand_mounts(user: str, mounts) -> list:
             m = dataclasses.replace(m, path=m.path.replace("{user}", user))
         out.append(m)
     return out
+
+
+def _view_children(view_path: str, mounts) -> set[str]:
+    """Top-level folder names a view root legitimately has right now.
+
+    A mount nested deeper (/srv/Household/braeden) still contributes its FIRST
+    segment (Household), because that directory is a real container for live
+    mounts and must not be pruned.
+    """
+    out: set[str] = set()
+    prefix = view_path.rstrip("/") + "/"
+    for m in mounts:
+        if m.path.startswith(prefix):
+            out.add(m.path[len(prefix):].split("/", 1)[0])
+    return out
+
+
+def _view_rel_paths(view_path: str, mounts) -> list[str]:
+    """Paths of every mount nested inside the view, relative to it."""
+    prefix = view_path.rstrip("/") + "/"
+    return [m.path[len(prefix):] for m in mounts if m.path.startswith(prefix)]
 
 
 def _mount_args(app_id: str, user: str, mounts, host: str | None = None) -> list[str]:
@@ -528,6 +571,18 @@ def _mount_args(app_id: str, user: str, mounts, host: str | None = None) -> list
             # present, so apps read from the whole cluster rather than through
             # one server.
             vol = _mesh_target(user, m, app_id)
+            if m.scope == "user-view":
+                # The view root is this user's top level, so it is the one place
+                # a plain text file is unmissable. Rewritten every launch so a
+                # visibility change reaches the person it is about without
+                # anyone remembering to update it.
+                from . import nas_roster
+                nas_roster.write_notice(vol, user)
+                # Prune first (yesterday's leftovers), then create today's — so a
+                # folder that is BOTH stale and current, such as Household when
+                # its membership changed, is not removed after being recreated.
+                nas_roster.prune_stale_mountpoints(vol, _view_children(m.path, mounts))
+                nas_roster.ensure_view_children(vol, _view_rel_paths(m.path, mounts))
         elif mode == "nfs" and config.NAS_ENABLED:
             vol = _ensure_nfs(user, m, host=host, app_id=app_id)  # legacy single-server NFS
             if vol == _SKIP_MOUNT:
