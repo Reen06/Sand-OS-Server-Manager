@@ -64,7 +64,7 @@ def _resolve_source(user: str, rel: str) -> str:
     creating.
     """
     home = os.path.realpath(
-        os.path.join(config.NAS_ROOT, config.NAS_USERS_SUBPATH, _safe_user(user)))
+        os.path.join(config.nas_data_root(), config.NAS_USERS_SUBPATH, _safe_user(user)))
     target = os.path.realpath(os.path.join(home, (rel or "").lstrip("/")))
     if target != home and not target.startswith(home + os.sep):
         raise ValueError(f"path escapes the user's home: {rel!r}")
@@ -116,7 +116,7 @@ def collect(node: str, instance: str, user: str) -> dict:
     if not os.path.isdir(src_dir):
         return {"collected": [], "cleared": False}
     home = os.path.realpath(
-        os.path.join(config.NAS_ROOT, config.NAS_USERS_SUBPATH, _safe_user(user)))
+        os.path.join(config.nas_data_root(), config.NAS_USERS_SUBPATH, _safe_user(user)))
     out = os.path.join(home, "app-results",
                        f"{_safe_component(instance)}-{time.strftime('%Y%m%d-%H%M%S')}")
     collected = []
@@ -247,7 +247,7 @@ def deposit(user: str, filename: str, data: bytes, subdir: str = "") -> dict:
     read scoping was put in place to withhold.
     """
     home = os.path.realpath(
-        os.path.join(config.NAS_ROOT, config.NAS_USERS_SUBPATH, _safe_user(user)))
+        os.path.join(config.nas_data_root(), config.NAS_USERS_SUBPATH, _safe_user(user)))
     if not os.path.isdir(home):
         raise ValueError(f"no NAS home for {user!r}")
     dest_dir = os.path.join(home, _DEPOSIT_DIR)

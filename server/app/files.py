@@ -4,22 +4,27 @@ persists into the same per-user NAS home over NFS, but exposed here as a
 pick-a-folder HTTP API for apps that have no OS-level file dialog to hook).
 
 Roots:
-  - "home"          — the user's private NAS folder (same bytes FreeCAD/
-                       Filebrowser/Nextcloud already read/write for this user).
-  - "shared:<name>" — one of nas.py's Fleet NAS shared folders, if this user is
-                       a member (or the folder has no member list ⇒ everyone).
-                       Saving here is how a scene "auto appears" to everyone
-                       already sharing that folder — no separate grant model.
+  - "home"          — the user's private NAS folder (same bytes FreeCAD and
+                       Filebrowser already read/write for this user).
+  - "shared:<slug>" — one of nas_shares.py's shared folders, if this user is a
+                       member. Saving here is how a scene "auto appears" to
+                       everyone in that folder — no separate grant model.
 
 All paths are resolved with a realpath prefix check against the root's base
 directory to block ".."/symlink escape before any read/write/listdir call.
+
+Paths come from config.nas_data_root(), NOT config.NAS_ROOT. Those diverged at
+the mesh migration and this module was left behind: "My Files" resolved to the
+retired single-server tree and helpfully CREATED an empty home there, so the
+picker showed nothing while the user's real files sat on the mesh. An empty
+folder is a worse failure than an error because it looks like an answer.
 """
 from __future__ import annotations
 
 import os
 import re
 
-from . import config, nas
+from . import config, nas_shares
 
 
 def _safe_user(user: str) -> str:
@@ -31,25 +36,20 @@ def _safe_user(user: str) -> str:
 
 
 def _home_dir(user: str) -> str:
-    path = os.path.join(config.NAS_ROOT, config.NAS_USERS_SUBPATH, _safe_user(user))
+    path = os.path.join(config.nas_data_root(), config.NAS_USERS_SUBPATH, _safe_user(user))
     os.makedirs(path, exist_ok=True)
     return path
 
 
-def _shared_dir(name: str) -> str:
-    return os.path.join(config.NAS_ROOT, config.NAS_SHARED_SUBPATH, name)
+def _shared_dir(slug: str) -> str:
+    return os.path.join(config.nas_data_root(), config.NAS_SHARES_SUBPATH, slug)
 
 
 def list_roots(user: str) -> list[dict]:
     """Roots this user may browse: their home + any shared folder they're in."""
     roots = [{"id": "home", "label": "My Files"}]
-    for folder in nas.list_shared():
-        if not folder.get("exists"):
-            continue
-        members = folder.get("members") or []
-        if members and user not in members:
-            continue
-        roots.append({"id": f"shared:{folder['name']}", "label": f"{folder['name']} (Shared)"})
+    for folder in nas_shares.shares_for(user):
+        roots.append({"id": f"shared:{folder['slug']}", "label": folder["label"]})
     from . import usb_storage  # lazy: avoid import cycle
     roots.extend(
         {"id": r["id"], "label": r["label"]} for r in usb_storage.roots_for(user))

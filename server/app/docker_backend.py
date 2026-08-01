@@ -336,20 +336,12 @@ _SKIP_MOUNT = "\x00skip"
 # meant recreating every volume in the fleet. A local mount reads chunks from
 # whichever volume servers hold them, so the data path is direct and moving
 # storage no longer touches the apps at all.
-MESH_MOUNT = os.environ.get("SM_MESH_NAS_MOUNT", "/mnt/sandos-nas")
+MESH_MOUNT = config.NAS_MESH_MOUNT     # kept as a name: widely referenced below
 
 
 def _mesh_available() -> bool:
-    """Is the mesh NAS actually mounted here?
-
-    Checked rather than assumed: a node whose mount is down must fall back to
-    the old NFS path instead of bind-mounting an empty directory, which would
-    present every app with a NAS that looks intact and contains nothing.
-    """
-    try:
-        return os.path.ismount(MESH_MOUNT) and bool(os.listdir(MESH_MOUNT))
-    except OSError:
-        return False
+    """Is the mesh NAS actually mounted here? (see config.mesh_mounted)"""
+    return config.mesh_mounted()
 
 
 def _mesh_path(user: str, m, app_id: str = "") -> str | None:

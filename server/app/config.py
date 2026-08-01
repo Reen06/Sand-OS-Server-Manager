@@ -65,12 +65,41 @@ NAS_VIEWS_SUBPATH = os.environ.get("SM_NAS_VIEWS_SUBPATH", ".views")
 # NAS_ROOT in containers/nfs-server/run-nas.sh. anon uid/gid = the all_squash owner
 # every app maps to, so a new shared folder is owned consistently across apps.
 NAS_ROOT = os.environ.get("SM_NAS_ROOT", "/home/control/sandos-nas")
+# Where the mesh NAS (SeaweedFS) is mounted. Since the mesh migration this — not
+# NAS_ROOT — is where user files actually live; NAS_ROOT is now only the legacy
+# single-server tree and this node's own state files.
+NAS_MESH_MOUNT = os.environ.get("SM_MESH_NAS_MOUNT", "/mnt/sandos-nas")
+
+
+def mesh_mounted() -> bool:
+    """Is the mesh NAS actually mounted here?
+
+    Checked rather than assumed: a node whose mount is down must fall back to
+    the legacy tree instead of reading an empty directory, which would present
+    every app with a NAS that looks intact and contains nothing.
+    """
+    try:
+        return os.path.ismount(NAS_MESH_MOUNT) and bool(os.listdir(NAS_MESH_MOUNT))
+    except OSError:
+        return False
+
+
+def nas_data_root() -> str:
+    """Root for USER DATA — homes, shared folders, anything a person filed.
+
+    NOT for this node's own state files (.usb-state.json and friends). Those are
+    node-local by definition and must stay on NAS_ROOT: moving them to the mesh
+    would have every node fight over one file, and orphan the existing ones.
+
+    This exists because the mesh migration (retiring the single-server NAS) left
+    several callers still composing paths from NAS_ROOT. They kept working in the
+    sense that they returned a path and created it on demand — the Save/Open
+    picker silently showed an EMPTY home while the user's real files sat on the
+    mesh, which is worse than an error.
+    """
+    return NAS_MESH_MOUNT if mesh_mounted() else NAS_ROOT
 NAS_UID = int(os.environ.get("SM_NAS_UID", "1000"))
 NAS_GID = int(os.environ.get("SM_NAS_GID", "1000"))
-# The shared Nextcloud instance's container name — the manager drives its External
-# Storage (per-folder mounts + applicable-users) via `occ`.
-NC_CONTAINER = os.environ.get("SM_NC_CONTAINER", "sm-nextcloud")
-
 # Human-friendly node name the Hub shows in the fleet list (defaults to hostname).
 NODE_NAME = os.environ.get("SM_NODE_NAME") or socket.gethostname()
 

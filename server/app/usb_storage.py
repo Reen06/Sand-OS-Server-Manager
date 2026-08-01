@@ -176,10 +176,10 @@ def _nas_target(assign_to: str, label: str) -> str:
     user drives inside the user's home, shared drives inside the media library."""
     safe_label = re.sub(r"[^A-Za-z0-9_-]+", "-", label).strip("-") or "drive"
     if assign_to == "shared":
-        return os.path.join(config.NAS_ROOT, config.NAS_SHARED_SUBPATH,
+        return os.path.join(config.nas_data_root(), config.NAS_SHARED_SUBPATH,
                             "media", f"USB-{safe_label}")
     user = re.sub(r"[^a-z0-9]+", "-", assign_to[len("user:"):].lower()).strip("-")
-    return os.path.join(config.NAS_ROOT, config.NAS_USERS_SUBPATH, user,
+    return os.path.join(config.nas_data_root(), config.NAS_USERS_SUBPATH, user,
                         f"USB-{safe_label}")
 
 

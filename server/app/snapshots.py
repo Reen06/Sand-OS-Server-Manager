@@ -29,7 +29,7 @@ def _safe(s: str) -> str:
 
 
 def _user_root(user: str) -> str:
-    return os.path.join(config.NAS_ROOT, config.NAS_USERS_SUBPATH, _safe(user))
+    return os.path.join(config.nas_data_root(), config.NAS_USERS_SUBPATH, _safe(user))
 
 
 def _appdata_dirs(app_id: str, user: str) -> list[tuple[str, str]]:

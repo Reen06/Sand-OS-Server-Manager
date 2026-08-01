@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import app_images, app_storage, app_variants, busy, config, docker_backend, dockerhub_apps, files, glances_svc, hub_auth, metrics, nas, nas_shares, ollama_mgr, pending_imports, proxy, pwa, registry, snapshots, usb_storage
+from . import app_images, app_storage, app_variants, busy, config, docker_backend, dockerhub_apps, files, glances_svc, hub_auth, metrics, nas_shares, ollama_mgr, pending_imports, proxy, pwa, registry, snapshots, usb_storage
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -407,10 +407,10 @@ def usb_app_hosting(request: Request, body: _UsbAppHostingBody):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 
-# ── people-facing shared folders (nas_shares.py) ─────────────────────────────
-# Distinct from /api/nas/shared below, which manages the APP data folders under
-# shared/ and needs Nextcloud up to set membership. These are the folders two
-# people co-own, and they show up in the Files app as "admin + braeden".
+# ── shared folders (nas_shares.py) ───────────────────────────────────────────
+# The folders two or more people co-own; they appear in each member's Files app
+# as "admin + braeden". Not to be confused with the shared/ tree, which holds
+# APP data (media, open-webui-data) and is not something a person files into.
 @app.get("/api/nas/shares")
 def nas_shares_list(request: Request):
     _require_admin(request)
@@ -463,47 +463,12 @@ def nas_shares_delete(slug: str, request: Request):
         return JSONResponse({"error": str(e)}, status_code=400)
 
 
-@app.get("/api/nas/shared")
-def nas_shared_list(request: Request):
-    _require_admin(request)
-    return {"enabled": config.NAS_ENABLED, "node": config.NODE_NAME,
-            "folders": nas.list_shared(), "users": nas.list_users()}
-
-
-@app.post("/api/nas/shared")
-async def nas_shared_create(request: Request):
-    _require_admin(request)
-    body = await request.json()
-    try:
-        return nas.create_shared(body.get("name", ""), body.get("members") or [])
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-
-
-@app.patch("/api/nas/shared/{name}")
-async def nas_shared_update(name: str, request: Request):
-    _require_admin(request)
-    body = await request.json()
-    try:
-        return nas.set_members(name, body.get("members") or [])
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-
-
-@app.delete("/api/nas/shared/{name}")
-def nas_shared_delete(name: str, request: Request):
-    _require_admin(request)
-    delete_files = request.query_params.get("delete_files") in ("1", "true", "yes")
-    try:
-        return nas.delete_shared(name, delete_files)
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
 
 
 # ── Cloud file picker: save/open into a user's NAS home or an accessible shared
 # folder. Apps with no OS-level file dialog (Ray Optics) use this instead —
 # saving into a shared folder is how a scene "auto appears" to everyone already
-# sharing it (see files.py / nas.py's shared-folder membership) ───────────────
+# sharing it (see files.py / nas_shares.py's membership index) ───────────────
 @app.get("/api/files/roots")
 def files_roots(request: Request):
     ident = _require_identity(request)

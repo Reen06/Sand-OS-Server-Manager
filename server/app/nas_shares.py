@@ -48,10 +48,7 @@ def active_root() -> str:
     would write the index somewhere only this machine looks, and shares would
     silently differ per node.
     """
-    from . import docker_backend      # deferred: it imports config at load time
-    if docker_backend._mesh_available():
-        return docker_backend.MESH_MOUNT
-    return config.NAS_ROOT
+    return config.nas_data_root()
 
 
 def shares_root(nas_root: str | None = None) -> str:

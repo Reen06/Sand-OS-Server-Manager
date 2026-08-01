@@ -151,7 +151,7 @@ def set_override(user: str, rel: str, tier: int | None) -> dict:
 
 def ensure_tier_dirs(user: str) -> list[str]:
     """Create this user's tier folders if missing. Idempotent."""
-    home = os.path.join(config.NAS_ROOT, config.NAS_USERS_SUBPATH, _safe_user(user))
+    home = os.path.join(config.nas_data_root(), config.NAS_USERS_SUBPATH, _safe_user(user))
     made = []
     for name in TIER_DIRS:
         p = os.path.join(home, name)
@@ -204,7 +204,7 @@ def usage(refresh: bool = False) -> dict:
     now = time.time()
     if not refresh and _usage_cache["value"] and now - _usage_cache["at"] < _USAGE_TTL:
         return _usage_cache["value"]
-    users_root = os.path.join(config.NAS_ROOT, config.NAS_USERS_SUBPATH)
+    users_root = os.path.join(config.nas_data_root(), config.NAS_USERS_SUBPATH)
     per_tier = {t: {"bytes": 0, "files": 0} for t in TIER_META}
     per_user: list[dict] = []
     if os.path.isdir(users_root):
