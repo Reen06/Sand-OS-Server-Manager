@@ -668,7 +668,10 @@ CATALOG: dict[str, AppDef] = {
             # Hub LLM Router as an OpenAI connection: ONE endpoint that routes
             # each request to the best fleet node that has the model (online →
             # running → least loaded). New Ollama nodes join automatically.
-            **({"OPENAI_API_BASE_URL": f"{config.HUB_URL}/api/fleet/llm/v1",
+            # HUB_URL_FOR_CONTAINERS, not HUB_URL: when the Hub is configured by
+            # IP the --add-host below cannot redirect anything, so a container
+            # given a WireGuard address this node cannot route to just hangs.
+            **({"OPENAI_API_BASE_URL": f"{config.HUB_URL_FOR_CONTAINERS}/api/fleet/llm/v1",
                 "OPENAI_API_KEY": config.LLM_API_KEY}
                if config.HUB_URL and config.LLM_API_KEY else {}),
         },

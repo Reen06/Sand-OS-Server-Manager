@@ -330,6 +330,33 @@ from urllib.parse import urlparse as _urlparse
 HUB_HOST = _urlparse(HUB_URL).hostname or "" if HUB_URL else ""
 HUB_INTERNAL_IP = _urlparse(HUB_INTERNAL_URL).hostname or "" if HUB_INTERNAL_URL else ""
 
+
+def _is_ip_literal(host: str) -> bool:
+    import ipaddress
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+# The --add-host trick only works when HUB_URL carries a NAME. /etc/hosts maps
+# names to addresses; an entry for an IP literal is never consulted, because
+# nothing resolves an address it already has. So when the Hub is configured by
+# IP, a container told to reach it at that IP will do exactly that — and if the
+# address is a WireGuard one this node cannot route to, the call simply hangs.
+#
+# Seen live: HUB_URL=https://10.79.114.1 on a node with no tunnel. The add-host
+# was applied, /etc/hosts read "10.0.0.177  10.79.114.1", and Open WebUI still
+# timed out reaching the model router — with nothing in any log to say why.
+#
+# In that case the container has to be handed the internal address outright.
+HUB_URL_FOR_CONTAINERS = (
+    HUB_INTERNAL_URL
+    if (_is_ip_literal(HUB_HOST) and HUB_INTERNAL_URL and HUB_INTERNAL_URL != HUB_URL)
+    else HUB_URL
+)
+
 # Ceiling on a single save-to-NAS write. The whole body is held in memory while
 # it is written, so this bounds what one request can cost the NAS host — which
 # on this fleet is also the machine running most of the apps.
