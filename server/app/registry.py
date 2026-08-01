@@ -90,14 +90,26 @@ CATALOG: dict[str, AppDef] = {
         internal_port=8080,
         gpu=False,
         mem_limit="512m",
-        # The NAS made visible: a private home (per-user) + a library every app
-        # and user shares. 'media' resolves to sm-shared-media (also mounted by a
-        # future Jellyfin) — proving shared-across-apps data.
-        # Same NAS home as FreeCAD/Nextcloud (users/{user}) + the shared library,
-        # over NFS — one set of files across every app, no duplication.
+        # The NAS made visible. What you see at the top level is one folder with
+        # YOUR name on it, then any folder you share with someone ("admin +
+        # braeden"), then the shared library — no generic "home", nothing to
+        # learn before you can find your files.
+        #
+        # The `user-view` root is load-bearing, not decoration: the upstream
+        # image declares VOLUME /srv, so leaving the root unbound gave it an
+        # anonymous volume on the NODE's disk and the app reported the node's
+        # free space (108 GB here) until you stepped into a subfolder, where it
+        # switched to the real NAS figure. Rooting at a NAS directory makes the
+        # number right everywhere. _mount_args orders parents before children so
+        # the nested mounts below survive.
+        #
+        # home is still users/{user} — the same bytes FreeCAD and Nextcloud see,
+        # one set of files across every app, no duplication.
         mounts=[
-            Mount(name="home", path="/srv/home", scope="per-user", storage="nfs"),
-            Mount(name="media", path="/srv/media", scope="shared", storage="nfs"),
+            Mount(name="view", path="/srv", scope="user-view", storage="nfs"),
+            Mount(name="home", path="/srv/{user}", scope="per-user", storage="nfs"),
+            Mount(name="shares", path="/srv", scope="shares", storage="nfs"),
+            Mount(name="media", path="/srv/Media (shared)", scope="shared", storage="nfs"),
         ],
         # The wrapper image's entrypoint provisions noauth (the Hub session is the
         # real gate) and binds 0.0.0.0:8080 serving /srv. We only inject the

@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import app_images, app_storage, app_variants, busy, config, docker_backend, dockerhub_apps, files, glances_svc, hub_auth, metrics, nas, ollama_mgr, pending_imports, proxy, pwa, registry, snapshots, usb_storage
+from . import app_images, app_storage, app_variants, busy, config, docker_backend, dockerhub_apps, files, glances_svc, hub_auth, metrics, nas, nas_shares, ollama_mgr, pending_imports, proxy, pwa, registry, snapshots, usb_storage
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -405,6 +405,62 @@ def usb_app_hosting(request: Request, body: _UsbAppHostingBody):
         return {"ok": True, **usb_storage.set_app_hosting(body.uuid, body.enabled)}
     except (ValueError, RuntimeError) as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+# ── people-facing shared folders (nas_shares.py) ─────────────────────────────
+# Distinct from /api/nas/shared below, which manages the APP data folders under
+# shared/ and needs Nextcloud up to set membership. These are the folders two
+# people co-own, and they show up in the Files app as "admin + braeden".
+@app.get("/api/nas/shares")
+def nas_shares_list(request: Request):
+    _require_admin(request)
+    return {"enabled": config.NAS_ENABLED, "node": config.NODE_NAME,
+            "root": nas_shares.shares_root(), "shares": nas_shares.list_shares()}
+
+
+@app.get("/api/nas/shares/mine")
+def nas_shares_mine(request: Request):
+    """The signed-in user's own shares — no admin needed; you can always see
+    which folders you are in."""
+    user = _require_user(request)
+    return {"user": user, "shares": nas_shares.shares_for(user)}
+
+
+@app.post("/api/nas/shares")
+async def nas_shares_create(request: Request):
+    _require_admin(request)
+    body = await request.json()
+    try:
+        nas_shares.ensure_root()
+        return nas_shares.create_share(body.get("members") or [],
+                                       label=body.get("label", ""),
+                                       slug=body.get("slug", ""))
+    except (ValueError, OSError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.patch("/api/nas/shares/{slug}")
+async def nas_shares_update(slug: str, request: Request):
+    _require_admin(request)
+    body = await request.json()
+    try:
+        if "label" in body:
+            nas_shares.rename_share(slug, body.get("label", ""))
+        if "members" in body:
+            return nas_shares.set_members(slug, body.get("members") or [])
+        return {"slug": slug, "label": body.get("label", "")}
+    except (ValueError, OSError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+@app.delete("/api/nas/shares/{slug}")
+def nas_shares_delete(slug: str, request: Request):
+    _require_admin(request)
+    delete_files = request.query_params.get("delete_files") in ("1", "true", "yes")
+    try:
+        return nas_shares.delete_share(slug, delete_files)
+    except (ValueError, OSError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
 
 
 @app.get("/api/nas/shared")

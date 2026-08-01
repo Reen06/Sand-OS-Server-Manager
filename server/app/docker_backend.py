@@ -356,6 +356,11 @@ def _mesh_path(user: str, m, app_id: str = "") -> str | None:
     """Where this mount lives inside the mesh NAS, or None if it has no place."""
     if m.scope == "root":
         return MESH_MOUNT
+    if m.scope == "user-view":
+        return os.path.join(MESH_MOUNT, config.NAS_VIEWS_SUBPATH, _safe(user))
+    if m.scope == "share":
+        # m.name is the share's slug (set by _expand_shares, not by an AppDef).
+        return os.path.join(MESH_MOUNT, config.NAS_SHARES_SUBPATH, _safe(m.name))
     if m.scope == "shared":
         return os.path.join(MESH_MOUNT, config.NAS_SHARED_SUBPATH, _safe(m.name))
     if m.name != "home":
@@ -393,6 +398,13 @@ def _nfs_target(user: str, m, app_id: str = "") -> tuple[str, str]:
     """
     staging = nas_scope.staging_name()
     if staging:
+        if m.scope in ("user-view", "share"):
+            # An app-only node sees a staging directory, not the NAS tree, so
+            # there is no per-user view to root a file manager at and no shared
+            # folder it is allowed to open. Skipping leaves the file manager
+            # rooted at its own image volume showing only the staged files —
+            # which is exactly what brokered access is meant to show.
+            return "", _SKIP_MOUNT
         if m.scope == "root":
             # Nextcloud and friends mount the entire tree and scope it
             # internally. There is nothing to scope here, and quietly handing
@@ -422,6 +434,10 @@ def _nfs_target(user: str, m, app_id: str = "") -> tuple[str, str]:
         return "", _SKIP_MOUNT
     if m.scope == "root":
         return "", "sm-nfs-root"
+    if m.scope == "user-view":
+        return f"{config.NAS_VIEWS_SUBPATH}/{_safe(user)}", f"sm-nfs-view-{_safe(user)}"
+    if m.scope == "share":
+        return f"{config.NAS_SHARES_SUBPATH}/{_safe(m.name)}", f"sm-nfs-share-{_safe(m.name)}"
     if m.scope == "shared":
         return f"{config.NAS_SHARED_SUBPATH}/{_safe(m.name)}", f"sm-nfs-shared-{_safe(m.name)}"
     if m.name != "home":
@@ -466,9 +482,46 @@ def _ensure_nfs(user: str, m, host: str | None = None, app_id: str = "") -> str:
     return vol
 
 
+def _expand_mounts(user: str, mounts) -> list:
+    """Turn an AppDef's declared mounts into the concrete ones for THIS user.
+
+    Two expansions, both of which need a username the AppDef cannot know:
+      - `{user}` in a mount path becomes the instance owner, so a file manager
+        can show someone's files under a folder bearing their own name.
+      - a `shares` mount is a placeholder: it becomes one mount per shared
+        folder this user belongs to, each at `<path>/<label>` ("admin + braeden").
+        Membership is read at launch, so adding someone to a folder needs only
+        an app restart, not a redeploy.
+    """
+    import dataclasses
+    from . import nas_shares
+
+    out = []
+    for m in mounts:
+        if m.scope == "shares":
+            try:
+                shares = nas_shares.shares_for(user)
+            except OSError:
+                shares = []      # NAS unreachable: show their own files, not an error
+            for s in shares:
+                out.append(dataclasses.replace(
+                    m, name=s["slug"], scope="share",
+                    path=os.path.join(m.path, s["label"])))
+            continue
+        if "{user}" in m.path:
+            m = dataclasses.replace(m, path=m.path.replace("{user}", user))
+        out.append(m)
+    return out
+
+
 def _mount_args(app_id: str, user: str, mounts, host: str | None = None) -> list[str]:
     from . import registry, app_storage
     out: list[str] = []
+    # Parents before children. A file manager's root is itself a mount now, with
+    # its home and shares nested inside it — mount those first and the root
+    # would be laid down on top, hiding every one of them.
+    mounts = sorted(_expand_mounts(user, mounts),
+                    key=lambda m: m.path.count("/"))
     for m in mounts:
         # app_storage's per-(app,user,mount) override takes precedence over the
         # Mount's own declared default — this is what makes "move this app's

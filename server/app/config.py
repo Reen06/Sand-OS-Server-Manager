@@ -50,6 +50,16 @@ NAS_ENABLED = os.environ.get("SM_NAS_ENABLED", "true").lower() in ("1", "true", 
 # Sub-paths under the NFS export root (server exports .../sandos-nas as the v4 root).
 NAS_USERS_SUBPATH = os.environ.get("SM_NAS_USERS_SUBPATH", "users")     # users/{username}
 NAS_SHARED_SUBPATH = os.environ.get("SM_NAS_SHARED_SUBPATH", "shared")  # shared/{name}
+# shares/{slug} — people-facing shared folders (nas_shares.py). Deliberately NOT
+# the same tree as shared/, which holds app data (media, open-webui-data …): one
+# is somewhere a person files things, the other is machinery.
+NAS_SHARES_SUBPATH = os.environ.get("SM_NAS_SHARES_SUBPATH", "shares")
+# .views/{user} — an empty per-user directory that becomes a file manager's ROOT,
+# with their home and each of their shares mounted inside it. It exists purely so
+# the root is ON the NAS: the upstream Filebrowser image declares VOLUME /srv, so
+# an unbound root got an anonymous local-disk volume and the app reported the
+# NODE's free space until you stepped into a subfolder. Hidden — nothing files here.
+NAS_VIEWS_SUBPATH = os.environ.get("SM_NAS_VIEWS_SUBPATH", ".views")
 # LOCAL path of the export root on the NAS host — the SM runs there (control-owned
 # tree) so the shared-folder manager creates/removes folders directly. Matches
 # NAS_ROOT in containers/nfs-server/run-nas.sh. anon uid/gid = the all_squash owner

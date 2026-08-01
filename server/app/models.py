@@ -58,10 +58,22 @@ class Mount:
       - per-user:  sm-{app}-{user}-{name}   (private to one user)
       - shared:    sm-shared-{name}         (one volume many apps/users can mount)
     `path` is where it mounts inside the container; `ro` mounts it read-only
-    (e.g. a media app that reads, but does not write, the shared library)."""
+    (e.g. a media app that reads, but does not write, the shared library).
+
+    `path` may contain `{user}`, expanded at launch to the instance's owner —
+    that is what lets a file manager show someone's files under a folder with
+    their own name on it rather than a generic "home"."""
     name: str
     path: str
-    scope: str = "per-user"      # per-user | shared
+    # per-user  private to one user            shared  one volume, many users
+    # user-view an empty per-user directory used as a file manager's ROOT, so
+    #           that root sits on the NAS and reports NAS free space. Other
+    #           mounts nest inside it (see docker_backend._mount_args, which
+    #           orders parents before children).
+    # shares    a placeholder, not a mount: expands at launch into one mount per
+    #           shared folder this user belongs to, at `path`/<folder label>.
+    #           Dynamic because membership changes without an app redeploy.
+    scope: str = "per-user"      # per-user | shared | user-view | shares
     ro: bool = False
     # local  = a Docker volume on the node (fast, node-local, not shared).
     # nfs    = the fleet NAS over NFSv4 — the SAME bytes on every node, no

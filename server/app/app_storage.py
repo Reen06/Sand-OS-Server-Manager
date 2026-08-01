@@ -106,11 +106,18 @@ def _relocatable(app_id: str) -> list[Mount]:
     """Mounts eligible to move. Excludes scope='root' (Nextcloud's whole-NAS
     scoping mount — moving that would break every user's file access, not
     just one app's data) and read-only mounts (nothing to relocate: it's a
-    shared library this app only reads)."""
+    shared library this app only reads).
+
+    Also excludes 'user-view' and 'shares'. Neither is this app's data to move:
+    the view is an empty directory that exists only so a file manager's root
+    sits on the NAS (moving it to a USB drive would put the root back on local
+    storage — the bug it was added to fix), and 'shares' is a placeholder that
+    expands into folders co-owned by other people."""
     app = registry.APPS.get(app_id)
     if not app:
         return []
-    return [m for m in app.mounts if m.scope != "root" and not m.ro]
+    return [m for m in app.mounts
+            if m.scope not in ("root", "user-view", "shares") and not m.ro]
 
 
 def effective_storage(app_id: str, user: str, m: Mount) -> tuple[str, str | None]:
