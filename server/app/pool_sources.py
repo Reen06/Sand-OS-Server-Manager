@@ -28,9 +28,10 @@ import subprocess
 from . import config, usb_storage
 
 _POOL_HELPER = "/usr/local/lib/sandos-sm-pool"
+_CLUSTER_HELPER = "/usr/local/lib/sandos-sm-cluster"
 
 
-def _helper_cmd(*args: str) -> list[str]:
+def _helper_cmd(*args: str, helper: str = _POOL_HELPER) -> list[str]:
     """The helper invocation for this process.
 
     Only reaches for sudo when it is actually needed. A Server Manager
@@ -40,8 +41,8 @@ def _helper_cmd(*args: str) -> list[str]:
     that surfaced only as "this node contributes no storage".
     """
     if os.geteuid() == 0:
-        return [_POOL_HELPER, *args]
-    return ["sudo", "-n", _POOL_HELPER, *args]
+        return [helper, *args]
+    return ["sudo", "-n", helper, *args]
 
 
 def _fs_usage(path: str) -> tuple[int, int, int]:
@@ -91,6 +92,65 @@ def _internal() -> dict | None:
         # host disk rather than of the pool — the Hub needs it to offer a
         # sensible maximum instead of letting someone fill the machine.
         "growth_headroom_bytes": int(d.get("host_avail_bytes") or 0),
+    }
+
+
+def _cluster() -> dict | None:
+    """This node's SeaweedFS cluster contribution — a THIRD kind of source,
+    alongside the image-backed internal reservation and assigned USB drives.
+
+    The mesh NAS migration (see docs/CLAUDE.md history) moved a node's real
+    contribution from the internal-reservation/USB-partition model above into
+    the cluster, but nothing ever taught this module about that move — so a
+    node's tier-eligible capacity was still computed from whatever pre-cluster
+    reservation happened to be lying around, however small or stale, while the
+    cluster itself (potentially hundreds of GB) was invisible here.
+    Confirmed live on CortexPC: a leftover 5 GB pre-cluster pool.img — 24 KB
+    actually used, functionally dead — was the ENTIRE reported tier capacity,
+    while the node's real, active cluster contribution (a dedicated drive,
+    ~138 GB free) was not counted at all. The Tiers section read "4 GB
+    available" on a page whose own Cluster section, two scrolls up, correctly
+    showed hundreds of gigabytes free — same node, two contradictory numbers.
+
+    SeaweedFS's filer preserves POSIX ownership (that is what makes per-user
+    homes and NFS-style access work at all), so this source is posix=True same
+    as the internal reservation — never excluded from tiers 2/3 the way a
+    non-POSIX USB filesystem is.
+    """
+    if not os.path.exists(_CLUSTER_HELPER):
+        return None
+    try:
+        import json
+        r = subprocess.run(_helper_cmd("status", helper=_CLUSTER_HELPER),
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            return None
+        d = json.loads(r.stdout or "{}")
+    except Exception:  # noqa: BLE001
+        return None
+    if not d.get("running"):
+        return None
+    usage = d.get("usage") or []
+    used = sum(int(u.get("used_bytes") or 0) for u in usage)
+    free = sum(int(u.get("avail_bytes") or 0) for u in usage)
+    if not usage:
+        return None
+    return {
+        "id": f"{config.NODE_NAME}:cluster",
+        "node": config.NODE_NAME,
+        "kind": "cluster",
+        "role": "nas",
+        "label": "Mesh NAS cluster",
+        "path": d.get("dirs") or "",
+        "fstype": "seaweedfs",
+        "posix": True,
+        "resizable": False,     # grown via the Drives modal, not from here
+        "backing": "cluster",
+        "online": True,
+        "total_bytes": used + free,
+        "used_bytes": used,
+        "free_bytes": free,
+        "growth_headroom_bytes": 0,
     }
 
 
@@ -147,11 +207,26 @@ def _usb() -> list[dict]:
 
 
 def sources() -> list[dict]:
-    """Every pool source on this node, internal first."""
+    """Every pool source on this node, cluster first.
+
+    Cluster and internal-reservation are never both reported: they are two
+    tellings of the same machine's story, from before and after the mesh NAS
+    migration, and a node running the cluster has moved on from the pre-
+    cluster model — nothing routes user files to the internal reservation any
+    more. Reporting both would not add information, only show one tiny/stale
+    number next to one real one and invite the exact confusion this was fixed
+    for. Cluster wins when both are present; a node with no cluster
+    contribution (app-only, or never migrated) still gets its internal/USB
+    sources exactly as before.
+    """
     out = []
-    internal = _internal()
-    if internal:
-        out.append(internal)
+    cluster = _cluster()
+    if cluster:
+        out.append(cluster)
+    else:
+        internal = _internal()
+        if internal:
+            out.append(internal)
     out.extend(_usb())
     return out
 
