@@ -76,7 +76,8 @@ done
 # SM_NAS_ENABLED=true really did come back out as false before this existed.
 for _v in SM_MODE SM_LAN_IP SM_PORT SM_NODE_NAME SM_HUB_URL SM_HUB_VERIFY_TLS \
           SM_EXTERNAL_BASE SM_NAS_ENABLED SM_NAS_HOST SM_NAS_ROOT SM_GPU \
-          SM_SLOT_COUNT SM_DOCKER_ROOT SM_ENROLL_LINK SM_SSH_PORT; do
+          SM_SLOT_COUNT SM_DOCKER_ROOT SM_ENROLL_LINK SM_SSH_PORT \
+          SM_LINK_TOKEN SM_LINK_HUB; do
   eval "_IN_${_v}=\${${_v}-}"
 done
 unset _v
@@ -667,7 +668,7 @@ esac
 
 blank
 SM_PORT=$(read_auto "Server Manager port" "$(_env_or SM_PORT 8170)")
-SM_NODE_NAME=$(read_auto "Friendly node name (shown in Hub fleet)" "$(_env_or SM_NODE_NAME "$(hostname)")")
+SM_NODE_NAME=$(read_val "Friendly node name (shown in Hub fleet)" "$(_env_or SM_NODE_NAME "$(hostname)")")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 3 — HUB CONNECTION
@@ -1062,9 +1063,17 @@ blank
 # link is the ONLY way the Hub can reach it, and dropping it here would strand
 # the node with nothing anywhere saying why — the failure would look exactly
 # like the firewall problem the link exists to solve.
-_KEEP_LINK_TOKEN=""
-_KEEP_LINK_HUB=""
-if [ -f "$ENV_FILE" ]; then
+# A token passed in by the operator wins: that is how a node whose inbound
+# port is firewalled shut gets linked at all. The Hub cannot provision it the
+# usual way (over SSH, authorized by a call to this node's own :8170) when
+# that port is exactly what is unreachable -- so the Hub mints the credential
+# without touching the node and it is pasted in here.
+_KEEP_LINK_TOKEN="$(_env_or SM_LINK_TOKEN "")"
+_KEEP_LINK_HUB="$(_env_or SM_LINK_HUB "")"
+if [ -n "$_KEEP_LINK_TOKEN" ]; then
+  [ -z "$_KEEP_LINK_HUB" ] && _KEEP_LINK_HUB="$SM_HUB_URL"
+  ok "Reverse link configured — this node will dial OUT to the Hub"
+elif [ -f "$ENV_FILE" ]; then
   _KEEP_LINK_TOKEN=$($SUDO sed -n 's/^SM_LINK_TOKEN=//p' "$ENV_FILE" 2>/dev/null | head -1)
   _KEEP_LINK_HUB=$($SUDO sed -n 's/^SM_LINK_HUB=//p' "$ENV_FILE" 2>/dev/null | head -1)
   [ -n "$_KEEP_LINK_TOKEN" ] && ok "Preserving this node's existing reverse link to the Hub"
@@ -1377,8 +1386,15 @@ except Exception:
     echo "  ${BOLD}Option 1 — no firewall change (use this on a machine you don't own)${RST}"
     echo "  $HR"
     echo "  Have this node dial OUT to the Hub and hold the connection open, so"
-    echo "  nothing ever needs to connect in. On the Hub's Fleet page, enable"
-    echo "  \"Reverse link\" for this node. Nothing here has to be opened."
+    echo "  nothing ever needs to connect in. Nothing here has to be opened."
+    blank
+    echo "  On the Hub, mint a token for this node (admin session required):"
+    echo "    POST /api/fleet/link-token   {\"node_id\": \"${SM_LAN_IP}\"}"
+    echo "  then re-run this installer with it:"
+    echo "    sudo SM_LINK_TOKEN=<token> bash install.sh --unattended"
+    blank
+    echo "  ${DIM}The Fleet page's own \"Reverse link\" toggle provisions over SSH,${RST}"
+    echo "  ${DIM}which needs this port — so it cannot be used from here.${RST}"
     blank
     echo "  ${BOLD}Option 2 — allow the port (only if this machine's policy is yours)${RST}"
     echo "  $HR"
