@@ -1056,6 +1056,20 @@ echo "  ${BOLD}Installing…${RST}"
 blank
 
 # ── 1. Env file ────────────────────────────────────────────────────────────────
+# Carry the reverse-link credential across a reconfigure. It is provisioned by
+# the Hub over SSH, never by this installer, so it exists only in the file we
+# are about to overwrite. On a node whose inbound port is firewalled shut the
+# link is the ONLY way the Hub can reach it, and dropping it here would strand
+# the node with nothing anywhere saying why — the failure would look exactly
+# like the firewall problem the link exists to solve.
+_KEEP_LINK_TOKEN=""
+_KEEP_LINK_HUB=""
+if [ -f "$ENV_FILE" ]; then
+  _KEEP_LINK_TOKEN=$($SUDO sed -n 's/^SM_LINK_TOKEN=//p' "$ENV_FILE" 2>/dev/null | head -1)
+  _KEEP_LINK_HUB=$($SUDO sed -n 's/^SM_LINK_HUB=//p' "$ENV_FILE" 2>/dev/null | head -1)
+  [ -n "$_KEEP_LINK_TOKEN" ] && ok "Preserving this node's existing reverse link to the Hub"
+fi
+
 info "Writing ${ENV_FILE}…"
 cat << EOF | $SUDO tee "$ENV_FILE" > /dev/null
 # Sand-OS Server Manager — environment config
@@ -1098,6 +1112,15 @@ SM_SLOT_COUNT=${SM_SLOT_COUNT}
 # accounts, so this installer stood up a separate sshd inside WSL — see
 # Step 7 above.
 SM_SSH_PORT=${SM_SSH_PORT}
+
+# ── Reverse link (Hub-provisioned) ────────────────────────────────────────────
+# Set by the Hub's Fleet page, not by this installer, and preserved verbatim
+# when you re-run it. When present this node dials OUT to the Hub and holds
+# the connection open, so the Hub never needs to connect in — the only way to
+# run a node on a network whose firewall is not yours to change.
+# Empty means the feature is off and the Hub reaches this node normally.
+SM_LINK_TOKEN=${_KEEP_LINK_TOKEN}
+SM_LINK_HUB=${_KEEP_LINK_HUB}
 EOF
 ok "Wrote ${ENV_FILE}"
 
