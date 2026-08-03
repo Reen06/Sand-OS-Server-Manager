@@ -25,6 +25,7 @@ than the same request arriving over the LAN.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -106,6 +107,32 @@ def _ssl_ctx():
     return ctx
 
 
+async def _pump_stream(sid: int, ws, send_lock, streams: dict) -> None:
+    """Read from our local API socket and push it back up the WebSocket."""
+    reader, writer = streams[sid]
+    try:
+        while True:
+            chunk = await reader.read(65536)
+            if not chunk:
+                break
+            async with send_lock:
+                await ws.send(json.dumps({"t": "data", "sid": sid,
+                                          "b": base64.b64encode(chunk).decode()}))
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        streams.pop(sid, None)
+        try:
+            async with send_lock:
+                await ws.send(json.dumps({"t": "close", "sid": sid}))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            writer.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 async def _session() -> None:
     """One connection attempt, held until it drops."""
     import websockets
@@ -123,6 +150,7 @@ async def _session() -> None:
                 async with send_lock:
                     await ws.send(json.dumps({"t": "ping"}))
 
+        streams: dict = {}
         ka = asyncio.create_task(_keepalive())
         # One client for the whole session; the Hub can have several requests
         # in flight and each would otherwise pay connection setup.
@@ -134,9 +162,41 @@ async def _session() -> None:
                         frame = json.loads(raw)
                     except ValueError:
                         continue
-                    if frame.get("t") == "pong":
+                    kind = frame.get("t")
+                    if kind == "pong":
                         continue
-                    if frame.get("t") != "req":
+                    # Raw TCP forwarding: the Hub runs a local listener that
+                    # behaves like this node's own port, so its existing code
+                    # can address us as an ordinary host. Each connection there
+                    # becomes one of these streams here.
+                    if kind == "open":
+                        sid = frame.get("sid")
+                        try:
+                            r, w = await asyncio.open_connection("127.0.0.1", config.SM_PORT)
+                            streams[sid] = (r, w)
+                            asyncio.create_task(_pump_stream(sid, ws, send_lock, streams))
+                        except Exception as e:  # noqa: BLE001
+                            log.warning("stream %s could not reach the local API: %s", sid, e)
+                            async with send_lock:
+                                await ws.send(json.dumps({"t": "close", "sid": sid}))
+                        continue
+                    if kind == "data":
+                        st = streams.get(frame.get("sid"))
+                        if st:
+                            try:
+                                st[1].write(base64.b64decode(frame.get("b") or ""))
+                            except Exception:  # noqa: BLE001
+                                pass
+                        continue
+                    if kind == "close":
+                        st = streams.pop(frame.get("sid"), None)
+                        if st:
+                            try:
+                                st[1].close()
+                            except Exception:  # noqa: BLE001
+                                pass
+                        continue
+                    if kind != "req":
                         continue
 
                     async def _run(f: dict) -> None:
