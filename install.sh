@@ -1201,8 +1201,8 @@ EnvironmentFile=-${ENV_FILE}
 # Keep Python's bytecode cache OUT of the repo. Without this the interpreter
 # writes __pycache__ next to the source, owned by whoever the service runs as —
 # and when that is root (install.sh run with no SUDO_USER, i.e. from a
-# provisioning script, cron, or `su -`), the account that owns the checkout can
-# no longer `rm -rf` it or `git pull` into it. That silently breaks both a
+# provisioning script, cron, or via su), the account that owns the checkout can
+# no longer delete it or pull into it. That silently breaks both a
 # reinstall and the fleet auto-update, and leaves a repo its owner cannot
 # delete. Redirecting is better than chowning after the fact: it needs no
 # assumption about who should own the checkout, and it holds for every service
