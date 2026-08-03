@@ -1381,23 +1381,43 @@ except Exception:
     warn "The Hub CANNOT reach this machine on :${SM_PORT}."
     [ -n "$_rb_detail" ] && echo "    ${DIM}${_rb_detail}${RST}"
     blank
-    echo "  ${BOLD}This node will install correctly and still never appear in the fleet.${RST}"
-    blank
-    echo "  ${BOLD}Option 1 — no firewall change (use this on a machine you don't own)${RST}"
-    echo "  $HR"
-    echo "  Have this node dial OUT to the Hub and hold the connection open, so"
-    echo "  nothing ever needs to connect in. Nothing here has to be opened."
-    blank
-    echo "  On the Hub, mint a token for this node (admin session required):"
-    echo "    POST /api/fleet/link-token   {\"node_id\": \"${SM_LAN_IP}\"}"
-    echo "  then re-run this installer with it:"
-    echo "    sudo SM_LINK_TOKEN=<token> bash install.sh --unattended"
-    blank
-    echo "  ${DIM}The Fleet page's own \"Reverse link\" toggle provisions over SSH,${RST}"
-    echo "  ${DIM}which needs this port — so it cannot be used from here.${RST}"
-    blank
-    echo "  ${BOLD}Option 2 — allow the port (only if this machine's policy is yours)${RST}"
-    echo "  $HR"
+    # Fix it here rather than telling the operator to. The node cannot be
+    # reached inbound, so it must dial out — and it can ask the Hub for its
+    # own credential over the tunnel it already holds. Only reached when the
+    # reachback actually failed: a node the Hub can reach gains nothing from
+    # this and is left alone.
+    if [ -z "$_KEEP_LINK_TOKEN" ]; then
+      info "Setting up a reverse link so the Hub can reach this node anyway…"
+      _lt=$(curl -fsS $_rb_insecure --max-time 15 \
+              "${SM_HUB_URL%/}/api/fleet/link-token/self" 2>/dev/null || true)
+      _lt_tok=$(printf '%s' "$_lt" | python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin).get('token') or '')
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+      if [ -n "$_lt_tok" ]; then
+        $SUDO sed -i '/^SM_LINK_TOKEN=/d;/^SM_LINK_HUB=/d' "$ENV_FILE"
+        printf 'SM_LINK_TOKEN=%s\nSM_LINK_HUB=%s\n' "$_lt_tok" "$SM_HUB_URL" \
+          | $SUDO tee -a "$ENV_FILE" >/dev/null
+        $SUDO systemctl restart "$UNIT_NAME"
+        sleep 6
+        ok "Reverse link enabled — this node now dials OUT to the Hub"
+        echo "    ${DIM}Nothing was opened on this machine's firewall.${RST}"
+        _rb_fixed=1
+      else
+        warn "Couldn't get a reverse-link token from the Hub."
+        warn "This node is only reachable from the Hub's own tunnel subnet;"
+        warn "if this is a LAN node, an admin can mint one from the Fleet page."
+      fi
+    fi
+
+    if [ -z "${_rb_fixed:-}" ]; then
+      echo "  ${BOLD}Otherwise this node installs correctly and never appears in the fleet.${RST}"
+      blank
+      echo "  ${BOLD}Allow the port (only if this machine's policy is yours)${RST}"
+      echo "  $HR"
     # Detected, printed, and left entirely to the operator to run or ignore.
     if command -v firewall-cmd &>/dev/null; then
       echo "    ${DIM}firewalld detected${RST}"
@@ -1420,8 +1440,9 @@ except Exception:
     else
       echo "    ${DIM}No familiar firewall tool found; check with your administrator.${RST}"
     fi
-    blank
-    echo "  ${DIM}Nothing was changed on this machine's firewall.${RST}"
+      blank
+      echo "  ${DIM}Nothing was changed on this machine's firewall.${RST}"
+    fi
   fi
 fi
 
