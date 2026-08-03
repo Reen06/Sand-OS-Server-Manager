@@ -395,11 +395,6 @@ HUB_INTERNAL_IP = _urlparse(HUB_INTERNAL_URL).hostname or "" if HUB_INTERNAL_URL
 # configured by a name that resolves correctly; then HUB_HOST already is it.
 HUB_PUBLIC_HOST = os.environ.get("SM_HUB_PUBLIC_HOST", "").strip()
 
-# The name pinned into a container's /etc/hosts, and used to build the URL those
-# containers are handed. Prefers the explicit certificate host; falls back to
-# HUB_URL's own, which is correct whenever the two are the same thing.
-CONTAINER_HUB_HOST = HUB_PUBLIC_HOST or HUB_HOST
-
 
 def _is_ip_literal(host: str) -> bool:
     import ipaddress
@@ -408,6 +403,55 @@ def _is_ip_literal(host: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _discover_public_host() -> str:
+    """Ask the Hub what hostname its certificate carries.
+
+    Setting this per node is the same trap the value exists to escape: it is
+    one fact about the HUB, so a copy of it in every node's env file is four
+    chances to drift, and a new node silently gets it wrong until someone
+    remembers. The Hub already knows the answer — so ask, and let every node
+    run identical code with identical config.
+
+    Unverified TLS here is not a weakening. This call is how a node LEARNS the
+    name that makes verification possible, so requiring it first would be
+    circular; the LAN address it dials answers only with the Hub's own
+    untrusted internal certificate by construction. Nothing secret is read —
+    just a public DNS name — and the name is put straight to work on a
+    connection that IS fully verified, which is where a wrong answer would
+    fail loudly rather than quietly downgrade anything.
+
+    Every failure returns "", which means "carry on as before": unreachable
+    Hub, old Hub without the endpoint, or a Hub with no public name at all.
+    """
+    base = (HUB_INTERNAL_URL or HUB_URL or "").rstrip("/")
+    if not base:
+        return ""
+    try:
+        import json as _json
+        import ssl as _ssl
+        import urllib.request as _url
+        ctx = _ssl._create_unverified_context() if base.startswith("https") else None
+        # Short timeout on purpose: this runs during startup, and a Hub that is
+        # slow or down must not hold the node's own apps hostage over it.
+        with _url.urlopen(f"{base}/api/hub/public-host", timeout=4, context=ctx) as r:
+            return (_json.load(r).get("public_host") or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+# Only worth asking when it would change something. A Hub already addressed by
+# a name needs no second one, and an explicit setting is always honoured — so
+# the lookup happens exactly in the case it fixes: a Hub configured by IP,
+# whose certificate therefore cannot match what containers are handed.
+if not HUB_PUBLIC_HOST and _is_ip_literal(HUB_HOST):
+    HUB_PUBLIC_HOST = _discover_public_host()
+
+# The name pinned into a container's /etc/hosts, and used to build the URL those
+# containers are handed. Prefers the certificate host; falls back to HUB_URL's
+# own, which is correct whenever the two are the same thing.
+CONTAINER_HUB_HOST = HUB_PUBLIC_HOST or HUB_HOST
 
 
 # The --add-host trick only works when HUB_URL carries a NAME. /etc/hosts maps
