@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import app_images, app_storage, app_variants, busy, config, docker_backend, dockerhub_apps, files, glances_svc, hub_auth, metrics, nas_roster, nas_shares, ollama_mgr, pending_imports, proxy, pwa, registry, snapshots, usb_storage
+from . import app_images, app_storage, app_variants, busy, config, docker_backend, dockerhub_apps, files, glances_svc, hub_auth, hub_link, metrics, nas_roster, nas_shares, ollama_mgr, pending_imports, proxy, pwa, registry, snapshots, usb_storage
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -100,6 +100,10 @@ def _startup() -> None:
     glances_svc.start()   # local Glances REST server for the Fleet monitor panel
     _autostart_apps()            # bring the always-on AI stack up after a reboot
     _resync_nas_policy_if_host() # re-read export policy from the Hub after a reboot
+    # No-op unless this node was provisioned with a link token. Where it does
+    # run, it is the only way the Hub can drive this node at all: see
+    # hub_link.py for why a firewalled-shut inbound port leaves no alternative.
+    hub_link.start()
 
 
 def _resync_nas_policy_if_host() -> None:
