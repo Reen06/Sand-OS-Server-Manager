@@ -369,6 +369,37 @@ from urllib.parse import urlparse as _urlparse
 HUB_HOST = _urlparse(HUB_URL).hostname or "" if HUB_URL else ""
 HUB_INTERNAL_IP = _urlparse(HUB_INTERNAL_URL).hostname or "" if HUB_INTERNAL_URL else ""
 
+# The hostname on the Hub's PUBLICLY-TRUSTED certificate, when that differs from
+# however HUB_URL happens to be written.
+#
+# These two want opposite things and cannot be served by one value:
+#
+#   * HUB_URL is browser-facing — it is where a person gets redirected to log
+#     in. On a LAN-only setup that has to be the address they can actually
+#     reach, i.e. the bare IP.
+#   * A container verifying TLS needs a NAME. The Hub answers its IP with a
+#     certificate from its own internal CA, which nothing outside the Hub
+#     trusts (curl exit 60); asked for its real hostname it presents a genuine
+#     publicly-trusted one.
+#
+# Pointing HUB_URL at the name to satisfy the second breaks the first twice
+# over: that name resolves to the PUBLIC address, and the Hub deliberately 404s
+# anything arriving from the public internet (see the mesh-only note in
+# main.py's NAS policy sync). Confirmed live: Open WebUI listed no models at
+# all, its own log showing repeated 404s against the public hostname.
+#
+# So name the certificate host separately. The --add-host below pins it to the
+# LAN IP, which gives a container both halves at once — a name TLS can verify,
+# resolved to an address the Hub actually answers on — while HUB_URL stays on
+# whatever people reach the dashboard by. Leave unset when the Hub is already
+# configured by a name that resolves correctly; then HUB_HOST already is it.
+HUB_PUBLIC_HOST = os.environ.get("SM_HUB_PUBLIC_HOST", "").strip()
+
+# The name pinned into a container's /etc/hosts, and used to build the URL those
+# containers are handed. Prefers the explicit certificate host; falls back to
+# HUB_URL's own, which is correct whenever the two are the same thing.
+CONTAINER_HUB_HOST = HUB_PUBLIC_HOST or HUB_HOST
+
 
 def _is_ip_literal(host: str) -> bool:
     import ipaddress
@@ -389,9 +420,15 @@ def _is_ip_literal(host: str) -> bool:
 # was applied, /etc/hosts read "10.0.0.177  10.79.114.1", and Open WebUI still
 # timed out reaching the model router — with nothing in any log to say why.
 #
-# In that case the container has to be handed the internal address outright.
+# In that case the container has to be handed the internal address outright —
+# unless a certificate hostname was named explicitly, which is the one way to
+# get a verifiable TLS name AND a routable address at the same time (see
+# HUB_PUBLIC_HOST above). That wins when set, because the internal address on
+# its own can only ever be reached with verification turned off.
 HUB_URL_FOR_CONTAINERS = (
-    HUB_INTERNAL_URL
+    f"https://{HUB_PUBLIC_HOST}"
+    if HUB_PUBLIC_HOST
+    else HUB_INTERNAL_URL
     if (_is_ip_literal(HUB_HOST) and HUB_INTERNAL_URL and HUB_INTERNAL_URL != HUB_URL)
     else HUB_URL
 )

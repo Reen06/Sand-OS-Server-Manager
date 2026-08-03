@@ -633,9 +633,9 @@ CATALOG: dict[str, AppDef] = {
         # the OpenAI connection below reaches the Hub router with a valid TLS cert
         # even though this node isn't a WireGuard peer.
         docker_args=["--network", "sm-llm-net"] + (
-            ["--add-host", f"{config.HUB_HOST}:{config.HUB_INTERNAL_IP}"]
-            if config.HUB_HOST and config.HUB_INTERNAL_IP
-            and config.HUB_HOST != config.HUB_INTERNAL_IP else []),
+            ["--add-host", f"{config.CONTAINER_HUB_HOST}:{config.HUB_INTERNAL_IP}"]
+            if config.CONTAINER_HUB_HOST and config.HUB_INTERNAL_IP
+            and config.CONTAINER_HUB_HOST != config.HUB_INTERNAL_IP else []),
         # NAS-backed: accounts/chats/uploads for ALL users live on the fleet NAS
         # (shared/open-webui-data), not this node's local Docker storage.
         # EXCEPT vector_db: Chroma hard-codes SQLite WAL mode, which deadlocks on
