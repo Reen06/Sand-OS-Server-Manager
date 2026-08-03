@@ -2,7 +2,17 @@
 # Sand-OS Server Manager — Interactive installer
 # Usage:  sudo bash install.sh                (system-wide install)
 #         bash install.sh                     (prompts for sudo when needed)
+#         sudo bash install.sh --advanced     (ask about every value, not just
+#                                              the ones only you can decide)
 #         sudo bash install.sh --unattended   (no prompts; read config from env)
+#
+# NORMAL vs --advanced
+#   A normal run only stops for decisions the installer cannot make for you --
+#   mode, NAS on or off, TLS verification, moving Docker's data root -- and
+#   reports every value it worked out for itself (IPs, port, node name, Hub URL,
+#   mount path, NAS host, slot count, GPU). --advanced turns those back into
+#   prompts, and is the thing to reach for when something needs overriding.
+#   Every value remains settable by SM_* env var in either mode.
 #
 # UNATTENDED MODE
 #   Every question below takes its answer from the matching SM_* environment
@@ -33,16 +43,28 @@ set -euo pipefail
 # ── Unattended flag ───────────────────────────────────────────────────────────
 # Parsed before anything else so the prompt helpers below can consult it.
 UNATTENDED=0
+# --advanced restores the prompts for values the installer can work out for
+# itself. A normal run only stops for genuine policy questions (mode, NAS on or
+# off, TLS verification, moving Docker's data root) and reports everything else
+# it decided. This is not cosmetic: a real install answered ~10 prompts and
+# every single one took the value already on screen, which trains you to press
+# Enter through the two that actually matter.
+ADVANCED=0
 for _arg in "$@"; do
   case "$_arg" in
     --unattended|-y|--yes) UNATTENDED=1 ;;
+    --advanced) ADVANCED=1 ;;
     -h|--help)
-      sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      # Print the whole header block rather than a fixed line range: the range
+      # was 2,30 and silently started truncating the SM_* list the first time
+      # the header grew.
+      sed -n '2,/^[^#]/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) echo "install.sh: unknown option '$_arg' (try --help)" >&2; exit 2 ;;
   esac
 done
 [ "${SM_UNATTENDED:-0}" = "1" ] && UNATTENDED=1
+[ "${SM_ADVANCED:-0}" = "1" ] && ADVANCED=1
 
 # Snapshot what the CALLER passed in, before any code below runs.
 #
@@ -142,16 +164,29 @@ blank()   { echo; }
 # was just never faced squarely before now).
 ask()     { printf "    %s " "$*" >&2; }
 
-confirm() {            # confirm "prompt" [unattended-default: y|n]
+confirm() {            # confirm "prompt" [default: y|n]
+  local _d="${2:-y}"
   if [ "$UNATTENDED" = "1" ]; then
-    local _d="${2:-y}"
     echo "    ${DIM}$1 → ${_d}${RST}" >&2
     [[ "$_d" =~ ^[Yy] ]]
     return
   fi
-  ask "${BOLD}$1${RST} [Y/n]"
-  read -r _ans
-  [[ -z "$_ans" || "$_ans" =~ ^[Yy] ]]
+  # The default applies interactively too. It used to apply only when
+  # unattended, so pressing Enter always meant YES -- including on
+  # "Continue anyway?" after a failed preflight, "Carry on with a tunnel that
+  # is not passing traffic?", and "Verify the Hub's TLS certificate?" where
+  # every node in the fleet needs no. The prompt said [Y/n] while the caller
+  # had explicitly asked for n: the safe answer was written down and then
+  # ignored.
+  if [[ "$_d" =~ ^[Yy] ]]; then
+    ask "${BOLD}$1${RST} [Y/n]"
+    read -r _ans
+    [[ -z "$_ans" || "$_ans" =~ ^[Yy] ]]
+  else
+    ask "${BOLD}$1${RST} [y/N]"
+    read -r _ans
+    [[ "$_ans" =~ ^[Yy] ]]
+  fi
 }
 
 read_val() {           # read_val "prompt" "default"  →  echoes value
@@ -167,6 +202,34 @@ read_val() {           # read_val "prompt" "default"  →  echoes value
   ask "${prompt} ${DIM}[${default}]${RST}:"
   read -r _val
   printf '%s' "${_val:-$default}"
+}
+
+# A value the installer has already determined (detected IP, hostname, the Hub
+# URL out of the enrollment link, a discovered NAS host). Normally taken as-is
+# and reported; --advanced turns it back into a real prompt. Unattended runs
+# behave as they always did.
+#
+# The distinction being drawn is "did the installer work this out" vs "is this
+# a decision only the operator can make" — NOT "is this important". An
+# important value the installer got right is still not worth interrupting for,
+# and burying the two real questions among eight rhetorical ones is what made
+# them easy to skip past.
+read_auto() {          # read_auto "prompt" "default"  →  echoes value
+  if [ "$ADVANCED" = "1" ] && [ "$UNATTENDED" != "1" ]; then
+    read_val "$1" "$2"
+    return
+  fi
+  echo "    ${DIM}$1 → ${2:-(blank)}${RST}" >&2
+  printf '%s' "$2"
+}
+
+pick_auto() {          # pick_auto "prompt" default val1 "label1" ...
+  if [ "$ADVANCED" = "1" ] && [ "$UNATTENDED" != "1" ]; then
+    pick "$@"
+    return
+  fi
+  echo "    ${DIM}$1 → ${2}${RST}" >&2
+  printf '%s' "$2"
 }
 
 pick() {               # pick "prompt" default  val1 "label1"  val2 "label2"  ...
@@ -576,7 +639,7 @@ case "$MODE" in
   lan)
     echo "  Enter the LAN IP the Hub will use to probe and reach this node."
     blank
-    SM_LAN_IP=$(read_val "LAN IP of this machine" "$(_env_or SM_LAN_IP "$AUTO_IP")")
+    SM_LAN_IP=$(read_auto "LAN IP of this machine" "$(_env_or SM_LAN_IP "$AUTO_IP")")
     SM_TURN_EXTRA_HOST=""
     blank
     info "Apps will be reachable at  http://${SM_LAN_IP}:8170"
@@ -586,7 +649,7 @@ case "$MODE" in
     echo "  This IP is used for both the API endpoint and TURN relay"
     echo "  so the Hub and browsers can reach it over the VPN."
     blank
-    SM_LAN_IP=$(read_val "WireGuard IP of this machine" "$(_env_or SM_LAN_IP "$AUTO_IP")")
+    SM_LAN_IP=$(read_auto "WireGuard IP of this machine" "$(_env_or SM_LAN_IP "$AUTO_IP")")
     SM_TURN_EXTRA_HOST="$SM_LAN_IP"
     blank
     info "API + TURN will use WireGuard IP  ${SM_LAN_IP}"
@@ -595,7 +658,7 @@ case "$MODE" in
     echo "  Enter the Hub's LAN IP. Both services share this machine;"
     echo "  the Server Manager binds on the same interface."
     blank
-    SM_LAN_IP=$(read_val "This machine's LAN IP" "$(_env_or SM_LAN_IP "$AUTO_IP")")
+    SM_LAN_IP=$(read_auto "This machine's LAN IP" "$(_env_or SM_LAN_IP "$AUTO_IP")")
     SM_TURN_EXTRA_HOST=""
     blank
     info "Co-located at  ${SM_LAN_IP}"
@@ -603,8 +666,8 @@ case "$MODE" in
 esac
 
 blank
-SM_PORT=$(read_val "Server Manager port" "$(_env_or SM_PORT 8170)")
-SM_NODE_NAME=$(read_val "Friendly node name (shown in Hub fleet)" "$(_env_or SM_NODE_NAME "$(hostname)")")
+SM_PORT=$(read_auto "Server Manager port" "$(_env_or SM_PORT 8170)")
+SM_NODE_NAME=$(read_auto "Friendly node name (shown in Hub fleet)" "$(_env_or SM_NODE_NAME "$(hostname)")")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 3 — HUB CONNECTION
@@ -622,7 +685,7 @@ cat << 'DESC'
 
 DESC
 
-SM_HUB_URL=$(read_val "Hub URL  (e.g. https://10.0.0.177 — blank for standalone)" "$(_env_or SM_HUB_URL "$ENROLL_HUB_BASE")")
+SM_HUB_URL=$(read_auto "Hub URL  (e.g. https://10.0.0.177 — blank for standalone)" "$(_env_or SM_HUB_URL "$ENROLL_HUB_BASE")")
 # A bare IP/hostname with no scheme (an easy slip — "just the IP" instead of
 # the full URL) doesn't fail here; it silently gets written into the env
 # file as-is and only crashes later, deep in an unrelated request handler,
@@ -642,7 +705,7 @@ if [ -n "$SM_HUB_URL" ]; then
   blank
   echo "  Caddy on the Hub routes  /apps/*  to this Server Manager, then"
   echo "  apps are reached at  {hub}/apps/stream/{app-id}/..."
-  SM_EXTERNAL_BASE=$(read_val "Hub mount path" "$(_env_or SM_EXTERNAL_BASE /apps)")
+  SM_EXTERNAL_BASE=$(read_auto "Hub mount path" "$(_env_or SM_EXTERNAL_BASE /apps)")
   blank
   if confirm "Verify the Hub's TLS certificate? (no = accept self-signed Caddy internal CA)" \
        "$([ "$(_env_bool SM_HUB_VERIFY_TLS false)" = "true" ] && echo y || echo n)"; then
@@ -706,7 +769,7 @@ if confirm "Enable the NAS layer?" "$([ "$(_env_bool SM_NAS_ENABLED false)" = "t
   SM_NAS_ENABLED="true"
 
   _nas_root_default="${INVOKING_HOME}/sandos-nas"
-  SM_NAS_ROOT=$(read_val "Local path to the NAS export root (on the NAS host)" "$(_env_or SM_NAS_ROOT "$_nas_root_default")")
+  SM_NAS_ROOT=$(read_auto "Local path to the NAS export root (on the NAS host)" "$(_env_or SM_NAS_ROOT "$_nas_root_default")")
 
   blank
   if [ -n "$_discovered_nas_host" ]; then
@@ -715,7 +778,7 @@ if confirm "Enable the NAS layer?" "$([ "$(_env_bool SM_NAS_ENABLED false)" = "t
     warn "No existing fleet NAS found — defaulting to this machine (${SM_LAN_IP})."
     warn "Only accept this if THIS node should be the shared NAS host."
   fi
-  SM_NAS_HOST=$(read_val "IP of the NFS server host" "$(_env_or SM_NAS_HOST "$SM_NAS_HOST")")
+  SM_NAS_HOST=$(read_auto "IP of the NFS server host" "$(_env_or SM_NAS_HOST "$SM_NAS_HOST")")
 
   blank
   info "NFS: ${SM_NAS_HOST}:/ — containers mount sub-paths per user/app"
@@ -746,7 +809,7 @@ else
   _gpu_default="false"
 fi
 
-SM_GPU=$(pick "GPU support" "$(_env_or SM_GPU "$_gpu_default")" \
+SM_GPU=$(pick_auto "GPU support" "$(_env_or SM_GPU "$_gpu_default")" \
   "true"  "Enable  — advertise GPU; streamed apps (FreeCAD) available" \
   "false" "Disable — web apps only (Nextcloud, Files, WebCAD, Renode…)")
 
@@ -797,7 +860,7 @@ elif [[ "$SM_GPU" == "true" ]] && [ ! -f /etc/cdi/nvidia.yaml ]; then
 fi
 
 blank
-SM_SLOT_COUNT=$(read_val "Max concurrent app instances" "$(_env_or SM_SLOT_COUNT 8)")
+SM_SLOT_COUNT=$(read_auto "Max concurrent app instances" "$(_env_or SM_SLOT_COUNT 8)")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STEP 6 — LOCAL STORAGE (Docker's own data-root — images/volumes/build cache)
@@ -1236,6 +1299,91 @@ if $SUDO systemctl is-active --quiet "$UNIT_NAME"; then
 else
   warn "Service may not have started — check:"
   warn "  journalctl -u ${UNIT_NAME} -n 30 --no-pager"
+fi
+
+# ── Return-path check ─────────────────────────────────────────────────────────
+# Everything up to here tested that this machine can reach OUT. Nothing tested
+# whether the Hub can reach BACK, which is the half that actually decides
+# whether the node works: the Hub drives a node by connecting to :$SM_PORT. A
+# real install passed every check, handshaked its tunnel, answered on SSH, and
+# was still invisible in the fleet because a local firewall rejected that one
+# port -- and the installer finished looking successful, so the failure was
+# only discovered much later, by hand.
+#
+# This DETECTS AND REPORTS ONLY. It never edits nftables/ufw/firewalld. On a
+# work or university machine those rules are somebody else's policy, and an
+# installer that quietly opens ports there is doing something it has no
+# business doing. It prints what the operator may choose to run, and names the
+# option that needs no firewall change at all.
+if [ -n "$SM_HUB_URL" ] && command -v curl &>/dev/null; then
+  blank
+  info "Checking the Hub can reach back to this machine…"
+  # -k unless the operator asked for real verification: the Hub's cert is
+  # Caddy's internal CA, which a fresh node has no reason to trust yet.
+  _rb_insecure=""
+  [ "$SM_HUB_VERIFY_TLS" = "true" ] || _rb_insecure="-k"
+  _rb=$(curl -fsS $_rb_insecure --max-time 15 \
+          "${SM_HUB_URL%/}/api/fleet/reachback?port=${SM_PORT}" 2>/dev/null || true)
+  _rb_ok=$(printf '%s' "$_rb" | python3 -c "
+import json, sys
+try:
+    print('yes' if json.load(sys.stdin).get('reachable') else 'no')
+except Exception:
+    print('unknown')
+" 2>/dev/null || echo unknown)
+  _rb_detail=$(printf '%s' "$_rb" | python3 -c "
+import json, sys
+try:
+    print(json.load(sys.stdin).get('detail') or '')
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+
+  if [ "$_rb_ok" = "yes" ]; then
+    ok "Hub → this machine on :${SM_PORT} — reachable"
+  elif [ "$_rb_ok" = "unknown" ]; then
+    warn "Couldn't ask the Hub to test the return path (older Hub, or unreachable)."
+    warn "Not a failure by itself — but the return path is unverified."
+  else
+    blank
+    warn "The Hub CANNOT reach this machine on :${SM_PORT}."
+    [ -n "$_rb_detail" ] && echo "    ${DIM}${_rb_detail}${RST}"
+    blank
+    echo "  ${BOLD}This node will install correctly and still never appear in the fleet.${RST}"
+    blank
+    echo "  ${BOLD}Option 1 — no firewall change (use this on a machine you don't own)${RST}"
+    echo "  $HR"
+    echo "  Have this node dial OUT to the Hub and hold the connection open, so"
+    echo "  nothing ever needs to connect in. On the Hub's Fleet page, enable"
+    echo "  \"Reverse link\" for this node. Nothing here has to be opened."
+    blank
+    echo "  ${BOLD}Option 2 — allow the port (only if this machine's policy is yours)${RST}"
+    echo "  $HR"
+    # Detected, printed, and left entirely to the operator to run or ignore.
+    if command -v firewall-cmd &>/dev/null; then
+      echo "    ${DIM}firewalld detected${RST}"
+      if [ -n "${ENROLL_WG_IP:-}" ]; then
+        echo "    sudo firewall-cmd --permanent --zone=trusted --add-interface=sandos-hub"
+      else
+        echo "    sudo firewall-cmd --permanent --add-port=${SM_PORT}/tcp"
+      fi
+      echo "    sudo firewall-cmd --reload"
+    elif command -v ufw &>/dev/null; then
+      echo "    ${DIM}ufw detected${RST}"
+      if [ -n "${ENROLL_WG_IP:-}" ]; then
+        echo "    sudo ufw allow in on sandos-hub to any port ${SM_PORT} proto tcp"
+      else
+        echo "    sudo ufw allow ${SM_PORT}/tcp"
+      fi
+    elif command -v nft &>/dev/null; then
+      echo "    ${DIM}nftables detected — inspect first:${RST}"
+      echo "    sudo nft list ruleset | head -40"
+    else
+      echo "    ${DIM}No familiar firewall tool found; check with your administrator.${RST}"
+    fi
+    blank
+    echo "  ${DIM}Nothing was changed on this machine's firewall.${RST}"
+  fi
 fi
 
 # `server-manager` command: a terminal Busy/Available toggle for headless
