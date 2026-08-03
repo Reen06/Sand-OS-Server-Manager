@@ -45,6 +45,16 @@ DEFAULT_TIER = TIER_PROTECTED
 # giving tier 2 a folder of its own would imply files outside it are unprotected.
 TIER_DIRS = {"Bulk": TIER_BULK, "Critical": TIER_CRITICAL}
 
+# `copies` here is DESCRIPTIVE, not enforcing — nothing in this codebase runs
+# `weed shell fs.configure` from these numbers; the filer's per-path
+# replication rules were set by hand and are the actual source of truth. If
+# they are ever changed there (`weed shell` → `fs.configure` with no args
+# lists the live rules), update these to match, or the Hub's replicated-
+# capacity math (SandOS Hub sm_fleet.py's _tier_replicated_capacity) will use
+# the wrong replication factor. Corrected 2026-08 to match what was actually
+# configured: Protected was documented as 1 copy but the filer has been
+# running 2 (replication "010") the whole time; Critical was documented as 2
+# but the filer runs 3 (replication "020").
 TIER_META = {
     TIER_BULK: {
         "id": TIER_BULK, "name": "Bulk", "dir": "Bulk",
@@ -55,13 +65,13 @@ TIER_META = {
     },
     TIER_PROTECTED: {
         "id": TIER_PROTECTED, "name": "Protected", "dir": None,
-        "blurb": "Snapshots plus versioned backup to a registered drive.",
-        "requires_posix": True, "copies": 1, "snapshots": True,
+        "blurb": "Replicated to 2 machines, plus snapshots.",
+        "requires_posix": True, "copies": 2, "snapshots": True,
     },
     TIER_CRITICAL: {
         "id": TIER_CRITICAL, "name": "Critical", "dir": "Critical",
-        "blurb": "Encrypted, versioned, replicated to independent servers.",
-        "requires_posix": True, "copies": 2, "snapshots": True,
+        "blurb": "Encrypted, versioned, replicated to 3 independent machines.",
+        "requires_posix": True, "copies": 3, "snapshots": True,
     },
 }
 
