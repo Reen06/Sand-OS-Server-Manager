@@ -38,17 +38,17 @@ CATALOG: dict[str, AppDef] = {
         mode="per-user",
         internal_port=8080,
         gpu=True,
-        # Isaac is far heavier than the CAD apps: Kit alone wants several GB
-        # before a scene is loaded, and USD assets push it further.
-        mem_limit="16g",
         encoder="nvh264enc",
-        # Reported to the Hub as metadata only -- nothing in this codebase
-        # reaps idle instances, so an instance runs until it is explicitly
-        # stopped. Kept high anyway so the number does not imply a shorter
-        # lifetime than the app actually has if a reaper is ever added:
-        # Isaac holds a compiled shader cache and a live scene, and dropping
-        # that because nobody was connected for a while is the wrong default.
-        keepalive_seconds=86400,
+        # 0 = never idle-stop. Nothing reaps instances today, but any reaper
+        # added later must leave this app alone: it holds a compiled shader
+        # cache and a live scene that cost minutes to rebuild, and the owner's
+        # rule is explicit -- it runs until it is manually stopped. A number
+        # here, however large, would eventually be read as a deadline.
+        keepalive_seconds=0,
+        # A container killed for exceeding its cap has also stopped without
+        # anyone asking it to. Isaac idles near 12G before a scene is even
+        # open, so 16G left almost no headroom; the host has 125G.
+        mem_limit="32g",
         # The user's NAS home, same files their other apps see, so USD scenes
         # and outputs persist off the node.
         mounts=[
