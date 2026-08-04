@@ -43,6 +43,9 @@ set -euo pipefail
 # ── Unattended flag ───────────────────────────────────────────────────────────
 # Parsed before anything else so the prompt helpers below can consult it.
 UNATTENDED=0
+# Hub port that serves ONLY node-facing endpoints. A remote node is pointed at
+# this instead of 443 so it never has a route to the dashboard or login form.
+SM_HUB_NODE_PORT="${SM_HUB_NODE_PORT:-8443}"
 # --advanced restores the prompts for values the installer can work out for
 # itself. A normal run only stops for genuine policy questions (mode, NAS on or
 # off, TLS verification, moving Docker's data root) and reports everything else
@@ -599,9 +602,18 @@ DESC
     if [ -z "$_hub_wg" ]; then
       _hub_wg=$(echo "$ENROLL_WG_IP" | awk -F. 'NF==4{print $1"."$2"."$3".1"}')
     fi
-    if [ -n "$_hub_wg" ] && curl -fsSk --max-time 8 "https://${_hub_wg}/api/fleet/nas-host" >/dev/null 2>&1; then
+    # Prefer the Hub's node-API port. It serves only the handful of endpoints a
+    # node actually calls and 404s everything else -- no dashboard, no login
+    # form -- so a remote box on a network you do not control cannot reach
+    # them at all once its firewall grant is narrowed to this port. Probed
+    # rather than assumed, so an older Hub without it still works on 443.
+    if [ -n "$_hub_wg" ] && curl -fsSk --max-time 8 "https://${_hub_wg}:${SM_HUB_NODE_PORT}/api/fleet/nas-host" >/dev/null 2>&1; then
+      ENROLL_HUB_BASE="https://${_hub_wg}:${SM_HUB_NODE_PORT}"
+      ok "Hub node-API reachable at ${_hub_wg}:${SM_HUB_NODE_PORT} — using it (dashboard stays unreachable)"
+    elif [ -n "$_hub_wg" ] && curl -fsSk --max-time 8 "https://${_hub_wg}/api/fleet/nas-host" >/dev/null 2>&1; then
       ENROLL_HUB_BASE="https://${_hub_wg}"
       ok "Hub reachable over the tunnel at ${_hub_wg} — using it for Hub SSO"
+      warn "This Hub has no node-API port; SSO runs over :443 (dashboard reachable from here)."
     else
       ENROLL_HUB_BASE="${ENROLL_LINK%%/api/pairing/enroll/*}"
       warn "Couldn't reach the Hub over the tunnel; falling back to ${ENROLL_HUB_BASE}."
@@ -619,7 +631,13 @@ DESC
       ok "Found an existing tunnel — this machine's WireGuard IP is ${_existing_wg}"
       AUTO_IP="$_existing_wg"
       _hub_wg=$(echo "$_existing_wg" | awk -F. 'NF==4{print $1"."$2"."$3".1"}')
-      if [ -n "$_hub_wg" ] && curl -fsSk --max-time 8 "https://${_hub_wg}/api/fleet/nas-host" >/dev/null 2>&1; then
+      # Same preference as the fresh-enrollment path above: node-API port if
+      # the Hub offers one, otherwise 443. A re-run on an already-enrolled node
+      # must not quietly downgrade it back to the dashboard port.
+      if [ -n "$_hub_wg" ] && curl -fsSk --max-time 8 "https://${_hub_wg}:${SM_HUB_NODE_PORT}/api/fleet/nas-host" >/dev/null 2>&1; then
+        ENROLL_HUB_BASE="https://${_hub_wg}:${SM_HUB_NODE_PORT}"
+        ok "Hub node-API reachable at ${_hub_wg}:${SM_HUB_NODE_PORT} — using it (dashboard stays unreachable)"
+      elif [ -n "$_hub_wg" ] && curl -fsSk --max-time 8 "https://${_hub_wg}/api/fleet/nas-host" >/dev/null 2>&1; then
         ENROLL_HUB_BASE="https://${_hub_wg}"
         ok "Hub reachable over that tunnel at ${_hub_wg} — using it for Hub SSO"
       else
