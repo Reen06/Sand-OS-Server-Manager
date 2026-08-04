@@ -41,17 +41,33 @@ ENV OMNI_KIT_ACCEPT_EULA=YES \
     PRIVACY_CONSENT=Y \
     ISAAC_PATH=/isaac-sim
 
-# Desktop launcher, so Isaac is started from the streamed desktop like any
-# other application rather than needing a terminal.
+# Isaac's own logo, so the launcher and window are the mark people recognise
+# rather than a generic science glyph.
+RUN cp /isaac-sim/exts/isaacsim.app.about/data/icon.png \
+       /usr/share/pixmaps/isaac-sim.png 2>/dev/null || true
+
+# Start Isaac WITH the desktop session rather than waiting for a click.
+#
+# Two reasons. Shader compilation on a cold cache takes minutes and happens on
+# first launch either way -- doing it at container start means it overlaps the
+# time you spend connecting, instead of beginning after you have already sat
+# through the stream connecting. And Isaac draws its own splash and progress,
+# so an autostarted session gives real feedback about what is loading, where
+# an empty desktop gives none.
+#
+# xdg/autostart runs it as part of the session, so it inherits the session's
+# display, GPU access and environment without a wrapper.
 RUN printf '%s\n' \
     '[Desktop Entry]' \
     'Type=Application' \
     'Name=NVIDIA Isaac Sim' \
     'Comment=Robotics simulation (Omniverse Kit)' \
     'Exec=/isaac-sim/isaac-sim.sh' \
-    'Icon=applications-science' \
+    'Icon=/usr/share/pixmaps/isaac-sim.png' \
     'Terminal=false' \
+    'X-GNOME-Autostart-enabled=true' \
     'Categories=Science;Engineering;' \
-    > /usr/share/applications/isaac-sim.desktop
+    | tee /usr/share/applications/isaac-sim.desktop \
+          /etc/xdg/autostart/isaac-sim.desktop > /dev/null
 
 USER 1000
