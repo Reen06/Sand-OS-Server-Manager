@@ -467,6 +467,68 @@ def delete_model(model_name: str) -> dict:
     return {"ok": True, "deleted": model_name}
 
 
+# ── LAN access toggle ─────────────────────────────────────────────────────────
+# Whether this node's Ollama answers the LAN, or only the machine it runs on.
+#
+# OFF is the default, and is the setting that costs nothing: the Hub reaches
+# every node's Ollama through the Server Manager on its own port, never on
+# 11434 directly, so routing, the model list, pulls and inference all work
+# fully with the port closed. What OFF removes is an UNAUTHENTICATED Ollama
+# API answering anything on the network — anyone who can reach the box can
+# list, run, and delete its models, with no credential of any kind.
+#
+# ON is for reaching this Ollama from something outside the fleet: a script, an
+# editor plugin, another machine's tooling pointed straight at
+# http://<node>:11434. Real uses, just not ones the dashboard needs.
+#
+# Node-local by design rather than a fleet-wide setting: it describes one
+# machine's exposure on the network it happens to sit on, and a laptop that
+# travels should not inherit a decision made for a server in the house.
+_LAN_STATE_FILE = os.path.join(config.NAS_ROOT, ".ollama-lan-enabled")
+
+# The fleet-reserved Ollama port (see the AppDef): fixed, unlike slot ports.
+OLLAMA_LAN_PORT = 11434
+
+
+def get_lan_access() -> bool:
+    return os.path.exists(_LAN_STATE_FILE)
+
+
+def set_lan_access(enabled: bool) -> dict:
+    """Record whether Ollama should publish its port to the LAN.
+
+    Only the desired state is written here. A container's published ports are
+    fixed when it is created, so this cannot take effect on a running one —
+    the caller is told whether a restart is outstanding rather than having the
+    container pulled out from under it, which would drop whatever is mid-
+    generation. `pending` is the honest answer to "is this live yet".
+    """
+    try:
+        if enabled:
+            os.makedirs(os.path.dirname(_LAN_STATE_FILE), exist_ok=True)
+            open(_LAN_STATE_FILE, "w").close()
+        else:
+            try:
+                os.unlink(_LAN_STATE_FILE)
+            except FileNotFoundError:
+                pass
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "lan_enabled": enabled, "pending": ollama_running()}
+
+
+def lan_port_args() -> list[str]:
+    """The -p flags Ollama's container is created with.
+
+    Bound to loopback when LAN access is off. The port is still published, so
+    everything on the node itself — the SM proxy, and Open WebUI reaching it by
+    container name — is unaffected; it simply stops answering other machines.
+    """
+    if get_lan_access():
+        return ["-p", f"{OLLAMA_LAN_PORT}:{OLLAMA_LAN_PORT}"]
+    return ["-p", f"127.0.0.1:{OLLAMA_LAN_PORT}:{OLLAMA_LAN_PORT}"]
+
+
 # ── Internet toggle ───────────────────────────────────────────────────────────
 
 _INTERNET_STATE_FILE = os.path.join(config.NAS_ROOT, ".ollama-internet-enabled")

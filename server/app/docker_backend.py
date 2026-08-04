@@ -264,6 +264,33 @@ def network_name(name: str) -> str:
     return f"{name}-net"
 
 
+def _resolve_docker_args(app) -> list[str]:
+    """An app's extra docker flags, allowing entries to be computed at launch.
+
+    Most are constants and stay plain strings. A few depend on a setting that
+    can change while the SM is running — Ollama's port binding follows its LAN
+    toggle — and the App Definitions are built once at import, so a literal
+    list there would freeze the value read at startup and quietly ignore every
+    later change. Any callable in the list is invoked here instead, at the
+    moment the container is actually created, and may return one flag or
+    several. A callable that raises is skipped rather than taking the whole
+    launch down with it: a setting that cannot be read should cost that flag,
+    not the app.
+    """
+    out: list[str] = []
+    for item in getattr(app, "docker_args", []) or []:
+        if callable(item):
+            try:
+                produced = item()
+            except Exception:  # noqa: BLE001
+                continue
+            if produced:
+                out.extend(produced if isinstance(produced, (list, tuple)) else [produced])
+        else:
+            out.append(item)
+    return out
+
+
 def _ensure_network(net: str, host: str | None = None) -> None:
     if _docker(["network", "inspect", net], timeout=10, host=host).returncode != 0:
         _docker(["network", "create", net], timeout=15, host=host)
@@ -665,7 +692,7 @@ def spawn(inst: Instance, app: AppDef) -> subprocess.CompletedProcess:
             _docker(["pull", _img], timeout=600, host=host)
 
     # Pre-create any custom shared networks declared in docker_args (e.g. sm-llm-net).
-    _extra = getattr(app, "docker_args", [])
+    _extra = _resolve_docker_args(app)
     _skip_nets = {"bridge", "host", "none"}
     for _flag, _val in zip(_extra, _extra[1:]):
         if _flag == "--network" and _val not in _skip_nets and not _val.startswith("container:"):
@@ -740,7 +767,7 @@ def spawn(inst: Instance, app: AppDef) -> subprocess.CompletedProcess:
     for k, v in app.env.items():
         args += ["-e", f"{k}={v}"]
 
-    args += getattr(app, "docker_args", [])
+    args += _resolve_docker_args(app)
 
     from . import app_variants  # deferred: avoids a circular import at load time
     args.append(app_variants.active_image(app))

@@ -568,13 +568,23 @@ CATALOG: dict[str, AppDef] = {
         # Both Ollama and OpenWebUI join sm-llm-net so OpenWebUI can reach Ollama
         # by container name (sm-ollama:11434) without a fixed host-port binding.
         # The SM proxy still reaches Ollama via the slot port on 127.0.0.1.
-        # RESERVED FLEET PORT: 11434 is also published on the host so OTHER nodes'
-        # Open WebUI can reach this Ollama at the predictable http://<node-ip>:11434
-        # (slot ports change every launch; this one never does). Ports 11434-11443
-        # are reserved fleet-wide for Ollama — one per extra instance if a node
-        # ever runs more than one. NOTE: this exposes the unauthenticated Ollama
-        # API to the LAN/WireGuard — fine on the home network, do not port-forward.
-        docker_args=["--network", "sm-llm-net", "-p", "11434:11434"],
+        # RESERVED FLEET PORT: 11434 is published on the host at a predictable
+        # address (slot ports change every launch; this one never does). Ports
+        # 11434-11443 are reserved fleet-wide for Ollama — one per extra
+        # instance if a node ever runs more than one.
+        #
+        # WHICH interface it binds is the per-node LAN toggle, resolved at
+        # launch rather than baked in here, so changing it doesn't need an SM
+        # restart (see docker_backend._resolve_docker_args). Default is
+        # loopback: the Hub reaches every node's Ollama through the Server
+        # Manager, never on this port, so nothing in the fleet needs it open —
+        # and open means an unauthenticated API answering the whole network.
+        # Imported inside the callable, not at module scope: ollama_mgr imports
+        # this module, so a top-level import would be circular. Deferring it is
+        # free here — the callable only runs at launch, long after both modules
+        # have finished loading.
+        docker_args=["--network", "sm-llm-net",
+                     lambda: __import__("app.ollama_mgr", fromlist=["x"]).lan_port_args()],
         mounts=[Mount(name="ollama-models", path="/root/.ollama", scope="shared")],
         env={"OLLAMA_HOST": "0.0.0.0"},
     ),

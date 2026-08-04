@@ -1990,6 +1990,23 @@ def ollama_set_internet(request: Request, body: _InternetBody):
     return ollama_mgr.set_internet_access(body.enabled)
 
 
+@app.get("/api/apps/ollama/lan")
+def ollama_get_lan(request: Request):
+    _require_identity(request)
+    return {"ok": True, "lan_enabled": ollama_mgr.get_lan_access(),
+            "port": ollama_mgr.OLLAMA_LAN_PORT,
+            # Whether the SETTING and the RUNNING container currently agree.
+            # Published ports are fixed at creation, so a live container keeps
+            # whatever it was started with until it is restarted.
+            "running": ollama_mgr.ollama_running()}
+
+
+@app.post("/api/apps/ollama/lan")
+def ollama_set_lan(request: Request, body: _InternetBody):
+    _require_admin(request)
+    return ollama_mgr.set_lan_access(body.enabled)
+
+
 @app.post("/api/apps/ollama/models/export")
 def ollama_export(request: Request, body: _OllamaExportBody):
     """Export a model to NAS staging for transfer to another node."""
