@@ -41,6 +41,37 @@ ENV OMNI_KIT_ACCEPT_EULA=YES \
     PRIVACY_CONSENT=Y \
     ISAAC_PATH=/isaac-sim
 
+# ── Selkies fixes carried over from the FreeCAD streamer ──────────────────────
+# These are not optional polish; without the first one the stream cannot
+# connect at all when served under a Hub subpath, which looks like a loading
+# bar that never progresses and never prints a status line.
+#
+# 1. The web client builds its signalling WebSocket and TURN fetch from
+#    ABSOLUTE paths (/{appName}/signalling/, /turn), which 404 behind
+#    /stream/isaac-sim/. Rewritten to be relative to the current path, so the
+#    same client works at the root and behind the proxy.
+RUN set -eux; \
+    f=/opt/gst-web/app.js; \
+    grep -q 'app.appName + "/signalling/"' "$f"; \
+    sed -i \
+      -e 's#"/" + app.appName + "/signalling/"#window.location.pathname + "webrtc/signalling/"#g' \
+      -e 's#fetch("/turn")#fetch("turn")#g' \
+      -e 's#fetch("/publish/" + app.appName)#fetch("publish/" + app.appName)#g' \
+      "$f"
+
+# 2. selkies-gstreamer's signalling error handlers are `async def` but call the
+#    BLOCKING time.sleep(2) on every "no peer yet" retry, stalling the whole
+#    single-threaded asyncio loop. That is the "stream refuses to reconnect
+#    after a few disconnects until the container is restarted" bug -- which
+#    matters more here than for CAD, since these instances are meant to stay
+#    up for days and be reconnected to repeatedly.
+RUN set -eux; \
+    f=$(ls /usr/local/lib/python3.*/dist-packages/selkies_gstreamer/__main__.py 2>/dev/null | head -1); \
+    if [ -n "$f" ] && grep -q "time.sleep(2)" "$f"; then \
+      sed -i "s/time\.sleep(2)/await asyncio.sleep(2)/g" "$f"; \
+      echo "patched $f"; \
+    else echo "selkies signalling already correct or not found"; fi
+
 # Isaac's own logo, so the launcher and window are the mark people recognise
 # rather than a generic science glyph.
 RUN cp /isaac-sim/exts/isaacsim.app.about/data/icon.png \
