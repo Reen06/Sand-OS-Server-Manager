@@ -1131,7 +1131,14 @@ SM_SSH_PORT=${SM_SSH_PORT}
 SM_LINK_TOKEN=${_KEEP_LINK_TOKEN}
 SM_LINK_HUB=${_KEEP_LINK_HUB}
 EOF
-ok "Wrote ${ENV_FILE}"
+# 0600 root:root. systemd reads EnvironmentFile as PID 1 before dropping to
+# the service user, so nothing else ever needs to read it -- and it holds
+# SM_LINK_TOKEN, which is enough on its own to impersonate this node to the
+# Hub. tee creates it 0644 by default, which on a shared machine means every
+# local account can read that credential.
+$SUDO chmod 600 "$ENV_FILE"
+$SUDO chown root:root "$ENV_FILE" 2>/dev/null || true
+ok "Wrote ${ENV_FILE} (0600 root — it holds the reverse-link credential)"
 
 # ── 2. Python venv ─────────────────────────────────────────────────────────────
 if [ ! -x "${VENV}/bin/uvicorn" ]; then
