@@ -26,6 +26,32 @@ _INSTALLED_TTL = 30.0
 # (Docker Hub installs, pending USB imports). A fresh install starts with an
 # EMPTY library — only apps the owner adds ever appear on their dashboard.
 CATALOG: dict[str, AppDef] = {
+    "isaac-sim": AppDef(
+        id="isaac-sim",
+        multi_node=True,
+        label="Isaac Sim",
+        icon="cpu",
+        color="green",
+        desc="NVIDIA Isaac Sim 5.1, streamed — robotics simulation on the GPU.",
+        image=config.ISAAC_SIM_IMAGE,
+        kind="streamed",
+        mode="per-user",
+        internal_port=8080,
+        gpu=True,
+        # Isaac is far heavier than the CAD apps: Kit alone wants several GB
+        # before a scene is loaded, and USD assets push it further.
+        mem_limit="16g",
+        encoder="nvh264enc",
+        # Shader compilation on a cold cache takes minutes on first launch, so
+        # a short idle timeout would reap it before the user ever sees a
+        # viewport.
+        keepalive_seconds=1800,
+        # The user's NAS home, same files their other apps see, so USD scenes
+        # and outputs persist off the node.
+        mounts=[
+            Mount(name="home", path="/home/ubuntu/NAS", scope="per-user", storage="nfs"),
+        ],
+    ),
     "freecad": AppDef(
         id="freecad",
         multi_node=True,   # per-user; opens the user's own NAS home, same as any two of their apps already do

@@ -131,6 +131,10 @@ EXTERNAL_BASE = os.environ.get("SM_EXTERNAL_BASE", "/apps").rstrip("/")
 
 # Default image for the FreeCAD app.
 FREECAD_IMAGE = os.environ.get("SM_FREECAD_IMAGE", "freecad-streamer:dev")
+# Isaac Sim wrapped in the Selkies desktop (containers/isaac-sim/Dockerfile).
+# Isaac's own livestream needs a native client and a direct UDP peer path, so
+# it can never be a browser app; this is the streamed-desktop equivalent.
+ISAAC_SIM_IMAGE = os.environ.get("SM_ISAAC_SIM_IMAGE", "sm-isaac-sim:5.1.0")
 
 # Filebrowser — the NAS file UI (a 'web' app). Thin wrapper image that provisions
 # noauth on boot; build from containers/filebrowser.
