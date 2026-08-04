@@ -264,10 +264,28 @@ def apply_model_config(name: str, opts: dict) -> tuple[bool, str]:
 
 def _vram_mb() -> int:
     """Total GPU memory in MB, 0 when there's no usable GPU. Routing uses this
-    to tell a machine that can hold a large context from one that can't."""
+    to tell a machine that can hold a large context from one that can't.
+
+    Resolved through metrics._nvidia_smi_path rather than by bare name, for the
+    reason documented there: a systemd service inherits none of the shell
+    startup files that put WSL's nvidia-smi shim on PATH, so `nvidia-smi` alone
+    is simply not found under the running service.
+
+    Confirmed live on a node with a working RTX 3070 Ti: the container saw the
+    GPU and metrics.py reported it correctly, while this one function returned
+    0. Nothing failed outright — the router treats capacity as an ordering hint,
+    never a filter, so the node stayed eligible. It was just described wrongly,
+    falling back to system RAM at a CPU discount (24 GB / 4 = 6 GB) so an 8 GB
+    GPU machine ranked as a mid-sized CPU one, and the fact it had a GPU at all
+    never reached the routing decision.
+    """
+    from .metrics import _nvidia_smi_path
+    exe = _nvidia_smi_path()
+    if not exe:
+        return 0
     try:
         r = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            [exe, "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=5)
         if r.returncode == 0 and r.stdout.strip():
             return max(int(float(v)) for v in r.stdout.split() if v.strip().isdigit())
