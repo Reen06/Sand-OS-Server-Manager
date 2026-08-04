@@ -20,7 +20,12 @@ USER root
 
 # /isaac-sim is self-contained (own python, exts, extscache) — copying it is
 # enough, no package installs needed.
-COPY --from=isaac /isaac-sim /isaac-sim
+# --chown on the COPY, NOT a later `chown -R`: chown-ing 23GB of just-copied
+# files in a RUN step rewrites every one of them into a second layer, so the
+# image carried the whole tree TWICE — 57.7GB for ~23GB of content, which then
+# would not fit on a peer node it was being transferred to. Doing it as part
+# of the copy costs nothing. 1000 is the base image's desktop user.
+COPY --from=isaac --chown=1000:1000 /isaac-sim /isaac-sim
 
 # Isaac writes caches, logs and its EULA acceptance under $HOME at runtime.
 # The desktop session runs as the base image's unprivileged user, so hand it
@@ -28,7 +33,6 @@ COPY --from=isaac /isaac-sim /isaac-sim
 ARG DESKTOP_USER=ubuntu
 RUN set -eux; \
     id -u "${DESKTOP_USER}" >/dev/null 2>&1 || DESKTOP_USER=user; \
-    chown -R "${DESKTOP_USER}":"${DESKTOP_USER}" /isaac-sim; \
     mkdir -p /home/"${DESKTOP_USER}"/.nvidia-omniverse/config \
              /home/"${DESKTOP_USER}"/.cache/ov \
              /home/"${DESKTOP_USER}"/.local/share/ov/data; \
