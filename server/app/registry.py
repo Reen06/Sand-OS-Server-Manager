@@ -42,10 +42,13 @@ CATALOG: dict[str, AppDef] = {
         # before a scene is loaded, and USD assets push it further.
         mem_limit="16g",
         encoder="nvh264enc",
-        # Shader compilation on a cold cache takes minutes on first launch, so
-        # a short idle timeout would reap it before the user ever sees a
-        # viewport.
-        keepalive_seconds=1800,
+        # Reported to the Hub as metadata only -- nothing in this codebase
+        # reaps idle instances, so an instance runs until it is explicitly
+        # stopped. Kept high anyway so the number does not imply a shorter
+        # lifetime than the app actually has if a reaper is ever added:
+        # Isaac holds a compiled shader cache and a live scene, and dropping
+        # that because nobody was connected for a while is the wrong default.
+        keepalive_seconds=86400,
         # The user's NAS home, same files their other apps see, so USD scenes
         # and outputs persist off the node.
         mounts=[
