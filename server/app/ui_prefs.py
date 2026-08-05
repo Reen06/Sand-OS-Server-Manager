@@ -82,3 +82,39 @@ def env_for(app_id: str, user: str) -> dict:
 
 def choices() -> dict:
     return {"scale": list(_SCALE_CHOICES)}
+
+
+def apply_live(app_id: str, user: str, container: str) -> dict:
+    """Re-scale the running desktop WITHOUT recreating the container.
+
+    QT_SCALE_FACTOR is read per-process at startup, so restarting just the
+    shell picks up a new value while everything else in the session keeps
+    running -- verified with Isaac: kit survives, only the panel and its
+    widgets are replaced.
+
+    Restarting the whole SESSION would not work: the app is a child of
+    plasma_session, so it would die with it and that is no cheaper than
+    recreating the container.
+
+    The shell must inherit the session's DISPLAY/DBUS/XDG environment or Qt
+    cannot load its xcb platform plugin and the shell never comes back --
+    taking the panel with it. Read from a live session process rather than
+    assumed.
+    """
+    scale = (get(app_id, user) or {}).get("scale")
+    if not scale:
+        return {"applied": False, "reason": "no scale set"}
+    script = (
+        'p=$(pgrep -x plasma_session | head -1); [ -n "$p" ] || exit 3; '
+        'eval $(tr "\\0" "\\n" < /proc/$p/environ '
+        '| grep -E "^(DISPLAY|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|XAUTHORITY)=" '
+        '| sed "s/^/export /"); '
+        f'QT_SCALE_FACTOR={scale} nohup plasmashell --replace >/tmp/sm-rescale.log 2>&1 & '
+        'sleep 7; pgrep -x plasmashell >/dev/null'
+    )
+    from . import docker_backend
+    res = docker_backend._docker(
+        ["exec", "-u", "1000", container, "sh", "-c", script], timeout=40)
+    ok = res.returncode == 0
+    return {"applied": ok, "scale": scale,
+            "reason": "" if ok else "the desktop shell did not come back"}

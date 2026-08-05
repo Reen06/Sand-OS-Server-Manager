@@ -1339,10 +1339,20 @@ async def set_ui_prefs(app_id: str, request: Request):
         prefs = ui_prefs.set_prefs(app_id, user, body or {})
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
-    # Deliberately does NOT restart the app. Container env is fixed at create
-    # time, so this lands on the next start -- and silently killing a running
-    # session to apply a font size would be a worse surprise than waiting.
-    return {"ok": True, "prefs": prefs, "applies": "next start"}
+    # Try to apply it to the RUNNING desktop first: restarting the shell alone
+    # picks up the new scale while the app itself keeps running, which beats
+    # recreating a container that may hold a loaded scene. Falls back to
+    # "next start" only if the live path is not available.
+    inst = registry.get_instance(app_id, user)
+    live = {"applied": False, "reason": "app is not running"}
+    if inst is not None:
+        try:
+            live = ui_prefs.apply_live(app_id, user, inst.name)
+        except Exception as e:  # noqa: BLE001
+            live = {"applied": False, "reason": str(e)[:120]}
+    return {"ok": True, "prefs": prefs,
+            "applies": "now" if live.get("applied") else "next start",
+            "live": live}
 
 
 @app.post("/api/apps/{app_id}/stop")
