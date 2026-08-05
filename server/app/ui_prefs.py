@@ -77,6 +77,10 @@ def env_for(app_id: str, user: str) -> dict:
     env = {}
     if p.get("scale"):
         env["QT_SCALE_FACTOR"] = str(p["scale"])
+        # Kit ignores QT_SCALE_FACTOR, so an app built on it needs the same
+        # number passed its own way (see the isaac-launch wrapper). Harmless
+        # for images that do not use it.
+        env["SM_UI_SCALE"] = str(p["scale"])
     return env
 
 
@@ -104,13 +108,23 @@ def apply_live(app_id: str, user: str, container: str) -> dict:
     scale = (get(app_id, user) or {}).get("scale")
     if not scale:
         return {"applied": False, "reason": "no scale set"}
+    # Isaac (Kit) reads its scale at startup and ignores QT_SCALE_FACTOR, so
+    # the app itself has to be relaunched for the two to match. Done inside the
+    # same session, so the container and everything else keep running -- this
+    # costs Isaac's startup, not a container recreate.
     script = (
         'p=$(pgrep -x plasma_session | head -1); [ -n "$p" ] || exit 3; '
         'eval $(tr "\\0" "\\n" < /proc/$p/environ '
         '| grep -E "^(DISPLAY|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|XAUTHORITY)=" '
         '| sed "s/^/export /"); '
         f'QT_SCALE_FACTOR={scale} nohup plasmashell --replace >/tmp/sm-rescale.log 2>&1 & '
-        'sleep 7; pgrep -x plasmashell >/dev/null'
+        'sleep 7; pgrep -x plasmashell >/dev/null || exit 1; '
+        # Relaunch a Kit app at the new scale if one is running. Guarded on it
+        # already running, so this never STARTS an app that was closed.
+        'if pgrep -x kit >/dev/null && [ -x /usr/local/bin/isaac-launch ]; then '
+        '  pkill -x kit; sleep 3; '
+        f'  SM_UI_SCALE={scale} nohup /usr/local/bin/isaac-launch >/tmp/sm-isaac.log 2>&1 & '
+        'fi; true'
     )
     from . import docker_backend
     res = docker_backend._docker(

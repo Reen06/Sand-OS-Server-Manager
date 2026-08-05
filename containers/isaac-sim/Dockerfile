@@ -76,6 +76,24 @@ RUN set -eux; \
       echo "patched $f"; \
     else echo "selkies signalling already correct or not found"; fi
 
+# Isaac's OWN interface is Omniverse Kit, which ignores QT_SCALE_FACTOR
+# entirely -- so the desktop could be rescaled while Isaac's toolbars stayed
+# tiny. Kit's equivalent is /app/window/dpiScaleOverride, which has NO
+# preferences UI (it appears in no extension, only in omni.ui's settings), so
+# it can only be passed at launch.
+#
+# This wrapper reads the same value the Hub's settings panel writes, so one
+# slider scales both the desktop and Isaac. Unset = Kit's own default.
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    '# Scale Isaac to match the desktop. SM_UI_SCALE is set by the Server' \
+    '# Manager from the user preference; empty means leave Kit alone.' \
+    'if [ -n "$SM_UI_SCALE" ]; then' \
+    '  exec /isaac-sim/isaac-sim.sh --/app/window/dpiScaleOverride="$SM_UI_SCALE" "$@"' \
+    'fi' \
+    'exec /isaac-sim/isaac-sim.sh "$@"' \
+    > /usr/local/bin/isaac-launch && chmod +x /usr/local/bin/isaac-launch
+
 # Replace Selkies' caching service worker with a passthrough one.
 #
 # The stock SW caches the client shell, so the browser keeps serving an old
@@ -108,7 +126,7 @@ RUN printf '%s\n' \
     'Type=Application' \
     'Name=NVIDIA Isaac Sim' \
     'Comment=Robotics simulation (Omniverse Kit)' \
-    'Exec=/isaac-sim/isaac-sim.sh' \
+    'Exec=/usr/local/bin/isaac-launch' \
     'Icon=/usr/share/pixmaps/isaac-sim.png' \
     'Terminal=false' \
     'X-GNOME-Autostart-enabled=true' \
