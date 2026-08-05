@@ -124,7 +124,12 @@ def apply_live(app_id: str, user: str, container: str) -> dict:
     # the app itself has to be relaunched for the two to match. Done inside the
     # same session, so the container and everything else keep running -- this
     # costs Isaac's startup, not a container recreate.
+    # Write the current value where BOTH launchers read it. Container env is
+    # fixed at creation, so without this a scale change could never reach a
+    # Kit process started later -- which is exactly what happened with Lab's
+    # train.py: it launches Kit directly and inherited a value set hours ago.
     script = (
+        f'printf %s {app_scale} > /run/sm-ui-scale 2>/dev/null || true; '
         'p=$(pgrep -x plasma_session | head -1); [ -n "$p" ] || exit 3; '
         'eval $(tr "\\0" "\\n" < /proc/$p/environ '
         '| grep -E "^(DISPLAY|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|XAUTHORITY)=" '

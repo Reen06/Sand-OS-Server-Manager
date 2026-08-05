@@ -92,11 +92,39 @@ RUN printf '%s\n' \
     '#!/bin/sh' \
     '# Scale Isaac to match the desktop. SM_UI_SCALE is set by the Server' \
     '# Manager from the user preference; empty means leave Kit alone.' \
-    'if [ -n "$SM_UI_SCALE" ]; then' \
-    '  exec /isaac-sim/isaac-sim.sh --/app/window/dpiScaleOverride="$SM_UI_SCALE" "$@"' \
+    's=""' \
+    '[ -r /run/sm-ui-scale ] && s="$(cat /run/sm-ui-scale)"' \
+    '[ -z "$s" ] && s="$SM_UI_SCALE"' \
+    'if [ -n "$s" ]; then' \
+    '  exec /isaac-sim/isaac-sim.sh --/app/window/dpiScaleOverride="$s" "$@"' \
     'fi' \
     'exec /isaac-sim/isaac-sim.sh "$@"' \
     > /usr/local/bin/isaac-launch && chmod +x /usr/local/bin/isaac-launch
+
+# Make the UI scale apply however Kit is started.
+#
+# isaaclab.sh does not go through isaac-launch -- `./isaaclab.sh -p train.py`
+# execs Kit directly -- so the scale set in the Hub panel never reached a Lab
+# training run. And container env is fixed at creation, so changing the scale
+# later could not affect it either.
+#
+# Both launchers now read /run/sm-ui-scale if present (written live when the
+# setting changes) and fall back to the env baked at container creation.
+# Wrapping isaaclab.sh rather than editing it keeps the original intact.
+RUN mv /workspace/isaaclab/isaaclab.sh /workspace/isaaclab/.isaaclab-real.sh && \
+    printf '%s\n' \
+    '#!/bin/bash' \
+    '# Injects the Sand-OS UI scale, then defers to the real isaaclab.sh.' \
+    's=""' \
+    '[ -r /run/sm-ui-scale ] && s="$(cat /run/sm-ui-scale)"' \
+    '[ -z "$s" ] && s="$SM_UI_SCALE"' \
+    'if [ -n "$s" ]; then' \
+    '  exec /workspace/isaaclab/.isaaclab-real.sh "$@" --/app/window/dpiScaleOverride="$s"' \
+    'fi' \
+    'exec /workspace/isaaclab/.isaaclab-real.sh "$@"' \
+    > /workspace/isaaclab/isaaclab.sh && \
+    chmod +x /workspace/isaaclab/isaaclab.sh && \
+    chown 1000:1000 /workspace/isaaclab/isaaclab.sh
 
 # Replace Selkies' caching service worker with a passthrough one.
 #
