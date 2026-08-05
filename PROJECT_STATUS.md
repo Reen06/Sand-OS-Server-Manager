@@ -18,6 +18,35 @@ Sand-OS Server Manager (SM) runs on **CortexPC** as
 silently drops Hub SSO's fast LAN path, the Hub LLM Router seeding, and
 NAS-based Ollama model transfer while SM still *looks* like it's running fine.
 
+**This drift recurred and cost a day (2026-08-05).** `SM_HUB_URL` had been set
+to the raw LAN IP rather than `run.sh`'s hostname default, which silently
+disabled the container `--add-host` and left Open WebUI unable to reach the
+model router at all — no models listed, nothing logged on this side. The value
+a container should use is now derived rather than configured (the Hub publishes
+it at `/api/hub/public-host`; see `SM_HUB_PUBLIC_HOST` in `config.py`), so this
+particular copy can no longer drift. The general warning stands for the rest of
+the file: **a value duplicated per node is a value that will disagree.** Prefer
+asking the Hub over copying it four times.
+
+### Fleet NAS: every node needs the mesh mount, not the NFS fallback
+
+A node reaches user files through the SeaweedFS mesh mount at
+`/mnt/sandos-nas`, kept up by `sandos-nas-mount.service` (systemd, enabled) and
+the `weed` binary in `/usr/local/bin`. **Both are required, and a node joined to
+the mesh without them looks fine until an app needs a per-user home.** Vortex-
+Eclipse was in exactly that state: `weed` was never installed, Docker fell back
+to an NFS volume against the Hub, and app launches died on a 120-second mount
+timeout with an error naming neither the NAS nor the missing binary.
+
+That NFS fallback **has never worked for any client** — the Hub's export is a
+FUSE mount re-exported over kernel NFS, and no NFSv4 client has ever completed a
+mount. Treat it as a trap, not a safety net, until it is retired or fixed.
+
+WSL is *not* a barrier to any of this: FUSE, `fusermount3` and systemd are all
+present and the mount works normally. A non-root test fails only on
+`allow_other` (needs `user_allow_other` in `/etc/fuse.conf`), which does not
+apply to the real service since it runs as root.
+
 Every catalogued app (FreeCAD, Filebrowser, WebCAD/CAM, HeliX, OpenMapper, Ray
 Optics, Renode, EngineeringPaper, OpenFOAM GUI, ParaView, Stirling PDF,
 Nextcloud, Ollama, Open WebUI) launches and serves correctly as of this

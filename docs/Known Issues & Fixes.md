@@ -4,6 +4,249 @@ A running log of problems encountered and how they were resolved. Newest at top.
 
 ---
 
+## 2026-08-05 — Fleet session: Open WebUI had no models, auto-update was silently dead on one node, and "install on another server" never worked
+
+Eight real issues found across the Hub and the Server Manager, several of which had
+been failing silently for days while every dashboard reported success. Grouped as one
+entry because they share a theme worth naming on its own: **every one of them reported
+health it had not verified.** A node said it had an image it could not export; another
+said it was running code it had never loaded; a label said a machine stored data it
+had never held. The fixes are individually small; the pattern is the point.
+
+---
+
+### 1. Open WebUI listed no models at all
+
+**Symptom:** Open WebUI's model dropdown was empty. Ollama was running fine on CortexPC
+with `qwen2.5:0.5b` installed, and the Hub's own `/api/fleet/llm/v1/models` returned
+that model correctly.
+
+**Root cause:** Two addresses, neither of which works, and no third option:
+
+- Open WebUI's OpenAI connection pointed at `https://vpn1603.duckdns.org/...`, which
+  resolves to the **public** IP. The Hub deliberately 404s anything arriving from the
+  internet (it serves its API to the mesh only). Its log showed the same 404 looping
+  for days.
+- Pointing it at the LAN IP instead only trades one failure for another: that address
+  answers with Caddy's **internal CA**, which the container does not trust
+  (`curl` exit 60).
+
+Only the name *resolved to the LAN IP* works — a certificate TLS can verify, reaching an
+address the Hub answers on. The `--add-host` mechanism exists for exactly this, but it
+keys off `SM_HUB_URL`, which was set to a bare IP, and an `/etc/hosts` entry for an IP
+literal is never consulted. So it was silently disabled.
+
+`SM_HUB_URL` could not simply be changed to the name: it is also where a person is
+redirected to log in, and the name 404s from the LAN.
+
+**Fix applied:** Separated the two concerns. `SM_HUB_PUBLIC_HOST` names the certificate
+host independently of the browser-facing `HUB_URL`, and `--add-host` pins it to the LAN
+IP. Verified: 200 with the model list, TLS verification fully on.
+
+**Prevention:** When one setting has to satisfy two consumers with opposite needs
+(a browser that must reach it, a container that must verify it), that is the signal to
+split it, not to pick the lesser evil.
+
+---
+
+### 2. …and the fix above only worked on the node it was configured on
+
+**Symptom:** Not observed — caught while reviewing the fix. Open WebUI would have failed
+identically on the other three nodes.
+
+**Root cause:** `SM_HUB_PUBLIC_HOST` stored **one fact about the Hub** in every node's env
+file. Four copies, four chances to drift — the same class of bug as the original, where
+`run.sh`'s default and CortexPC's env file had disagreed about `SM_HUB_URL` for weeks
+with nothing reporting it.
+
+**Fix applied:** The Hub now publishes its certificate hostname at
+`GET /api/hub/public-host`, and a node asks for it when it needs it. Deliberately
+unauthenticated: the answer is a public DNS name the Hub already presents in every TLS
+handshake, and a node needs it *before* it can hold any credential. Only queried when a
+Hub is addressed by IP; explicit config still wins; an unreachable Hub returns empty and
+behaves exactly as before. A new node now needs no LLM setup at all.
+
+**Prevention:** A fact about the Hub belongs on the Hub. If every node needs a copy of
+the same value, that is a distribution problem, not a configuration one.
+
+---
+
+### 3. A working GPU reported as no GPU
+
+**Symptom:** Vortex-Eclipse reported `vram_mb: 0` despite an RTX 3070 Ti. The container
+saw the GPU (CDI passthrough was fine) and `metrics.py` described it correctly.
+
+**Root cause:** `ollama_mgr._vram_mb()` looked up `nvidia-smi` by bare name. A systemd
+service inherits none of the shell startup files that put WSL's nvidia-smi shim on PATH,
+so it silently found nothing. `metrics.py` had already hit and solved this exact trap
+with a fallback path list; `ollama_mgr` never got the same treatment.
+
+**Nothing failed outright,** which is why it went unnoticed for so long: the router treats
+capacity as an ordering hint, never a filter. The node stayed eligible — it just described
+itself as a mid-sized CPU box (RAM at a 4x discount) instead of an 8 GB GPU one.
+
+**Fix applied:** Reuse `metrics._nvidia_smi_path()`. Confirmed live: `vram_mb: 8192`.
+
+**Prevention:** When one module solves an environment quirk, grep for other callers doing
+the same lookup the naive way. A fix that stays local to the file that found the bug is
+half a fix.
+
+---
+
+### 4. Ollama's port was open to the whole network, unauthenticated
+
+**Symptom:** None — found while adding the LAN toggle.
+
+**Root cause:** The AppDef published `-p 11434:11434` unconditionally, i.e. on every
+interface. The Ollama API has **no authentication of any kind**: anything that can reach
+the box can list, run and delete its models. Nothing in the fleet needed it — the Hub
+reaches each node's Ollama through its Server Manager on 8170, never on 11434.
+
+**Fix applied:** Bind to loopback by default; LAN exposure is now a per-node toggle in the
+Ollama model manager. Per node rather than fleet-wide because it describes one machine's
+exposure on the network it currently sits on. Published ports are fixed when a container
+is created, so the toggle reports whether a restart is outstanding rather than pulling the
+container out from under a running generation.
+
+**Prevention:** "Fine on the home network" is a decision, and decisions belong in a setting
+with a default, not in a hardcoded flag with a comment.
+
+---
+
+### 5. Auto-update had been silently dead on proxmox-mini for a day
+
+**Symptom:** proxmox-mini reported the current commit and a clean checkout, with nothing
+logged as wrong — while running day-old code. Confirmed by an endpoint added that morning:
+**404 on proxmox, 200 on CortexPC.**
+
+**Root cause:** Two bugs compounding into a permanent, invisible failure.
+
+- Auto-update ends with `sudo -n systemctl restart …`. proxmox-mini's SM runs as **root**,
+  and Proxmox does not ship `sudo` — the restart died with `sudo: command not found`.
+- The `git reset --hard` runs *before* that, and the SM reported its version by reading the
+  **repo's HEAD**, not the code the running process had loaded.
+
+So: pull succeeds → restart fails → node reports the new sha → looks up to date → the
+`git_sha == latest` check skips it on every subsequent pass, **forever**. The repo had
+fetched at 13:31; the service had started the previous evening with `NRestarts=0`.
+
+**Fix applied:** Use `sudo` only when not already root. More importantly, report the commit
+*the process is running*, read once at import — so the two steps (pull, restart) become
+distinguishable and a node that pulled but did not restart stays visibly stale and gets
+retried. proxmox-mini repaired and verified current.
+
+**Prevention:** Any "is it done yet" check must observe the thing that actually matters. A
+check that reads the side effect of step one will call a two-step job finished halfway.
+
+---
+
+### 6. NAS access labels described a setting they did not control
+
+**Symptom:** Reported as "a lil obscure" — hard to tell which control applied to what. It
+was worse than obscure: **the labels were factually wrong on two of five servers.**
+
+**Root cause:** Reading and storing are genuinely independent (the backend is explicit that
+trust levels are "visibility levels, not storage roles"), but three of the four dropdown
+options **named storing**, which that dropdown has never decided:
+
+| Option | Claimed | Actually controls |
+|---|---|---|
+| `Trusted — stores and reads` | stores | reading only |
+| `Untrusted — stores, cannot read` | stores | reading only |
+| `Reads only — stores nothing` | stores nothing | reading only |
+
+Live at the time: Vortex-Eclipse read "stores and reads" while holding **zero** volumes;
+Work-Server read "stores" while storing nothing.
+
+**Fix applied:** Each level now describes only what it reads, worded identically to the
+`sees` map the Hub already computes (verified to match, so they cannot drift). Columns
+headed "Stores data" and "Can read". Node state shown as the two facts it is, each under
+the control that sets it. Also surfaced `mount_violates_trust`, which the backend computed
+and nothing displayed — a machine holding a mount its level forbids can read everything it
+stores.
+
+**Prevention:** A control's label should describe only what that control changes. If it
+needs to mention a neighbouring setting to make sense, the two are presented wrong.
+
+---
+
+### 7. "Install on another server" copied nothing, twice over
+
+**Symptom:** Pulling FreeCAD onto Vortex-Eclipse did nothing. The Hub log showed the job
+dying ~3 seconds in, where a 4.4 GB copy takes minutes.
+
+**Root cause:** Two independent bugs, either one sufficient.
+
+- **Wrong Docker daemon.** A node can run more than one — an app kept on a USB drive gets
+  its own `dockerd` — and `image_installed` is true if **any** of them has the image. The
+  transfer shelled out to a bare `docker image save`, which only sees the default daemon.
+  So the peer answered `No such image: freecad-streamer:dev` for an image it genuinely had.
+- **The app was never added to the target's library.** A node lists only the apps enabled
+  in its own `catalog.json`, which the transfer never touched. Even a *successful* copy
+  would have left the app invisible on the machine it was installed onto — success
+  reported, nothing to show for it, indistinguishable from failure.
+
+**Fix applied:** Nodes now publish `docker_host` per app (the `-H` target that answered
+"installed"), and the transfer addresses that daemon. The app is enabled on the target as
+the last step — non-fatally, so a multi-gigabyte copy is never discarded over it, with a
+partial result surfaced instead of a false success.
+
+**Prevention:** If a flag is computed by checking several places, publish *which place*
+answered. "Yes, somewhere" is not actionable by anything that has to go and use it.
+
+---
+
+### 8. FreeCAD then would not start: "timed out after 120 seconds"
+
+**Symptom:** `docker run … -v sm-nfs-root:/r alpine mkdir -p /r/users/admin` timed out after
+120 s on Vortex-Eclipse.
+
+**Root cause:** Vortex had **no working NAS connection at all**, and both routes were dead:
+
+- The mesh mount was not up — `weed`, the SeaweedFS client that performs it, **was not
+  installed on the machine**. Left incomplete when the node was joined to the mesh.
+- Docker therefore fell back to an NFS volume against the Hub. That export is a **FUSE
+  (SeaweedFS) mount re-exported over kernel NFS**, and the Hub's own records show **no
+  NFSv4 client has ever mounted successfully** — the path has never worked for anyone.
+
+The apps Vortex already ran (Stirling PDF, Ollama, WebCAD) need no per-user NAS home, so
+FreeCAD was simply the first to require one.
+
+**Fix applied:** Installed `weed` and a `sandos-nas-mount.service` mirroring CortexPC's,
+enabled so it survives reboots. Removed the stale `sm-nfs-root` volume. Verified: mount
+active, SM flipped `mesh mounted: False → True`, FreeCAD launched, and a **write test
+passed** inside the container against the real NAS tree (same `Bulk`/`Critical`/`FreeCad`
+contents CortexPC sees).
+
+**Note on WSL:** the assumption that a WSL node cannot do full NAS turned out **not to
+hold**. FUSE, `fusermount3`, systemd and connectivity were all fine and it mounted first
+try. A non-root test fails only on `allow_other`, which needs `user_allow_other` in
+`/etc/fuse.conf` — irrelevant to the real service, which runs as root. Vortex has the same
+full NAS access as any other node.
+
+**Prevention:** A fallback that can only ever hang is worse than no fallback — it converts
+a missing mount into a 120-second timeout with an unrelated-looking error. See outstanding
+work below.
+
+---
+
+### Still outstanding after this session
+
+- **The Hub's NFS export is still broken and still armed.** It is now unused by Vortex, but
+  any future node without a mesh mount will hit the same silent 120-second hang. Either
+  retire the export or fix the FUSE re-export properly; leaving it as-is guarantees the
+  next person repeats issue 8.
+- **Vortex-Eclipse is set to "Reads the whole NAS."** Now that the mount is live this is
+  real — it can see every user's files, not only the account running an app. Drop it to
+  app-only if that is not intended.
+- **`gemma4:e4b` is 9.6 GB against 8 GB of VRAM** on Vortex, so it will spill to CPU and run
+  slower than the card suggests.
+- **The peer-install button itself is still unexercised.** Both fixes are deployed and the
+  transfer was verified end to end using the exact commands the Hub now issues, but run
+  from a shell rather than by clicking Install.
+
+---
+
 ## 2026-07-19 — SandOS Hub: WireGuard tunnel/pairing hardening + fleet-app visibility (session summary)
 
 A long session on the [[Sand-OS Server Manager|Server Manager]] + [[WireGuard VPN|Hub]] side, sparked by a phone tunnel that stopped reaching the dashboard. Ten separate real issues, grouped here rather than as ten full write-ups — each is small enough that "symptom → fix" fits in a couple lines.
