@@ -122,7 +122,13 @@ def apply_live(app_id: str, user: str, container: str) -> dict:
         # Relaunch a Kit app at the new scale if one is running. Guarded on it
         # already running, so this never STARTS an app that was closed.
         'if pgrep -x kit >/dev/null && [ -x /usr/local/bin/isaac-launch ]; then '
-        '  pkill -x kit; sleep 3; '
+        # Wait for it to actually exit. A fixed sleep was not enough -- Kit
+        # takes several seconds to shut down, so the replacement started while
+        # the old process still held the session and the new scale never
+        # applied. Escalate to KILL if it will not go, then confirm.
+        '  pkill -x kit; '
+        '  for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -x kit >/dev/null || break; sleep 1; done; '
+        '  pgrep -x kit >/dev/null && { pkill -9 -x kit; sleep 2; }; '
         f'  SM_UI_SCALE={scale} nohup /usr/local/bin/isaac-launch >/tmp/sm-isaac.log 2>&1 & '
         'fi; true'
     )
