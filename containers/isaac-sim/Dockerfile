@@ -76,6 +76,17 @@ RUN set -eux; \
       echo "patched $f"; \
     else echo "selkies signalling already correct or not found"; fi
 
+# Replace Selkies' caching service worker with a passthrough one.
+#
+# The stock SW caches the client shell, so the browser keeps serving an old
+# copy of the page -- which silently defeats anything the Hub injects into it
+# (the settings panel and F11 handler) and can pin a stale client whose
+# absolute paths do not route through the proxy. The FreeCAD image hit this
+# first and carries the same fix. Network-only, so the page is always current;
+# it still registers a fetch handler, which is what Chrome requires for the
+# app to be installable as a PWA.
+COPY passthrough-sw.js /opt/gst-web/sw.js
+
 # Isaac's own logo, so the launcher and window are the mark people recognise
 # rather than a generic science glyph.
 RUN cp /isaac-sim/exts/isaacsim.app.about/data/icon.png \
