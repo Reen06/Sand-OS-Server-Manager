@@ -135,7 +135,8 @@ def apply_live(app_id: str, user: str, container: str) -> dict:
         # "unrecognized arguments", so the launcher is the wrong layer.
         # Takes effect the next time Kit starts; a run already going is
         # untouched.
-        f'for f in /isaac-sim/apps/*.kit /workspace/isaaclab/apps/*/*.kit; do '
+        f'for f in /isaac-sim/apps/*.kit /workspace/isaaclab/apps/*.kit '
+        f'/workspace/isaaclab/apps/*/*.kit; do '
         f'  [ -f "$f" ] && sed -i "s|^dpiScaleOverride = .*|dpiScaleOverride = {app_scale}|" "$f"; '
         f'done 2>/dev/null || true; '
         'p=$(pgrep -x plasma_session | head -1); [ -n "$p" ] || exit 3; '

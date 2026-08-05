@@ -111,13 +111,14 @@ RUN printf '%s\n' \
 # [settings.app.window] section that already exists in each one; the Server
 # Manager rewrites the value in place when the setting changes.
 RUN set -eux; \
-    for f in /isaac-sim/apps/*.kit /workspace/isaaclab/apps/*/*.kit; do \
+    for f in /isaac-sim/apps/*.kit /workspace/isaaclab/apps/*.kit /workspace/isaaclab/apps/*/*.kit; do \
       [ -f "$f" ] || continue; \
       grep -q '^\[settings.app.window\]' "$f" || continue; \
       grep -q 'dpiScaleOverride' "$f" && continue; \
       sed -i 's|^\[settings.app.window\]|[settings.app.window]\ndpiScaleOverride = 1.75|' "$f"; \
     done; \
-    grep -l dpiScaleOverride /isaac-sim/apps/*.kit | head -3
+    grep -l dpiScaleOverride /isaac-sim/apps/*.kit | head -3; \
+    chown -R 1000:1000 /isaac-sim/apps /workspace/isaaclab/apps
 
 # Replace Selkies' caching service worker with a passthrough one.
 #
@@ -157,6 +158,24 @@ RUN printf '%s\n' \
 # One image backs two catalogue entries; SM_ISAAC_APP decides which opens.
 RUN printf '%s\n' \
     '#!/bin/sh' \
+    '# Apply the saved UI scale to the .kit experience files BEFORE anything' \
+    '# starts. The image bakes a default, but a container is recreated from' \
+    '# that image on every stop/start -- so without this a saved preference' \
+    '# was silently reverted to the default each restart, which looked like' \
+    '# the slider not working at all.' \
+    's="$SM_UI_SCALE"' \
+    '[ -r /run/sm-ui-scale ] && s="$(cat /run/sm-ui-scale)"' \
+    'if [ -n "$s" ]; then' \
+    '  for f in /isaac-sim/apps/*.kit /workspace/isaaclab/apps/*.kit /workspace/isaaclab/apps/*/*.kit; do' \
+    '    [ -f "$f" ] || continue' \
+    '    grep -q "^\\[settings.app.window\\]" "$f" || continue' \
+    '    if grep -q "^dpiScaleOverride" "$f"; then' \
+    '      sed -i "s|^dpiScaleOverride = .*|dpiScaleOverride = $s|" "$f"' \
+    '    else' \
+    '      sed -i "s|^\\[settings.app.window\\]|[settings.app.window]\\ndpiScaleOverride = $s|" "$f"' \
+    '    fi' \
+    '  done 2>/dev/null' \
+    'fi' \
     'case "$SM_ISAAC_APP" in' \
     '  lab) exec /usr/local/bin/isaaclab-launch ;;' \
     '  *)   exec /usr/local/bin/isaac-launch ;;' \
