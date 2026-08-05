@@ -39,6 +39,12 @@ CATALOG: dict[str, AppDef] = {
         internal_port=8080,
         gpu=True,
         encoder="nvh264enc",
+        # Resize the remote display to the browser window, so fullscreen fills
+        # the screen instead of letterboxing a fixed 1080p frame. The documented
+        # cost is that Selkies' client-rendered cursor can misbehave at odd
+        # sizes -- worth watching in a 3D app where pointer accuracy matters,
+        # but a permanent black bar top and bottom is the worse trade.
+        resize=True,
         # 0 = never idle-stop. Nothing reaps instances today, but any reaper
         # added later must leave this app alone: it holds a compiled shader
         # cache and a live scene that cost minutes to rebuild, and the owner's
