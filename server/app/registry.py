@@ -1346,9 +1346,18 @@ def reconcile_from_docker() -> None:
             if bare in APPS and APPS[bare].mode == "shared":
                 app_id, user = bare, _SHARED
             else:
-                m = re.match(r"^sm-([a-z0-9-]+?)-(.+)$", name)
-                if m and m.group(1) in APPS:
-                    app_id, user = m.group(1), m.group(2)
+                # Match against the known app ids, LONGEST first, instead of
+                # splitting on the first hyphen. The old regex was non-greedy,
+                # so "sm-isaac-sim-admin" parsed as app "isaac" / user
+                # "sim-admin"; "isaac" is not an app, and the code never
+                # retried with a longer id, so the container was skipped and
+                # the instance lost. Every hyphenated app id hit this --
+                # isaac-sim and open-webui both -- and only after a restart,
+                # which is exactly when re-adoption matters.
+                for _aid in sorted(APPS, key=len, reverse=True):
+                    if bare.startswith(_aid + "-"):
+                        app_id, user = _aid, bare[len(_aid) + 1:]
+                        break
             if not app_id:
                 continue
             slot = web_port - config.WEB_PORT_BASE
