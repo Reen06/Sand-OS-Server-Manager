@@ -105,7 +105,12 @@ CATALOG: dict[str, AppDef] = {
         resize=True,
         # Opens a shell in the Lab workspace rather than a GUI: most Lab work
         # is scripted training runs, not a single application window.
-        env={"SM_ISAAC_APP": "lab"},
+        #
+        # SM_UI_SCALE is the DEFAULT Kit scale for this app -- what a fresh
+        # install or a new user gets without touching the settings panel. A
+        # saved app_scale preference overrides it (ui_prefs.env_for is merged
+        # over this), so it sets the starting point rather than fixing it.
+        env={"SM_ISAAC_APP": "lab", "SM_UI_SCALE": "1.75"},
         keepalive_seconds=0,
         mounts=[
             # Compiled shaders. SHARED on purpose: these are GPU compilation
