@@ -67,6 +67,22 @@ CATALOG: dict[str, AppDef] = {
         # The user's NAS home, same files their other apps see, so USD scenes
         # and outputs persist off the node.
         mounts=[
+            # Compiled shaders. SHARED on purpose: these are GPU compilation
+            # artifacts, not user data, so Sim and Lab and every user reuse one
+            # cache -- compile once on this GPU, never again. Local storage,
+            # not NAS: a shader cache over NFS would be slower than recompiling.
+            #
+            # This is why every launch was slow. SM apps run with --rm, so
+            # stopping an app DELETES the container and 16 hours of compiled
+            # shaders with it; the next start began from nothing every time.
+            Mount(name="ov-shadercache", path="/home/ubuntu/.cache/ov",
+                  scope="shared", storage="local"),
+            # Kit's own state (preferences, layouts, extension data) is real
+            # user data, so per-user rather than shared.
+            Mount(name="ov-data", path="/home/ubuntu/.local/share/ov",
+                  scope="per-user", storage="local"),
+            Mount(name="ov-config", path="/home/ubuntu/.nvidia-omniverse",
+                  scope="per-user", storage="local"),
             Mount(name="home", path="/home/ubuntu/NAS", scope="per-user", storage="nfs"),
         ],
     ),
@@ -92,6 +108,22 @@ CATALOG: dict[str, AppDef] = {
         env={"SM_ISAAC_APP": "lab"},
         keepalive_seconds=0,
         mounts=[
+            # Compiled shaders. SHARED on purpose: these are GPU compilation
+            # artifacts, not user data, so Sim and Lab and every user reuse one
+            # cache -- compile once on this GPU, never again. Local storage,
+            # not NAS: a shader cache over NFS would be slower than recompiling.
+            #
+            # This is why every launch was slow. SM apps run with --rm, so
+            # stopping an app DELETES the container and 16 hours of compiled
+            # shaders with it; the next start began from nothing every time.
+            Mount(name="ov-shadercache", path="/home/ubuntu/.cache/ov",
+                  scope="shared", storage="local"),
+            # Kit's own state (preferences, layouts, extension data) is real
+            # user data, so per-user rather than shared.
+            Mount(name="ov-data", path="/home/ubuntu/.local/share/ov",
+                  scope="per-user", storage="local"),
+            Mount(name="ov-config", path="/home/ubuntu/.nvidia-omniverse",
+                  scope="per-user", storage="local"),
             Mount(name="home", path="/home/ubuntu/NAS", scope="per-user", storage="nfs"),
         ],
     ),
