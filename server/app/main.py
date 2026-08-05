@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import app_images, app_storage, app_variants, busy, config, docker_backend, dockerhub_apps, files, glances_svc, hub_auth, hub_link, metrics, nas_roster, nas_shares, ollama_mgr, pending_imports, proxy, pwa, registry, snapshots, usb_storage
+from . import app_images, app_storage, app_variants, busy, config, docker_backend, dockerhub_apps, files, glances_svc, hub_auth, hub_link, metrics, nas_roster, nas_shares, ollama_mgr, pending_imports, proxy, pwa, registry, snapshots, ui_prefs, usb_storage
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -1320,6 +1320,29 @@ def launch(app_id: str, request: Request):
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
     return {"ok": True, "url": registry.url_for(inst), "status": registry.status(app_id, user)}
+
+
+@app.get("/api/apps/{app_id}/ui-prefs")
+def get_ui_prefs(app_id: str, request: Request):
+    """This user's display settings for this app, plus the valid choices so
+    the client does not have to hardcode them."""
+    user = _require_app(request, app_id)["username"]
+    return {"ok": True, "prefs": ui_prefs.get(app_id, user),
+            "choices": ui_prefs.choices()}
+
+
+@app.post("/api/apps/{app_id}/ui-prefs")
+async def set_ui_prefs(app_id: str, request: Request):
+    user = _require_app(request, app_id)["username"]
+    body = await request.json()
+    try:
+        prefs = ui_prefs.set_prefs(app_id, user, body or {})
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    # Deliberately does NOT restart the app. Container env is fixed at create
+    # time, so this lands on the next start -- and silently killing a running
+    # session to apply a font size would be a worse surprise than waiting.
+    return {"ok": True, "prefs": prefs, "applies": "next start"}
 
 
 @app.post("/api/apps/{app_id}/stop")

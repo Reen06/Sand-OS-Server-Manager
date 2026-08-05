@@ -1066,6 +1066,14 @@ def launch(app_id: str, user: str) -> Instance:
     with _lock_for((app_id, _eff(app_id, user))):
         inst = _instance_for(app_id, user)
         if not docker_backend.running(inst.name, host=host):
+            # Per-user display prefs (scale) are merged over the catalogue's
+            # env at CREATE time, which is the only point container env can be
+            # set -- hence "takes effect next start" in the UI.
+            from . import ui_prefs
+            _pref_env = ui_prefs.env_for(app_id, user)
+            if _pref_env:
+                import dataclasses
+                app = dataclasses.replace(app, env={**app.env, **_pref_env})
             res = docker_backend.spawn(inst, app)
             if res.returncode != 0:
                 if app.services:
