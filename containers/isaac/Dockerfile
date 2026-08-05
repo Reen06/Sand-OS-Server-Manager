@@ -113,9 +113,12 @@ RUN printf '%s\n' \
 RUN set -eux; \
     for f in /isaac-sim/apps/*.kit /workspace/isaaclab/apps/*.kit /workspace/isaaclab/apps/*/*.kit; do \
       [ -f "$f" ] || continue; \
-      grep -q '^\[settings.app.window\]' "$f" || continue; \
       grep -q 'dpiScaleOverride' "$f" && continue; \
-      sed -i 's|^\[settings.app.window\]|[settings.app.window]\ndpiScaleOverride = 1.75|' "$f"; \
+      if grep -q '^\[settings.app.window\]' "$f"; then \
+        sed -i 's|^\[settings.app.window\]|[settings.app.window]\ndpiScaleOverride = 1.75|' "$f"; \
+      else \
+        printf '\n[settings.app.window]\ndpiScaleOverride = 1.75\n' >> "$f"; \
+      fi; \
     done; \
     grep -l dpiScaleOverride /isaac-sim/apps/*.kit | head -3; \
     chown -R 1000:1000 /isaac-sim/apps /workspace/isaaclab/apps
@@ -168,11 +171,12 @@ RUN printf '%s\n' \
     'if [ -n "$s" ]; then' \
     '  for f in /isaac-sim/apps/*.kit /workspace/isaaclab/apps/*.kit /workspace/isaaclab/apps/*/*.kit; do' \
     '    [ -f "$f" ] || continue' \
-    '    grep -q "^\\[settings.app.window\\]" "$f" || continue' \
     '    if grep -q "^dpiScaleOverride" "$f"; then' \
     '      sed -i "s|^dpiScaleOverride = .*|dpiScaleOverride = $s|" "$f"' \
-    '    else' \
+    '    elif grep -q "^\\[settings.app.window\\]" "$f"; then' \
     '      sed -i "s|^\\[settings.app.window\\]|[settings.app.window]\\ndpiScaleOverride = $s|" "$f"' \
+    '    else' \
+    '      printf "\\n[settings.app.window]\\ndpiScaleOverride = $s\\n" >> "$f"' \
     '    fi' \
     '  done 2>/dev/null' \
     'fi' \

@@ -137,7 +137,12 @@ def apply_live(app_id: str, user: str, container: str) -> dict:
         # untouched.
         f'for f in /isaac-sim/apps/*.kit /workspace/isaaclab/apps/*.kit '
         f'/workspace/isaaclab/apps/*/*.kit; do '
-        f'  [ -f "$f" ] && sed -i "s|^dpiScaleOverride = .*|dpiScaleOverride = {app_scale}|" "$f"; '
+        f'  [ -f "$f" ] || continue; '
+        f'  if grep -q "^dpiScaleOverride" "$f"; then '
+        f'    sed -i "s|^dpiScaleOverride = .*|dpiScaleOverride = {app_scale}|" "$f"; '
+        f'  elif grep -q "^\\[settings.app.window\\]" "$f"; then '
+        f'    sed -i "s|^\\[settings.app.window\\]|[settings.app.window]\\ndpiScaleOverride = {app_scale}|" "$f"; '
+        f'  else printf "\\n[settings.app.window]\\ndpiScaleOverride = {app_scale}\\n" >> "$f"; fi; '
         f'done 2>/dev/null || true; '
         'p=$(pgrep -x plasma_session | head -1); [ -n "$p" ] || exit 3; '
         'eval $(tr "\\0" "\\n" < /proc/$p/environ '

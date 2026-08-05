@@ -151,9 +151,10 @@ CATALOG: dict[str, AppDef] = {
         # fullscreen actually fills the screen. Same trade as Isaac: Selkies'
         # client-rendered cursor can misbehave at odd sizes.
         resize=True,
-        # FreeCAD is Qt all the way down, so unlike Isaac this scales the whole
-        # application -- menus, toolbars and dialogs -- not just the desktop.
-        env={"QT_SCALE_FACTOR": "2"},
+        # FreeCAD is Qt all the way down, so this scales the whole application
+        # -- menus, toolbars and dialogs -- not just the desktop. A DEFAULT
+        # only: a saved preference from the settings panel is merged over it.
+        env={"QT_SCALE_FACTOR": "1.5"},
         keepalive_seconds=600,
         # The user's NAS home over NFS — the SAME files they see in Nextcloud,
         # network-mounted here (no duplication) so saves persist on the NAS even
