@@ -33,7 +33,7 @@ CATALOG: dict[str, AppDef] = {
         icon="isaac-sim",     # real NVIDIA logo, see Hub icons.js IMAGES
         color="green",
         desc="NVIDIA Isaac Sim 5.1, streamed — robotics simulation on the GPU.",
-        image=config.ISAAC_SIM_IMAGE,
+        image=config.ISAAC_IMAGE,
         kind="streamed",
         mode="per-user",
         internal_port=8080,
@@ -47,7 +47,7 @@ CATALOG: dict[str, AppDef] = {
         # text and leaves the controls around it small. The two also compound,
         # so only one is set. Isaac's OWN interface is Omniverse Kit, not Qt,
         # and ignores this: its scale lives in Isaac's Preferences > Appearance.
-        env={"QT_SCALE_FACTOR": "2"},
+        env={"SM_ISAAC_APP": "sim"},
         # Resize the remote display to the browser window, so fullscreen fills
         # the screen instead of letterboxing a fixed 1080p frame. The documented
         # cost is that Selkies' client-rendered cursor can misbehave at odd
@@ -66,6 +66,31 @@ CATALOG: dict[str, AppDef] = {
         mem_limit="32g",
         # The user's NAS home, same files their other apps see, so USD scenes
         # and outputs persist off the node.
+        mounts=[
+            Mount(name="home", path="/home/ubuntu/NAS", scope="per-user", storage="nfs"),
+        ],
+    ),
+    "isaac-lab": AppDef(
+        id="isaac-lab",
+        multi_node=True,
+        label="Isaac Lab",
+        icon="isaac-lab",
+        color="green",
+        desc="NVIDIA Isaac Lab - robot learning on top of Isaac Sim.",
+        # The SAME image as isaac-sim: isaac-lab-base carries both, so this
+        # costs no extra disk. SM_ISAAC_APP is what makes the two differ.
+        image=config.ISAAC_IMAGE,
+        kind="streamed",
+        mode="per-user",
+        internal_port=8080,
+        gpu=True,
+        mem_limit="32g",
+        encoder="nvh264enc",
+        resize=True,
+        # Opens a shell in the Lab workspace rather than a GUI: most Lab work
+        # is scripted training runs, not a single application window.
+        env={"SM_ISAAC_APP": "lab"},
+        keepalive_seconds=0,
         mounts=[
             Mount(name="home", path="/home/ubuntu/NAS", scope="per-user", storage="nfs"),
         ],

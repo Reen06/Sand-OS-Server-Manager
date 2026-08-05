@@ -134,7 +134,11 @@ FREECAD_IMAGE = os.environ.get("SM_FREECAD_IMAGE", "freecad-streamer:dev")
 # Isaac Sim wrapped in the Selkies desktop (containers/isaac-sim/Dockerfile).
 # Isaac's own livestream needs a native client and a direct UDP peer path, so
 # it can never be a browser app; this is the streamed-desktop equivalent.
-ISAAC_SIM_IMAGE = os.environ.get("SM_ISAAC_SIM_IMAGE", "sm-isaac-sim:5.1.0")
+# ONE image backs both Isaac Sim and Isaac Lab. isaac-lab-base is Isaac Sim
+# plus Lab -- Lab pip-installs into /isaac-sim's own python and adds a 16MB
+# workspace -- so carrying both costs almost nothing over Sim alone, and
+# SM_ISAAC_APP decides which one a container opens.
+ISAAC_IMAGE = os.environ.get("SM_ISAAC_IMAGE", "sm-isaac:5.1.0")
 
 # Filebrowser — the NAS file UI (a 'web' app). Thin wrapper image that provisions
 # noauth on boot; build from containers/filebrowser.
