@@ -1399,6 +1399,7 @@ def takes_staged_files(app_id: str) -> bool:
 
 def list_for_user(user: str) -> list[dict]:
     """App catalogue with this user's per-app status + URL (if running)."""
+    from . import app_images   # deferred: app_images imports this module
     out = []
     for app in APPS.values():
         st = status(app.id, user)
@@ -1407,6 +1408,19 @@ def list_for_user(user: str) -> list[dict]:
             "id": app.id, "label": app.label, "icon": app.icon,
             "color": app.color, "desc": app.desc, "kind": app.kind,
             "status": st, "image_installed": image_installed(app),
+            # WHICH daemon holds this app's image. None = this node's default.
+            #
+            # image_installed looks across every daemon (an app whose image
+            # lives on a USB drive is invisible to the default one), so a node
+            # can truthfully report "installed" for an image `docker image
+            # save` cannot see. The Hub's peer-install did exactly that: it
+            # shelled out to a bare `docker image save` and got "No such
+            # image: freecad-streamer:dev" from a node that had it, three
+            # seconds after the transfer started, with the app never arriving.
+            #
+            # So publish the -H target alongside the claim, and let anything
+            # acting on "installed" address the same daemon that answered it.
+            "docker_host": app_images.active_docker_host(app.id),
             # Drives the Hub's launch-time file picker — see takes_staged_files.
             "takes_staged_files": takes_staged_files(app.id),
             "url": url_for(inst) if (inst and st != "stopped") else None,
