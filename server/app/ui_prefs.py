@@ -117,8 +117,18 @@ def apply_live(app_id: str, user: str, container: str) -> dict:
         'eval $(tr "\\0" "\\n" < /proc/$p/environ '
         '| grep -E "^(DISPLAY|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|XAUTHORITY)=" '
         '| sed "s/^/export /"); '
+        # Xft.dpi first: it is what scales font rendering for anything that
+        # does not read QT_SCALE_FACTOR, and it applies to windows opened
+        # AFTER this without restarting anything.
+        f'echo "Xft.dpi: $(awk "BEGIN{{print int(96*{scale})}}")" | xrdb -merge 2>/dev/null; '
         f'QT_SCALE_FACTOR={scale} nohup plasmashell --replace >/tmp/sm-rescale.log 2>&1 & '
         'sleep 7; pgrep -x plasmashell >/dev/null || exit 1; '
+        # kwin too, or title bars and window buttons stay at the old size
+        # while the panel changes -- which is exactly what it looked like.
+        # --replace hands over without destroying windows, so a running app
+        # keeps its session.
+        f'QT_SCALE_FACTOR={scale} nohup kwin_x11 --replace >/tmp/sm-kwin.log 2>&1 & '
+        'sleep 6; pgrep -x kwin_x11 >/dev/null || echo "kwin did not return"; '
         # Relaunch a Kit app at the new scale if one is running. Guarded on it
         # already running, so this never STARTS an app that was closed.
         'if pgrep -x kit >/dev/null && [ -x /usr/local/bin/isaac-launch ]; then '
