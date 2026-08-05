@@ -76,6 +76,10 @@ CATALOG: dict[str, AppDef] = {
         gpu=True,
         mem_limit="3g",
         encoder="nvh264enc",
+        # Follow the browser window instead of letterboxing a fixed frame, so
+        # fullscreen actually fills the screen. Same trade as Isaac: Selkies'
+        # client-rendered cursor can misbehave at odd sizes.
+        resize=True,
         keepalive_seconds=600,
         # The user's NAS home over NFS — the SAME files they see in Nextcloud,
         # network-mounted here (no duplication) so saves persist on the NAS even
