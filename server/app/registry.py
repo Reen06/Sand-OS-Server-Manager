@@ -39,6 +39,13 @@ CATALOG: dict[str, AppDef] = {
         internal_port=8080,
         gpu=True,
         encoder="nvh264enc",
+        # Legibility on a streamed desktop. With resize=True the virtual display
+        # matches the viewer's monitor, so on a large/high-DPI screen the KDE
+        # chrome and any Qt dialogs render at their default 96dpi and come out
+        # tiny. 120dpi is a ~25% bump -- readable without making the panel
+        # eat the screen. Isaac's OWN interface is Omniverse Kit, not Qt, and
+        # ignores this: its scale lives in Isaac's Preferences > Appearance.
+        env={"QT_FONT_DPI": "120"},
         # Resize the remote display to the browser window, so fullscreen fills
         # the screen instead of letterboxing a fixed 1080p frame. The documented
         # cost is that Selkies' client-rendered cursor can misbehave at odd
@@ -80,6 +87,9 @@ CATALOG: dict[str, AppDef] = {
         # fullscreen actually fills the screen. Same trade as Isaac: Selkies'
         # client-rendered cursor can misbehave at odd sizes.
         resize=True,
+        # FreeCAD is Qt all the way down, so unlike Isaac this scales the whole
+        # application -- menus, toolbars and dialogs -- not just the desktop.
+        env={"QT_FONT_DPI": "120"},
         keepalive_seconds=600,
         # The user's NAS home over NFS — the SAME files they see in Nextcloud,
         # network-mounted here (no duplication) so saves persist on the NAS even
