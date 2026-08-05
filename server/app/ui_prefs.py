@@ -29,8 +29,14 @@ _lock = threading.Lock()
 # scale: QT_SCALE_FACTOR. Scales the whole Qt widget tree (toolbars, icons,
 # panels), not just text. Note this does NOT reach an app with its own
 # non-Qt toolkit -- Omniverse Kit ignores it entirely.
-_ALLOWED = {"scale"}
+# app_scale is separate from scale on purpose. A Kit viewport wants a much
+# larger UI than the desktop around it -- Isaac's own panels are dense and
+# render small, while the KDE shell at the same factor becomes oversized. One
+# number could not satisfy both, so there are two.
+_ALLOWED = {"scale", "app_scale"}
 _SCALE_CHOICES = ("1", "1.25", "1.5", "1.75", "2", "2.5", "3")
+# Goes higher than the desktop: Isaac is the one that needs turning way up.
+_APP_SCALE_CHOICES = ("1", "1.25", "1.5", "1.75", "2", "2.5", "3", "3.5", "4")
 
 
 def _load() -> dict:
@@ -53,10 +59,11 @@ def set_prefs(app_id: str, user: str, prefs: dict) -> dict:
     for k, v in (prefs or {}).items():
         if k not in _ALLOWED:
             continue
-        if k == "scale":
+        if k in ("scale", "app_scale"):
             v = str(v)
-            if v not in _SCALE_CHOICES:
-                raise ValueError(f"scale must be one of {', '.join(_SCALE_CHOICES)}")
+            allowed = _APP_SCALE_CHOICES if k == "app_scale" else _SCALE_CHOICES
+            if v not in allowed:
+                raise ValueError(f"{k} must be one of {', '.join(allowed)}")
         clean[k] = v
     with _lock:
         data = _load()
@@ -77,15 +84,17 @@ def env_for(app_id: str, user: str) -> dict:
     env = {}
     if p.get("scale"):
         env["QT_SCALE_FACTOR"] = str(p["scale"])
-        # Kit ignores QT_SCALE_FACTOR, so an app built on it needs the same
-        # number passed its own way (see the isaac-launch wrapper). Harmless
-        # for images that do not use it.
-        env["SM_UI_SCALE"] = str(p["scale"])
+    # Kit ignores QT_SCALE_FACTOR and needs its own number (see the
+    # isaac-launch wrapper). Falls back to the desktop scale when no separate
+    # app scale is set, so the single-slider behaviour still holds.
+    app_scale = p.get("app_scale") or p.get("scale")
+    if app_scale:
+        env["SM_UI_SCALE"] = str(app_scale)
     return env
 
 
 def choices() -> dict:
-    return {"scale": list(_SCALE_CHOICES)}
+    return {"scale": list(_SCALE_CHOICES), "app_scale": list(_APP_SCALE_CHOICES)}
 
 
 def apply_live(app_id: str, user: str, container: str) -> dict:
@@ -105,9 +114,12 @@ def apply_live(app_id: str, user: str, container: str) -> dict:
     taking the panel with it. Read from a live session process rather than
     assumed.
     """
-    scale = (get(app_id, user) or {}).get("scale")
-    if not scale:
+    prefs = get(app_id, user) or {}
+    scale = prefs.get("scale")
+    app_scale = prefs.get("app_scale") or scale
+    if not scale and not app_scale:
         return {"applied": False, "reason": "no scale set"}
+    scale = scale or "1"
     # Isaac (Kit) reads its scale at startup and ignores QT_SCALE_FACTOR, so
     # the app itself has to be relaunched for the two to match. Done inside the
     # same session, so the container and everything else keep running -- this
@@ -139,12 +151,12 @@ def apply_live(app_id: str, user: str, container: str) -> dict:
         '  pkill -x kit; '
         '  for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -x kit >/dev/null || break; sleep 1; done; '
         '  pgrep -x kit >/dev/null && { pkill -9 -x kit; sleep 2; }; '
-        f'  SM_UI_SCALE={scale} nohup /usr/local/bin/isaac-launch >/tmp/sm-isaac.log 2>&1 & '
+        f'  SM_UI_SCALE={app_scale} nohup /usr/local/bin/isaac-launch >/tmp/sm-isaac.log 2>&1 & '
         'fi; true'
     )
     from . import docker_backend
     res = docker_backend._docker(
         ["exec", "-u", "1000", container, "sh", "-c", script], timeout=40)
     ok = res.returncode == 0
-    return {"applied": ok, "scale": scale,
+    return {"applied": ok, "scale": scale, "app_scale": app_scale,
             "reason": "" if ok else "the desktop shell did not come back"}
