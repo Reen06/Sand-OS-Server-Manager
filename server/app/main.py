@@ -29,18 +29,31 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 # Hub-side, since a different node could have a different home dir).
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
+# (timestamp, sha) — the timestamp is only a "have we read it yet" flag now,
+# since the answer is fixed for the life of the process (see _git_sha).
 _GIT_SHA_CACHE: tuple[float, str] = (0.0, "")
-_GIT_SHA_TTL = 60.0
 
 
 def _git_sha() -> str:
-    """This node's current git HEAD — cached briefly since sm_info() is on a
-    hot polling path and a subprocess call per poll would be needless
-    overhead (mirrors registry._INSTALLED_CACHE's shape)."""
+    """The commit THIS PROCESS is running — read once, at import, and never
+    re-read.
+
+    Deliberately not the repo's live HEAD. Auto-update decides a node is done
+    by comparing this against the target, and updating is two steps: move the
+    checkout, then restart the service onto it. Reporting live HEAD answers the
+    first and calls the job finished, so a restart that fails leaves a node
+    reporting the new commit while still running the old code — and because it
+    now looks up to date, it is skipped on every pass afterwards and never
+    retried. Confirmed live: a node sat on stale code for a day that way, with
+    a clean checkout and nothing logged as wrong.
+
+    Pinning it to what was actually loaded makes the two steps distinguishable.
+    A node that pulled but did not restart keeps reporting the old commit,
+    stays visibly stale, and gets retried until the restart really happens.
+    """
     global _GIT_SHA_CACHE
     ts, sha = _GIT_SHA_CACHE
-    now = time.monotonic()
-    if now - ts < _GIT_SHA_TTL:
+    if ts:
         return sha
     try:
         r = subprocess.run(["git", "-C", str(_REPO_ROOT), "rev-parse", "HEAD"],
@@ -48,7 +61,11 @@ def _git_sha() -> str:
         sha = r.stdout.strip() if r.returncode == 0 else ""
     except Exception:
         sha = ""
-    _GIT_SHA_CACHE = (now, sha)
+    # A failed read is not cached: leaving ts at 0 lets a later call retry,
+    # where caching "" would make the node permanently unidentifiable and so
+    # permanently skipped by auto-update (it requires a non-empty sha).
+    if sha:
+        _GIT_SHA_CACHE = (time.monotonic() or 1.0, sha)
     return sha
 
 
