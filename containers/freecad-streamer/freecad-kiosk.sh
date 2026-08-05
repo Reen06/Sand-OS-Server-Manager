@@ -1,10 +1,15 @@
 #!/bin/bash
-# Single-app kiosk launcher: stream FreeCAD ONLY — no KDE panel, wallpaper, or
-# desktop. Keeps KWin (the window manager / GL compositor) so FreeCAD's window
-# and 3D view work; removes plasmashell (the panel + desktop shell). FreeCAD is
-# maximized to fill the whole stream, and is RELAUNCHED if it exits/crashes so
-# closing it never leaves a dead black screen. (True teardown of the instance is
-# the Server Manager's job — on disconnect/idle — not "the user closed the app".)
+# FreeCAD launcher: starts FreeCAD maximised on the full KDE desktop.
+#
+# This was once a single-app kiosk that killed plasmashell and forced the
+# window fullscreen. That is deliberately reversed: the panel, wallpaper and
+# app menu stay, so a terminal or file manager is reachable without leaving
+# the stream. FreeCAD is maximised rather than fullscreen, because fullscreen
+# would cover the panel and defeat the point.
+#
+# FreeCAD is RELAUNCHED if it exits or crashes, so closing it never leaves a
+# dead black screen. (True teardown of the instance is the Server Manager's
+# job — on disconnect/idle — not "the user closed the app".)
 #
 # Used as the Exec of the KDE autostart entry (see freecad.desktop).
 export DISPLAY="${DISPLAY:-:0}"
@@ -17,12 +22,12 @@ export DISPLAY="${DISPLAY:-:0}"
     sleep 1
   done ) &
 
-# Remove the KDE shell (panel + wallpaper) once it appears; keep KWin. It does
-# not respawn, so a one-shot kill is enough.
-( for _ in $(seq 1 90); do
-    if pgrep -x plasmashell >/dev/null 2>&1; then pkill -x plasmashell 2>/dev/null; break; fi
-    sleep 1
-  done ) &
+# The KDE shell (panel + wallpaper) is deliberately LEFT RUNNING.
+#
+# This used to kill plasmashell for a single-app kiosk. The owner reversed that
+# decision: seeing the desktop is worth more than the few pixels the panel
+# costs -- you can reach a terminal, a file manager and the app menu without
+# leaving the stream, and FreeCAD is no longer the only thing you can do in it.
 
 # Restore the user's preferences from FreeCAD's own auto-backup before every
 # (re)launch. Verified empirically: the Server Manager tears an instance down
@@ -92,8 +97,12 @@ while true; do
   # is reliably "FreeCAD X.Y.Z" and nothing else in practice matches that.
   ( for _ in $(seq 1 120); do
       for wid in $(xdotool search --name '^FreeCAD [0-9]' 2>/dev/null); do
-        wmctrl -ir "$wid" -b remove,maximized_vert,maximized_horz 2>/dev/null
-        wmctrl -ir "$wid" -b add,fullscreen 2>/dev/null
+        # Maximised, not fullscreen: fullscreen covers the panel, which
+        # defeats the point of keeping the desktop. This fills the usable
+        # area and leaves KDE reachable. F11 inside FreeCAD still gives a
+        # true fullscreen when it is wanted.
+        wmctrl -ir "$wid" -b remove,fullscreen 2>/dev/null
+        wmctrl -ir "$wid" -b add,maximized_vert,maximized_horz 2>/dev/null
       done
       sleep 1
     done ) &
