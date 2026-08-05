@@ -92,39 +92,32 @@ RUN printf '%s\n' \
     '#!/bin/sh' \
     '# Scale Isaac to match the desktop. SM_UI_SCALE is set by the Server' \
     '# Manager from the user preference; empty means leave Kit alone.' \
-    's=""' \
-    '[ -r /run/sm-ui-scale ] && s="$(cat /run/sm-ui-scale)"' \
-    '[ -z "$s" ] && s="$SM_UI_SCALE"' \
-    'if [ -n "$s" ]; then' \
-    '  exec /isaac-sim/isaac-sim.sh --/app/window/dpiScaleOverride="$s" "$@"' \
-    'fi' \
+    '# Scale comes from the .kit files, which every Kit launch reads --' \
+    '# not from a CLI flag, which only some launch paths forward.' \
     'exec /isaac-sim/isaac-sim.sh "$@"' \
     > /usr/local/bin/isaac-launch && chmod +x /usr/local/bin/isaac-launch
 
-# Make the UI scale apply however Kit is started.
+# Kit UI scale, set where Kit itself reads it.
 #
-# isaaclab.sh does not go through isaac-launch -- `./isaaclab.sh -p train.py`
-# execs Kit directly -- so the scale set in the Hub panel never reached a Lab
-# training run. And container env is fixed at creation, so changing the scale
-# later could not affect it either.
+# NOT by appending --/app/window/dpiScaleOverride to the command line: an
+# earlier attempt wrapped isaaclab.sh to do that, and the flag reached
+# train.py's own argument parser instead of Kit, so Hydra rejected it and
+# every training run died with "unrecognized arguments". The launcher is the
+# wrong layer -- Kit is started many ways (isaaclab.sh, python directly,
+# AppLauncher) and only some of them forward unknown flags.
 #
-# Both launchers now read /run/sm-ui-scale if present (written live when the
-# setting changes) and fall back to the env baked at container creation.
-# Wrapping isaaclab.sh rather than editing it keeps the original intact.
-RUN mv /workspace/isaaclab/isaaclab.sh /workspace/isaaclab/.isaaclab-real.sh && \
-    printf '%s\n' \
-    '#!/bin/bash' \
-    '# Injects the Sand-OS UI scale, then defers to the real isaaclab.sh.' \
-    's=""' \
-    '[ -r /run/sm-ui-scale ] && s="$(cat /run/sm-ui-scale)"' \
-    '[ -z "$s" ] && s="$SM_UI_SCALE"' \
-    'if [ -n "$s" ]; then' \
-    '  exec /workspace/isaaclab/.isaaclab-real.sh "$@" --/app/window/dpiScaleOverride="$s"' \
-    'fi' \
-    'exec /workspace/isaaclab/.isaaclab-real.sh "$@"' \
-    > /workspace/isaaclab/isaaclab.sh && \
-    chmod +x /workspace/isaaclab/isaaclab.sh && \
-    chown 1000:1000 /workspace/isaaclab/isaaclab.sh
+# A .kit experience file is read on EVERY Kit startup regardless of how it was
+# invoked, so the setting belongs there. dpiScaleOverride is added to the
+# [settings.app.window] section that already exists in each one; the Server
+# Manager rewrites the value in place when the setting changes.
+RUN set -eux; \
+    for f in /isaac-sim/apps/*.kit /workspace/isaaclab/apps/*/*.kit; do \
+      [ -f "$f" ] || continue; \
+      grep -q '^\[settings.app.window\]' "$f" || continue; \
+      grep -q 'dpiScaleOverride' "$f" && continue; \
+      sed -i 's|^\[settings.app.window\]|[settings.app.window]\ndpiScaleOverride = 1.75|' "$f"; \
+    done; \
+    grep -l dpiScaleOverride /isaac-sim/apps/*.kit | head -3
 
 # Replace Selkies' caching service worker with a passthrough one.
 #

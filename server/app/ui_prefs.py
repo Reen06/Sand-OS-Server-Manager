@@ -129,7 +129,15 @@ def apply_live(app_id: str, user: str, container: str) -> dict:
     # Kit process started later -- which is exactly what happened with Lab's
     # train.py: it launches Kit directly and inherited a value set hours ago.
     script = (
-        f'printf %s {app_scale} > /run/sm-ui-scale 2>/dev/null || true; '
+        # Rewrite the Kit experience files, which every Kit launch reads --
+        # train.py, isaac-sim.sh, AppLauncher, all of them. Passing a CLI flag
+        # instead reached train.py's own parser and killed the run with
+        # "unrecognized arguments", so the launcher is the wrong layer.
+        # Takes effect the next time Kit starts; a run already going is
+        # untouched.
+        f'for f in /isaac-sim/apps/*.kit /workspace/isaaclab/apps/*/*.kit; do '
+        f'  [ -f "$f" ] && sed -i "s|^dpiScaleOverride = .*|dpiScaleOverride = {app_scale}|" "$f"; '
+        f'done 2>/dev/null || true; '
         'p=$(pgrep -x plasma_session | head -1); [ -n "$p" ] || exit 3; '
         'eval $(tr "\\0" "\\n" < /proc/$p/environ '
         '| grep -E "^(DISPLAY|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|XAUTHORITY)=" '
