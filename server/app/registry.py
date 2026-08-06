@@ -43,6 +43,31 @@ CATALOG: dict[str, AppDef] = {
         mode="per-user",
         internal_port=8080,
         gpu=True,
+        # Two Isaac generations, switchable from Manage version, because this
+        # is a 35 GB image on a machine that cannot be walked over to. Building
+        # 6.0 alongside 5.1 rather than over it means a beta that misbehaves
+        # costs a version switch instead of the only working Isaac on the node.
+        #
+        # 6.0 sits on the DEV channel deliberately: Isaac Sim 6.0 itself is GA,
+        # but Isaac Lab 3.0 is still beta, and its quaternion convention flips
+        # WXYZ -> XYZW. That is the kind of break that does not raise -- it just
+        # returns subtly wrong rotations -- so it should not be something anyone
+        # lands on without choosing it.
+        build_context="containers/isaac",
+        image_family="sm-isaac",
+        variants=[
+            AppVariant(
+                id="isaac-5", label="Isaac Sim 5.1 + Lab 2.3 (stable)",
+                channel="stable", image_tag="sm-isaac:5.1.0",
+                build_args={"ISAAC_IMAGE": "isaac-lab-base:latest"},
+            ),
+            AppVariant(
+                id="isaac-6", label="Isaac Sim 6.0.1 + Lab 3.0 (beta)",
+                channel="dev", image_tag="sm-isaac:6.0.1",
+                build_args={"ISAAC_IMAGE":
+                            "nvcr.io/nvidia/isaac-lab:3.0.0-beta2-post1"},
+            ),
+        ],
         encoder="nvh264enc",
         # Legibility on a streamed desktop. With resize=True the virtual display
         # matches the viewer's monitor, so on a large/high-DPI screen the KDE
