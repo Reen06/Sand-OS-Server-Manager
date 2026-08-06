@@ -94,6 +94,24 @@ RUN sed -i \
 # installable as a PWA without breaking the WebRTC stream.
 COPY freecad-sw.js /opt/gst-web/sw.js
 
+# Breeze Dark by default.
+#
+# The base image ships it as the look-and-feel package but does not set the
+# colour scheme, so apps that read ColorScheme rather than LookAndFeelPackage
+# came up light against a dark desktop. Setting both means the session is dark
+# from first boot with nothing to change by hand.
+RUN set -eux; \
+    for h in /home/ubuntu /root; do \
+      [ -d "$h" ] || continue; \
+      mkdir -p "$h/.config"; \
+      printf '%s\n' '[General]' 'ColorScheme=BreezeDark' \
+        'LookAndFeelPackage=org.kde.breezedark.desktop' 'widgetStyle=Breeze' \
+        >> "$h/.config/kdeglobals"; \
+      printf '%s\n' '[General]' 'ColorScheme=BreezeDark' \
+        >> "$h/.config/kdedefaults/kdeglobals" 2>/dev/null || true; \
+    done; \
+    chown -R 1000:1000 /home/ubuntu/.config 2>/dev/null || true
+
 # Stop a click-then-drag being read as a double-click that maximises.
 #
 # KWin's default titlebar double-click action is Maximize, with a 400ms

@@ -174,8 +174,19 @@ def apply_live(app_id: str, user: str, container: str) -> dict:
         'fi; true'
     )
     from . import docker_backend
+    # Run as whoever owns the KDE session, not a hardcoded uid. Isaac's session
+    # runs as the desktop user (1000); FreeCAD's base image runs it as ROOT
+    # with HOME=/home/ubuntu. Assuming 1000 meant every apply silently failed
+    # on FreeCAD -- the slider reported success and nothing on screen changed.
+    probe = docker_backend._docker(
+        ["exec", container, "sh", "-c",
+         "id -u $(ps -eo user,comm | awk '/plasma_session|startplasma/{print $1; exit}') 2>/dev/null || echo 0"],
+        timeout=15)
+    uid = (probe.stdout or "").strip() or "0"
+    if not uid.isdigit():
+        uid = "0"
     res = docker_backend._docker(
-        ["exec", "-u", "1000", container, "sh", "-c", script], timeout=40)
+        ["exec", "-u", uid, container, "sh", "-c", script], timeout=40)
     ok = res.returncode == 0
     return {"applied": ok, "scale": scale, "app_scale": app_scale,
             "reason": "" if ok else "the desktop shell did not come back"}
