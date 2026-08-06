@@ -472,11 +472,19 @@ def _mesh_path(user: str, m, app_id: str = "") -> str | None:
 
 
 def _mesh_target(user: str, m, app_id: str = "") -> str | None:
-    """Create and return the host path to bind-mount, or None if unavailable."""
-    if not _mesh_available():
-        return None
+    """Create and return the host path to bind-mount, or None if unavailable.
+
+    The mesh-mounted check cannot come first. A brokered node that cannot reach
+    the filer has no mount and never will, yet it does have files — pushed to
+    its own disk — and refusing here would make that path unreachable, which is
+    exactly what it did: every mount resolved to None on such a node and the
+    launch failed as though nothing had been sent. Ask _mesh_path what this
+    mount resolves to, and only then require a mount if the answer needs one.
+    """
     path = _mesh_path(user, m, app_id)
     if not path:
+        return None
+    if path.startswith(MESH_MOUNT) and not _mesh_available():
         return None
     try:
         os.makedirs(path, exist_ok=True)
