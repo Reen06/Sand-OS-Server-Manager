@@ -77,6 +77,25 @@ CATALOG: dict[str, AppDef] = {
             # shaders with it; the next start began from nothing every time.
             Mount(name="ov-shadercache", path="/home/ubuntu/.cache/ov",
                   scope="shared", storage="local"),
+            # The rest of the compilation artifacts, for the same reason and on
+            # the same terms. Measured on a running Sim: .cache/ov was being
+            # kept, while these four were thrown away with the container on
+            # every stop -- 178 MB of Kit cache among them, recompiled from
+            # nothing on the next start.
+            #
+            # kit/cache is Kit's own (shader + extension registry), and the
+            # three small ones are the driver's: CUDA JIT, GL shaders, and the
+            # Warp kernels Isaac Lab compiles. Small on disk, slow to rebuild.
+            # All shared, because none of it is anyone's data -- it is what
+            # this GPU produced from these binaries, identical for every user.
+            Mount(name="kit-cache", path="/isaac-sim/kit/cache",
+                  scope="shared", storage="local"),
+            Mount(name="nv-computecache", path="/home/ubuntu/.nv/ComputeCache",
+                  scope="shared", storage="local"),
+            Mount(name="nv-glcache", path="/home/ubuntu/.cache/nvidia",
+                  scope="shared", storage="local"),
+            Mount(name="warp-cache", path="/home/ubuntu/.cache/warp",
+                  scope="shared", storage="local"),
             # Kit's own state (preferences, layouts, extension data) is real
             # user data, so per-user rather than shared.
             Mount(name="ov-data", path="/home/ubuntu/.local/share/ov",
