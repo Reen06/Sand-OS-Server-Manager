@@ -39,8 +39,6 @@ CATALOG: dict[str, AppDef] = {
         internal_port=8080,
         gpu=True,
         encoder="nvh264enc",
-        # Omniverse Kit ignores QT_SCALE_FACTOR, so this app gets its own scale.
-        kit_app=True,
         # Legibility on a streamed desktop. With resize=True the virtual display
         # matches the viewer's monitor, so on a large/high-DPI screen the KDE
         # chrome and any Qt dialogs render at their default 96dpi and come out

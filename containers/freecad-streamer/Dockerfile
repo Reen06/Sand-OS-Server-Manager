@@ -85,24 +85,20 @@ RUN sed -i \
       -e 's#fetch("/publish/" + app.appName)#fetch("publish/" + app.appName)#g' \
       /opt/gst-web/app.js
 
-# Tab title: always the app's name, never Selkies'.
+# What this app's settings panel should offer.
 #
-# The client derives its title from the URL — `document.title = "Selkies - " +
-# app.appName`, where appName is a path segment. Served under the Hub's proxy
-# at /apps/stream/freecad/ that segment is "apps", so every streamed app opened
-# a tab reading "Selkies - apps": the same title for all of them, naming the
-# streaming technology rather than the thing you opened. It also overwrote the
-# correct title a moment after load, so the tab visibly changed from right to
-# wrong while you watched.
-#
-# Both assignments are replaced (one on first load, one on later appName
-# changes) — leaving either would let it flip back.
-RUN sed -i -E 's/document\.title = "Selkies - " \+ [A-Za-z_.]+/document.title = "FreeCAD"/g' \
-      /opt/gst-web/app.js \
- && grep -q 'document.title = "FreeCAD"' /opt/gst-web/app.js \
- && ! grep -q 'document.title = "Selkies - "' /opt/gst-web/app.js \
- && sed -i 's#<title>[^<]*</title>#<title>FreeCAD</title>#' /opt/gst-web/index.html \
- && grep -q '<title>FreeCAD</title>' /opt/gst-web/index.html
+# Declared by the IMAGE, not by the node's app registry, because it is a fact
+# about what is inside this container: FreeCAD is Qt, so QT_SCALE_FACTOR scales
+# all of it and one slider is the whole story. A second "app scale" here would
+# move and change nothing. Keeping it in the image means it travels with the
+# app to any mesh and cannot drift from a copy held somewhere else.
+LABEL sandos.ui.app_scale="false"
+
+# The tab title is NOT patched here. The Hub's proxy owns it: it knows which
+# app it launched, holds the title against the client's own retitling, and so
+# covers every streamed app at once without a rebuild. Baking a second copy
+# into this image would be one more place for the same fact to drift.
+
 # NOTE: the client's own `navigator.serviceWorker.register('./sw.js?ts=…')` is now
 # LEFT INTACT — it registers our passthrough SW below (so FreeCAD is installable).
 # (Previously this was rewritten to a getRegistrations().unregister() loop to kill

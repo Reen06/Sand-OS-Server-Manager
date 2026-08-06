@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import threading
 
 # Alongside the catalogue state, which is the node's existing convention for
@@ -93,22 +94,61 @@ def env_for(app_id: str, user: str) -> dict:
     return env
 
 
+# image id -> does it want its own app scale. Labels cannot change without a
+# rebuild, which produces a new id, so this never needs invalidating.
+_APP_SCALE_LABEL = "sandos.ui.app_scale"
+_label_cache: dict[str, bool] = {}
+
+
+def _image_wants_app_scale(app_id: str) -> bool:
+    """Does this app's IMAGE ask for a second, app-specific scale?
+
+    Read from the image rather than decided here, because it is a fact about
+    what is inside the container: a Qt app is scaled entirely by
+    QT_SCALE_FACTOR and a second slider would move and change nothing, while
+    an Omniverse Kit app ignores that variable and needs its own. The node
+    cannot know that about an arbitrary image — and a copy of the answer kept
+    node-side is a copy that drifts from the image it describes.
+
+    Absent label means no. A default of "yes" would put a dead control on
+    every app that has not been rebuilt, which is the failure this is fixing.
+    """
+    if not app_id:
+        return False
+    try:
+        from . import app_images, registry
+        app = registry.CATALOG.get(app_id) or registry.APPS.get(app_id)
+        if app is None:
+            return False
+        tag = app_images._image_tag(app)
+        host = app_images.active_docker_host(app_id)
+        args = ["docker"] + (["-H", host] if host else []) + [
+            "image", "inspect", tag,
+            "--format", "{{.Id}}|{{index .Config.Labels \"" + _APP_SCALE_LABEL + "\"}}"]
+        r = subprocess.run(args, capture_output=True, text=True, timeout=15)
+        if r.returncode != 0:
+            return False
+        img_id, _, raw = (r.stdout or "").strip().partition("|")
+        if img_id in _label_cache:
+            return _label_cache[img_id]
+        want = raw.strip().lower() in ("1", "true", "yes")
+        _label_cache[img_id] = want
+        return want
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def choices(app_id: str = "") -> dict:
     """Which scales this app can actually be offered.
 
-    app_scale is only real for an app whose own toolkit ignores
-    QT_SCALE_FACTOR — Isaac and anything else on Omniverse Kit. Offering it
-    everywhere put a second slider on apps where moving it changed nothing,
-    so the presence of the key is what tells the UI whether the control means
-    anything, and the UI needs no list of app names.
+    A second scale is only real for an app whose own toolkit ignores
+    QT_SCALE_FACTOR. Offering it everywhere put a slider on apps where moving
+    it changed nothing; the presence of the key is what tells the UI whether
+    the control means anything, so the UI needs no list of app names.
     """
     out = {"scale": list(_SCALE_CHOICES)}
-    if app_id:
-        from . import registry
-        app = registry.CATALOG.get(app_id)
-        if app is not None and not getattr(app, "kit_app", False):
-            return out
-    out["app_scale"] = list(_APP_SCALE_CHOICES)
+    if _image_wants_app_scale(app_id):
+        out["app_scale"] = list(_APP_SCALE_CHOICES)
     return out
 
 
