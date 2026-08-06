@@ -85,15 +85,6 @@ RUN sed -i \
       -e 's#fetch("/publish/" + app.appName)#fetch("publish/" + app.appName)#g' \
       /opt/gst-web/app.js
 
-# What this app's settings panel should offer.
-#
-# Declared by the IMAGE, not by the node's app registry, because it is a fact
-# about what is inside this container: FreeCAD is Qt, so QT_SCALE_FACTOR scales
-# all of it and one slider is the whole story. A second "app scale" here would
-# move and change nothing. Keeping it in the image means it travels with the
-# app to any mesh and cannot drift from a copy held somewhere else.
-LABEL sandos.ui.app_scale="false"
-
 # The tab title is NOT patched here. The Hub's proxy owns it: it knows which
 # app it launched, holds the title against the client's own retitling, and so
 # covers every streamed app at once without a rebuild. Baking a second copy
@@ -179,3 +170,14 @@ RUN set -eux; \
     chown -R 1000:1000 /home/ubuntu/.config /home/ubuntu/Desktop
 
 # Inherit the base image's ENTRYPOINT/CMD (starts Selkies + KDE). Do not override.
+
+# What this app's settings panel should offer.
+#
+# Declared by the IMAGE, not by the node's app registry, because it is a fact
+# about what is inside this container: FreeCAD is Qt, so QT_SCALE_FACTOR scales
+# all of it and one slider is the whole story. A second "app scale" here would
+# move and change nothing.
+#
+# LAST on purpose: a label is metadata, so adding or changing it rebuilds one
+# trivial layer instead of invalidating the whole image behind it.
+LABEL sandos.ui.app_scale="false"

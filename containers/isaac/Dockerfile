@@ -18,14 +18,6 @@ ARG ISAAC_IMAGE=isaac-lab-base:latest
 
 FROM ${ISAAC_IMAGE} AS isaac
 
-# What this app's settings panel should offer.
-#
-# Declared by the IMAGE because it is a fact about what is inside it: Isaac
-# renders its UI with Omniverse Kit, which ignores QT_SCALE_FACTOR entirely,
-# so the desktop slider leaves its panels untouched and it needs a scale of
-# its own. The node cannot know that about an arbitrary image, and a copy of
-# this fact held anywhere else is a copy that can drift.
-LABEL sandos.ui.app_scale="true"
 
 FROM ghcr.io/selkies-project/nvidia-egl-desktop:${SELKIES_TAG}
 USER root
@@ -279,3 +271,16 @@ RUN set -eux; \
     chown -R 1000:1000 /home/ubuntu/Desktop
 
 USER 1000
+
+# What this app's settings panel should offer.
+#
+# Declared by the IMAGE because it is a fact about what is inside it: Isaac
+# renders its UI with Omniverse Kit, which ignores QT_SCALE_FACTOR entirely,
+# so the desktop slider leaves its panels untouched and it needs a scale of
+# its own. The node cannot know that about an arbitrary image, and a copy of
+# this fact held anywhere else is a copy that can drift.
+#
+# LAST on purpose: a label is metadata, and putting it here means adding or
+# changing it rebuilds one trivial layer instead of invalidating the whole
+# image behind it.
+LABEL sandos.ui.app_scale="true"
