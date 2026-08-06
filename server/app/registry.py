@@ -39,6 +39,8 @@ CATALOG: dict[str, AppDef] = {
         internal_port=8080,
         gpu=True,
         encoder="nvh264enc",
+        # Omniverse Kit ignores QT_SCALE_FACTOR, so this app gets its own scale.
+        kit_app=True,
         # Legibility on a streamed desktop. With resize=True the virtual display
         # matches the viewer's monitor, so on a large/high-DPI screen the KDE
         # chrome and any Qt dialogs render at their default 96dpi and come out
@@ -86,52 +88,12 @@ CATALOG: dict[str, AppDef] = {
             Mount(name="home", path="/home/ubuntu/NAS", scope="per-user", storage="nfs"),
         ],
     ),
-    "isaac-lab": AppDef(
-        id="isaac-lab",
-        multi_node=True,
-        label="Isaac Lab",
-        icon="isaac-lab",
-        color="green",
-        desc="NVIDIA Isaac Lab - robot learning on top of Isaac Sim.",
-        # The SAME image as isaac-sim: isaac-lab-base carries both, so this
-        # costs no extra disk. SM_ISAAC_APP is what makes the two differ.
-        image=config.ISAAC_IMAGE,
-        kind="streamed",
-        mode="per-user",
-        internal_port=8080,
-        gpu=True,
-        mem_limit="32g",
-        encoder="nvh264enc",
-        resize=True,
-        # Opens a shell in the Lab workspace rather than a GUI: most Lab work
-        # is scripted training runs, not a single application window.
-        #
-        # SM_UI_SCALE is the DEFAULT Kit scale for this app -- what a fresh
-        # install or a new user gets without touching the settings panel. A
-        # saved app_scale preference overrides it (ui_prefs.env_for is merged
-        # over this), so it sets the starting point rather than fixing it.
-        env={"SM_ISAAC_APP": "lab", "SM_UI_SCALE": "1.75"},
-        keepalive_seconds=0,
-        mounts=[
-            # Compiled shaders. SHARED on purpose: these are GPU compilation
-            # artifacts, not user data, so Sim and Lab and every user reuse one
-            # cache -- compile once on this GPU, never again. Local storage,
-            # not NAS: a shader cache over NFS would be slower than recompiling.
-            #
-            # This is why every launch was slow. SM apps run with --rm, so
-            # stopping an app DELETES the container and 16 hours of compiled
-            # shaders with it; the next start began from nothing every time.
-            Mount(name="ov-shadercache", path="/home/ubuntu/.cache/ov",
-                  scope="shared", storage="local"),
-            # Kit's own state (preferences, layouts, extension data) is real
-            # user data, so per-user rather than shared.
-            Mount(name="ov-data", path="/home/ubuntu/.local/share/ov",
-                  scope="per-user", storage="local"),
-            Mount(name="ov-config", path="/home/ubuntu/.nvidia-omniverse",
-                  scope="per-user", storage="local"),
-            Mount(name="home", path="/home/ubuntu/NAS", scope="per-user", storage="nfs"),
-        ],
-    ),
+    # Isaac Lab is deliberately NOT a separate app.
+    #
+    # It shares one image with Isaac Sim (isaac-lab-base carries both), so a
+    # second entry meant two cards, two instances and two GPU containers for
+    # what is one environment — and the desktop already carries a shortcut for
+    # each. Open Isaac Sim and start Lab from its icon when it is wanted.
     "freecad": AppDef(
         id="freecad",
         multi_node=True,   # per-user; opens the user's own NAS home, same as any two of their apps already do

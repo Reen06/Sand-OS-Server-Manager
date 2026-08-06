@@ -112,6 +112,11 @@ class AppDef:
     # but breaks Selkies' client-rendered cursor at odd sizes — default off so the
     # cursor stays visible (the browser still scales the 1080p stream to fit).
     resize: bool = False
+    # This app renders its own UI with a toolkit that ignores QT_SCALE_FACTOR
+    # (Omniverse Kit), so it needs a SECOND scale of its own. Without the flag
+    # every app would be offered that setting, including the ones where it does
+    # nothing — a control that silently has no effect is worse than no control.
+    kit_app: bool = False
     # ── data + env ────────────────────────────────────────────────────────────
     mounts: list[Mount] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)

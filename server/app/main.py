@@ -1402,7 +1402,7 @@ def get_ui_prefs(app_id: str, request: Request):
     the client does not have to hardcode them."""
     user = _require_app(request, app_id)["username"]
     return {"ok": True, "prefs": ui_prefs.get(app_id, user),
-            "choices": ui_prefs.choices()}
+            "choices": ui_prefs.choices(app_id)}
 
 
 @app.post("/api/apps/{app_id}/ui-prefs")

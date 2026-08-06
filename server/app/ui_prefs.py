@@ -93,8 +93,23 @@ def env_for(app_id: str, user: str) -> dict:
     return env
 
 
-def choices() -> dict:
-    return {"scale": list(_SCALE_CHOICES), "app_scale": list(_APP_SCALE_CHOICES)}
+def choices(app_id: str = "") -> dict:
+    """Which scales this app can actually be offered.
+
+    app_scale is only real for an app whose own toolkit ignores
+    QT_SCALE_FACTOR — Isaac and anything else on Omniverse Kit. Offering it
+    everywhere put a second slider on apps where moving it changed nothing,
+    so the presence of the key is what tells the UI whether the control means
+    anything, and the UI needs no list of app names.
+    """
+    out = {"scale": list(_SCALE_CHOICES)}
+    if app_id:
+        from . import registry
+        app = registry.CATALOG.get(app_id)
+        if app is not None and not getattr(app, "kit_app", False):
+            return out
+    out["app_scale"] = list(_APP_SCALE_CHOICES)
+    return out
 
 
 def apply_live(app_id: str, user: str, container: str) -> dict:
