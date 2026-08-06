@@ -73,8 +73,13 @@ ensure_freecad_config_files() {
 
 # Keep FreeCAD up: launch it maximized; relaunch if it exits. Guard against a
 # tight crash loop (5 exits in under 5s each → give up so we don't spin).
-fast_fails=0
-while true; do
+# Run ONCE, not in a relaunch loop.
+#
+# Respawning was right when the desktop was hidden: closing FreeCAD left a
+# black screen with nothing behind it. Now the KDE session is visible, so it
+# fights the user instead -- closing the app brought it straight back, and
+# repeated exits stacked more windows. Exiting now just leaves you on the
+# desktop, where the app menu can start it again.
   ensure_freecad_config_files
   restore_freecad_prefs
   ensure_freecad_config_files
@@ -107,15 +112,6 @@ while true; do
       sleep 1
     done ) &
 
-  start="$(date +%s)"
-  /opt/freecad/AppRun "$@"
-  run_secs=$(( "$(date +%s)" - start ))
 
-  if [ "$run_secs" -lt 5 ]; then
-    fast_fails=$(( fast_fails + 1 ))
-    [ "$fast_fails" -ge 5 ] && { echo "FreeCAD exited <5s, 5x in a row — stopping kiosk loop"; break; }
-  else
-    fast_fails=0
-  fi
-  sleep 1
-done
+/opt/freecad/AppRun "$@"
+

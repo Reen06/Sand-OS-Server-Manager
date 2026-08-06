@@ -14,7 +14,10 @@ FROM ghcr.io/selkies-project/nvidia-egl-desktop:${BASE_TAG}
 #   (the Bundle repo lags). Override for stable / a different weekly with:
 #   --build-arg FREECAD_APPIMAGE_URL=https://github.com/FreeCAD/FreeCAD/releases/download/<tag>/<asset>.AppImage
 #   (stable: .../download/1.1.1/FreeCAD_1.1.1-Linux-x86_64-py311.AppImage)
-ARG FREECAD_APPIMAGE_URL=https://github.com/FreeCAD/FreeCAD/releases/download/weekly-2026.07.09/FreeCAD_weekly-2026.07.09-Linux-x86_64.AppImage
+# STABLE, not weekly. The weekly build announces itself as a development
+# version and warns against production use, which is not what this app is
+# for. Override with --build-arg to test a weekly.
+ARG FREECAD_APPIMAGE_URL=https://github.com/FreeCAD/FreeCAD/releases/download/1.1.1/FreeCAD_1.1.1-Linux-x86_64-py311.AppImage
 
 USER root
 
