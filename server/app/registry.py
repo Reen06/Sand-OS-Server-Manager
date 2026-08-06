@@ -27,6 +27,11 @@ _INSTALLED_TTL = 30.0
 # EMPTY library — only apps the owner adds ever appear on their dashboard.
 CATALOG: dict[str, AppDef] = {
     "isaac-sim": AppDef(
+        # Kit writes user.config.json (layouts, preferences) on a clean exit,
+        # and that file now lives on the NAS and follows the user — so the
+        # shutdown is worth waiting for. It is also a heavy process holding a
+        # live GPU context.
+        stop_grace=20,
         id="isaac-sim",
         multi_node=True,
         label="Isaac Sim",
@@ -585,6 +590,9 @@ CATALOG: dict[str, AppDef] = {
         ],
     ),
     "nextcloud": AppDef(
+        # Postgres has to finish its shutdown checkpoint before it is killed,
+        # or the next start replays the WAL at best and repairs at worst.
+        stop_grace=30,
         id="nextcloud",
         label="Nextcloud",
         icon="globe",       # whitelisted; the closest "cloud" glyph the Hub ships
@@ -822,6 +830,8 @@ CATALOG: dict[str, AppDef] = {
     # actually presses Start — same as every other app — so cataloguing it now
     # is free; just don't launch it until there's real headroom to spare.
     "onlyoffice": AppDef(
+        # Postgres + RabbitMQ + Redis: the same checkpoint argument, three times.
+        stop_grace=30,
         id="onlyoffice",
         label="OnlyOffice",
         icon="globe",

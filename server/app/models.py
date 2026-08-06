@@ -112,6 +112,14 @@ class AppDef:
     # but breaks Selkies' client-rendered cursor at odd sizes — default off so the
     # cursor stays visible (the browser still scales the 1080p stream to fit).
     resize: bool = False
+    # Seconds an app gets to shut down cleanly before it is killed.
+    #
+    # Everything used to be torn down with `docker rm -f` — an instant SIGKILL
+    # with no grace at all. For a Postgres sidecar that is a hard power-cut on
+    # a running database; for an app that saves state on exit it means the save
+    # never happens. Ten seconds matches Docker's own default and is plenty for
+    # a web app; raise it for anything with a database or a heavy shutdown.
+    stop_grace: int = 10
     # ── data + env ────────────────────────────────────────────────────────────
     mounts: list[Mount] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)

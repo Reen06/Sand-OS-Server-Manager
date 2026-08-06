@@ -79,12 +79,26 @@ def exists(name: str, host: str | None = None) -> bool:
     return _docker(["inspect", name], timeout=10, host=host).returncode == 0
 
 
-def stop(name: str, host: str | None = None) -> None:
-    # A container with an NFS-backed volume can take well over 30s to remove
-    # if the mount is momentarily slow (observed live: sm-nextcloud-db's
-    # removal alone timed out at 30s during ordinary use, no error on the NFS
-    # side at all — just NFS occasionally being slower than a short timeout
-    # allows for). Same reasoning as _ensure_nfs's mkdir timeout above.
+def stop(name: str, host: str | None = None, grace: int = 10) -> None:
+    """Ask the container to shut down, then remove it.
+
+    `docker rm -f` alone is an instant SIGKILL. That is a hard power-cut on a
+    database sidecar, and it means an app that writes its state on exit never
+    gets to. `docker stop` sends SIGTERM, waits `grace` seconds, and only then
+    kills — so a clean shutdown happens when the app is capable of one, and a
+    hung container still goes away.
+
+    Not every app benefits: FreeCAD was measured exiting on SIGTERM without
+    writing its preferences at all, which is why it also restores them from its
+    own backups at launch. The graceful stop is the correct default; that
+    workaround remains its fallback.
+
+    A container with an NFS-backed volume can take well over 30s to REMOVE if
+    the mount is momentarily slow (observed live: sm-nextcloud-db's removal
+    alone timed out at 30s during ordinary use, no error on the NFS side at
+    all). The removal timeout keeps that headroom on top of the grace period.
+    """
+    _docker(["stop", "-t", str(max(0, grace)), name], timeout=max(0, grace) + 30, host=host)
     _docker(["rm", "-f", name], timeout=90, host=host)
 
 
@@ -782,9 +796,14 @@ def _wait_service(inst: Instance, svc, timeout: int = 90, host: str | None = Non
 def teardown(name: str, app: AppDef, host: str | None = None) -> None:
     """Remove the primary, all sidecars, and the private network (if any),
     all on the daemon the app's image actually runs from."""
-    _docker(["rm", "-f", name], timeout=90, host=host)
+    # The primary goes first, and gracefully. Order is the point: the app has
+    # to finish writing to its database before the database is taken away, so
+    # killing them together — or the sidecar first — is how a shutdown corrupts
+    # something that a clean one would not.
+    grace = getattr(app, "stop_grace", 10)
+    stop(name, host=host, grace=grace)
     for svc in app.services:
-        _docker(["rm", "-f", f"{name}-{svc.name}"], timeout=90, host=host)
+        stop(f"{name}-{svc.name}", host=host, grace=grace)
     if app.services:
         _docker(["network", "rm", network_name(name)], timeout=15, host=host)
 
