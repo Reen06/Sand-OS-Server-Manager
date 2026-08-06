@@ -77,11 +77,25 @@ def mesh_mounted() -> bool:
     Checked rather than assumed: a node whose mount is down must fall back to
     the legacy tree instead of reading an empty directory, which would present
     every app with a NAS that looks intact and contains nothing.
+
+    Emptiness is NOT the test, though it used to be. A brokered node mounts
+    only its own staging directory, which is legitimately empty until somebody
+    stages a file — treating that as "not mounted" sent it down the retired NFS
+    path and made an app refuse to start on a node whose mount was perfectly
+    healthy. `ismount` already distinguishes a live mount from a plain local
+    directory, and a mount whose process died announces itself by raising on
+    read, so both real failures are still caught.
     """
-    try:
-        return os.path.ismount(NAS_MESH_MOUNT) and bool(os.listdir(NAS_MESH_MOUNT))
-    except OSError:
+    if not os.path.ismount(NAS_MESH_MOUNT):
         return False
+    try:
+        os.listdir(NAS_MESH_MOUNT)
+    except OSError:
+        # A FUSE mount whose process died without unmounting: still a
+        # mountpoint, but every read fails (ENOTCONN). That is the case worth
+        # catching, and it announces itself by raising.
+        return False
+    return True
 
 
 def nas_data_root() -> str:
