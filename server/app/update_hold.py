@@ -95,3 +95,96 @@ def release() -> dict:
     except FileNotFoundError:
         pass
     return status()
+
+
+# ── The guard auto-update actually runs ──────────────────────────────────────
+# Invoked on the node, immediately before `git reset --hard`. Exit code is the
+# whole interface:
+#
+#   0   proceed
+#   10  an explicit hold is in place
+#   11  uncommitted work, recent enough to still be someone's
+#
+# Anything else — module missing on an older node, interpreter gone — must also
+# mean proceed, so the updater treats only 10 and 11 as refusals. A guard that
+# fails closed would strand a node permanently on the first version that lacked
+# it, which is the silent-staleness failure this fleet has already paid for.
+
+# How long uncommitted changes hold an update off. Long enough to cover an
+# interrupted session; short enough that a file tweaked and forgotten does not
+# quietly freeze a node's updates forever. An explicit hold has no expiry —
+# that is the difference between "I am working here" and "something was left
+# lying around".
+DIRTY_WINDOW_SECONDS = 24 * 60 * 60
+
+EXIT_OK, EXIT_HELD, EXIT_DIRTY = 0, 10, 11
+
+
+def dirty_status() -> dict:
+    """Uncommitted work in the checkout, and how recent it is.
+
+    Age comes from the most recently touched changed file rather than from a
+    marker written when the dirt appeared: nothing has to have recorded the
+    edit for the age to be right, which matters because the common case is
+    somebody editing directly with no tooling involved at all.
+    """
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", _REPO_ROOT, "status", "--porcelain"],
+                           capture_output=True, text=True, timeout=30)
+    except Exception:  # noqa: BLE001
+        return {"dirty": False, "unavailable": True}
+    if r.returncode != 0:
+        return {"dirty": False, "unavailable": True}
+    paths = []
+    for line in r.stdout.splitlines():
+        p = line[3:].strip() if len(line) > 3 else ""
+        if " -> " in p:            # rename: the destination is the live file
+            p = p.split(" -> ", 1)[1]
+        p = p.strip('"')
+        if p:
+            paths.append(p)
+    if not paths:
+        return {"dirty": False}
+    newest = 0.0
+    for p in paths:
+        try:
+            newest = max(newest, os.path.getmtime(os.path.join(_REPO_ROOT, p)))
+        except OSError:
+            continue               # deleted file: no mtime, and not the newest edit
+    age = max(0, int(time.time() - newest)) if newest else None
+    return {
+        "dirty": True,
+        "files": paths[:20],
+        "file_count": len(paths),
+        "age_seconds": age,
+        # Undatable dirt (every changed path deleted) is treated as stale rather
+        # than fresh: there is no work-in-progress to protect in a file that is
+        # not there, and guessing "recent" would hold the node off indefinitely.
+        "within_window": bool(age is not None and age < DIRTY_WINDOW_SECONDS),
+        "window_seconds": DIRTY_WINDOW_SECONDS,
+    }
+
+
+def guard() -> tuple[int, str]:
+    h = status()
+    if h.get("held"):
+        why = f" — {h['reason']}" if h.get("reason") else ""
+        return EXIT_HELD, f"held{why}"
+    d = dirty_status()
+    if d.get("dirty") and d.get("within_window"):
+        hrs = (d.get("age_seconds") or 0) / 3600.0
+        return EXIT_DIRTY, (f"{d['file_count']} uncommitted file(s), newest edited "
+                            f"{hrs:.1f}h ago (window {DIRTY_WINDOW_SECONDS // 3600}h)")
+    if d.get("dirty"):
+        hrs = (d.get("age_seconds") or 0) / 3600.0
+        return EXIT_OK, (f"{d['file_count']} uncommitted file(s) but newest is {hrs:.1f}h "
+                         f"old — past the window, updating anyway")
+    return EXIT_OK, "clean"
+
+
+if __name__ == "__main__":
+    import sys
+    code, reason = guard()
+    print(reason)
+    sys.exit(code)
