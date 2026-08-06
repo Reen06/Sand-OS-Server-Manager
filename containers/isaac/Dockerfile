@@ -284,3 +284,17 @@ USER 1000
 # changing it rebuilds one trivial layer instead of invalidating the whole
 # image behind it.
 LABEL sandos.ui.app_scale="true"
+
+# Create the cache directories the AppDef mounts, owned by the user Isaac runs
+# as. Docker copies a path's contents AND ownership into a new named volume
+# only when that path EXISTS in the image; for a path that does not, it creates
+# an empty directory owned by root. Isaac runs as ubuntu, so the three caches
+# that were absent here came up root-owned and unwritable -- Warp died on
+# startup with PermissionError on /home/ubuntu/.cache/warp, taking the whole
+# simulation with it. Creating them here is what makes the volumes inherit the
+# right owner instead.
+RUN mkdir -p /home/ubuntu/.cache/warp \
+             /home/ubuntu/.cache/nvidia \
+             /home/ubuntu/.nv/ComputeCache \
+ && chown -R ubuntu:ubuntu /home/ubuntu/.cache /home/ubuntu/.nv
+
