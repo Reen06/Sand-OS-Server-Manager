@@ -15,3 +15,6 @@ server/.busy_state.json
 
 # Vendored third-party Nextcloud app — fetched at container-build time, not committed
 containers/nextcloud/apps/user_saml/
+
+# auto-update hold marker (node-local, never committed)
+.sandos-hold

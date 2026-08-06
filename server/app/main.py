@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import app_images, app_storage, app_variants, busy, config, docker_backend, dockerhub_apps, files, glances_svc, hub_auth, hub_link, metrics, nas_roster, nas_shares, ollama_mgr, pending_imports, proxy, pwa, registry, snapshots, ui_prefs, usb_storage
+from . import app_images, app_storage, app_variants, busy, config, docker_backend, dockerhub_apps, files, glances_svc, hub_auth, hub_link, metrics, nas_roster, nas_shares, ollama_mgr, pending_imports, proxy, pwa, registry, snapshots, ui_prefs, usb_storage, update_hold
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -607,6 +607,35 @@ async def ensure_user_cookie(request: Request, call_next):
     return response
 
 
+class _HoldBody(BaseModel):
+    reason: str = ""
+
+
+@app.get("/api/sm/auto-update/hold")
+def get_update_hold(request: Request):
+    _require_identity(request)
+    return {"ok": True, **update_hold.status()}
+
+
+@app.post("/api/sm/auto-update/hold")
+def set_update_hold(request: Request, body: _HoldBody):
+    """Hold auto-update on THIS node while someone edits it.
+
+    Admin-only and never automatic: a machine that quietly stops accepting
+    updates is a failure mode this project has already been bitten by, so a
+    hold is always something a person chose, with a reason recorded.
+    """
+    ident = _require_admin(request)
+    who = (ident or {}).get("username") if isinstance(ident, dict) else ""
+    return {"ok": True, **update_hold.take(body.reason, held_by=who or "")}
+
+
+@app.delete("/api/sm/auto-update/hold")
+def clear_update_hold(request: Request):
+    _require_admin(request)
+    return {"ok": True, **update_hold.release()}
+
+
 @app.get("/api/sm/info")
 def sm_info():
     """Node identity + capabilities (UNAUTHENTICATED — no user data). The Hub
@@ -622,6 +651,10 @@ def sm_info():
         # a path Hub-side (a different node can have a different home dir).
         "git_sha": _git_sha(),
         "repo_root": str(_REPO_ROOT),
+        # Whether this node is holding auto-update off while someone works on
+        # it. Reported here so the Hub can skip it deliberately and say so,
+        # rather than the node silently reading as behind.
+        "auto_update_hold": update_hold.status(),
         # Busy mode: the Hub's Fleet tab mirrors these for the greyed-out
         # card + override button, but this node's own local state (busy.py)
         # is the real source of truth, not the Hub.
