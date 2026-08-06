@@ -84,6 +84,25 @@ RUN sed -i \
       -e 's#fetch("/turn")#fetch("turn")#g' \
       -e 's#fetch("/publish/" + app.appName)#fetch("publish/" + app.appName)#g' \
       /opt/gst-web/app.js
+
+# Tab title: always the app's name, never Selkies'.
+#
+# The client derives its title from the URL — `document.title = "Selkies - " +
+# app.appName`, where appName is a path segment. Served under the Hub's proxy
+# at /apps/stream/freecad/ that segment is "apps", so every streamed app opened
+# a tab reading "Selkies - apps": the same title for all of them, naming the
+# streaming technology rather than the thing you opened. It also overwrote the
+# correct title a moment after load, so the tab visibly changed from right to
+# wrong while you watched.
+#
+# Both assignments are replaced (one on first load, one on later appName
+# changes) — leaving either would let it flip back.
+RUN sed -i -E 's/document\.title = "Selkies - " \+ [A-Za-z_.]+/document.title = "FreeCAD"/g' \
+      /opt/gst-web/app.js \
+ && grep -q 'document.title = "FreeCAD"' /opt/gst-web/app.js \
+ && ! grep -q 'document.title = "Selkies - "' /opt/gst-web/app.js \
+ && sed -i 's#<title>[^<]*</title>#<title>FreeCAD</title>#' /opt/gst-web/index.html \
+ && grep -q '<title>FreeCAD</title>' /opt/gst-web/index.html
 # NOTE: the client's own `navigator.serviceWorker.register('./sw.js?ts=…')` is now
 # LEFT INTACT — it registers our passthrough SW below (so FreeCAD is installable).
 # (Previously this was rewritten to a getRegistrations().unregister() loop to kill
