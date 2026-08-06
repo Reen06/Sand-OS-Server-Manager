@@ -4,6 +4,58 @@ A running log of problems encountered and how they were resolved. Newest at top.
 
 ---
 
+## 2026-08-06 — A brokered node could read the entire NAS, and staging had never delivered a file
+
+**Symptom:** None visible. Found while making staged-file delivery work: the whole
+point of an app-only node is that it sees only the files handed to it, and it could
+see everything.
+
+**Root cause:** Trust was enforced by what a node could physically reach. An app-only
+node had no mount, so asking for `users/<name>` simply failed — the filesystem was the
+enforcement. Once every node gained a mesh mount (needed for apps to work at all), that
+stopped being true: the path resolved fine, and `_mesh_path` knew nothing about trust.
+On a node the Hub had marked app-only, and which correctly *knew* it was app-only, an
+app would have been handed the user's whole home, other people's shares, and the NAS
+root. The scope was known and then ignored.
+
+Staging itself had never worked either, for two compounding reasons: it wrote to the
+NAS host's own local tree, which only that host can see, and the node was meant to read
+it back over the NFS route retired the previous day — which never completed a single
+mount. So no file had ever reached a node this way.
+
+**Fix applied:** Three layers, because the first alone is not enough.
+
+1. `_mesh_path` now applies the scope in code: a brokered node resolves exactly one
+   path — the staging directory for THAT app instance — and everything else returns
+   None.
+2. Staged files moved onto the mesh, which every node shares, instead of the NAS host's
+   local tree. Verified by staging a real 2 GB file and reading it from the target node.
+3. **The mount itself is now scoped.** An app-only node mounts `/nas/staging/<node>`
+   rather than `/nas`, so the rest of the tree is *absent from its filesystem* rather
+   than merely withheld by policy. This is the one that matters: layers 1 and 2 keep
+   *apps* in their lane, but anyone with a shell on that box could still read the whole
+   NAS. Confirmed after the change: `users`, `shared`, `shares`, `images` are all
+   unreachable, and the mount root contains only the current instance's staged files.
+
+Two consequences had to be handled. `mesh_mounted()` required the mount to be non-empty,
+which is wrong for a scoped mount that legitimately has nothing staged yet — a healthy
+mount read as absent and sent the node down the retired NFS path. And the Hub flagged
+the scoped mount as `mount_violates_trust`, putting a red warning on precisely the
+arrangement that fixes the problem; it now distinguishes a full mount from a scoped one.
+
+**Prevention:** When enforcement is a side effect of infrastructure ("it can't reach it,
+so it can't read it"), it disappears silently the moment the infrastructure changes for
+an unrelated reason. Either enforce it explicitly, or make the infrastructure the
+enforcement on purpose — here, both. And a security property that has never been
+exercised should be assumed broken until tested: staging had never delivered a file, so
+nothing had ever proven the boundary held.
+
+**Still open:** `Work-Server` is `untrusted` in the Hub but appears under `app_only` in
+the NAS policy with a staging name. It currently has no mount, so nothing leaks, but the
+two disagree and should be reconciled before it is given one.
+
+---
+
 ## 2026-08-05 — Fleet session: Open WebUI had no models, auto-update was silently dead on one node, and "install on another server" never worked
 
 Eight real issues found across the Hub and the Server Manager, several of which had
