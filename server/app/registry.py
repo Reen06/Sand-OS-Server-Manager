@@ -96,11 +96,28 @@ CATALOG: dict[str, AppDef] = {
                   scope="shared", storage="local"),
             Mount(name="warp-cache", path="/home/ubuntu/.cache/warp",
                   scope="shared", storage="local"),
-            # Kit's own state (preferences, layouts, extension data) is real
-            # user data, so per-user rather than shared.
+            # Kit's own state -- preferences, window layouts, and the
+            # extensions the user installed -- follows the PERSON, not the
+            # machine. On the NAS rather than a node-local volume so starting
+            # Isaac on a different server gives you your own setup instead of
+            # defaults, which is the same promise FreeCAD already keeps.
+            #
+            # user.config.json (layouts, preferences) lives at
+            #   .local/share/ov/data/Kit/<app>/<ver>/user.config.json
+            # and installed extensions at .local/share/ov/data/exts -- the bulk
+            # of the 65 MB. Extensions are read at Kit startup, so this does put
+            # that read on the mesh; accepted deliberately, because an extension
+            # you installed not being there on another machine is exactly the
+            # kind of "seamless" this is meant to deliver.
             Mount(name="ov-data", path="/home/ubuntu/.local/share/ov",
-                  scope="per-user", storage="local"),
+                  scope="per-user", storage="nfs"),
             Mount(name="ov-config", path="/home/ubuntu/.nvidia-omniverse",
+                  scope="per-user", storage="nfs"),
+            # ...except the logs, which are pure churn: written continuously,
+            # read by nobody after the fact, and worth nothing on another
+            # machine. Nested under the NFS mount above so Docker's depth
+            # ordering lands it on top, keeping that write traffic off the NAS.
+            Mount(name="ov-logs", path="/home/ubuntu/.nvidia-omniverse/logs",
                   scope="per-user", storage="local"),
             Mount(name="home", path="/home/ubuntu/NAS", scope="per-user", storage="nfs"),
         ],
