@@ -787,6 +787,16 @@ def spawn(inst: Instance, app: AppDef) -> subprocess.CompletedProcess:
         args += ["--network", net]
     if app.gpu:
         args += ["--device", "nvidia.com/gpu=all", "-e", "NVIDIA_DRIVER_CAPABILITIES=all"]
+        # On WSL the GPU is visible but the VIDEO CODEC libraries are not.
+        # WSL keeps its NVIDIA userspace in /usr/lib/wsl/lib, and the CDI/gpus
+        # injection does not carry it, so libnvcuvid.so.1 is missing inside
+        # the container: GStreamer cannot create nvh264enc, returns None, and
+        # selkies dies with "'NoneType' object has no attribute set_property".
+        # Supervisor respawns it, the client re-handshakes, and the stream
+        # flickers between connecting and a new peer id forever.
+        if os.path.isdir("/usr/lib/wsl/lib"):
+            args += ["-v", "/usr/lib/wsl/lib:/usr/lib/wsl/lib:ro",
+                     "-e", "LD_LIBRARY_PATH=/usr/lib/wsl/lib"]
 
     # Web/UI port — localhost only (reachable solely via the SM proxy).
     args += ["-p", f"127.0.0.1:{inst.web_port}:{app.internal_port}"]
