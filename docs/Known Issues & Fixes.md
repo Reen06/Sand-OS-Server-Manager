@@ -232,10 +232,18 @@ work below.
 
 ### Still outstanding after this session
 
-- **The Hub's NFS export is still broken and still armed.** It is now unused by Vortex, but
-  any future node without a mesh mount will hit the same silent 120-second hang. Either
-  retire the export or fix the FUSE re-export properly; leaving it as-is guarantees the
-  next person repeats issue 8.
+- ~~**The Hub's NFS export is still broken and still armed.**~~ **Done (same day).** The
+  NFS route is retired in code: `_ensure_nfs` no longer attempts a mount that has never
+  completed, and instead says which of three things is actually wrong — no mesh mount on
+  this node, a mount with no place in the mesh, or brokered access whose staging is not
+  exported. Failure went from ~120 s to instant. The two legitimate non-failures are
+  untouched (a mount this node may not see; an app-only node's node-local settings), and
+  all five paths were verified. Note this also revealed that **brokered/app-only staging
+  is itself non-functional** — it used the same route, and the NAS host exports to no
+  app-only node at all. It now fails honestly rather than hanging, but it is not working
+  storage; wiring it up (or giving those nodes the mesh mount) is still open.
+  The Hub's `nfs-server` and its one leftover export are still running and can be torn
+  down whenever convenient — nothing uses them now.
 - **Vortex-Eclipse is set to "Reads the whole NAS."** Now that the mount is live this is
   real — it can see every user's files, not only the account running an app. Drop it to
   app-only if that is not intended.
