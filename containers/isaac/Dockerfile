@@ -123,6 +123,28 @@ RUN set -eux; \
     grep -l dpiScaleOverride /isaac-sim/apps/*.kit | head -3; \
     chown -R 1000:1000 /isaac-sim/apps /workspace/isaaclab/apps
 
+# Stop a click-then-drag being read as a double-click that maximises.
+#
+# KWin's default titlebar double-click action is Maximize, with a 400ms
+# window. Over a stream that is genuinely hard to avoid: network jitter
+# bunches two deliberate clicks together, so grabbing a title bar and dragging
+# it fullscreened the window instead. Setting the action to Nothing removes
+# the failure entirely rather than trying to tune the timing -- nobody was
+# relying on double-click-to-maximise, and the maximise button still works.
+#
+# The interval is also shortened so an accidental pair is less likely to be
+# merged anywhere else in the UI.
+RUN set -eux; \
+    for h in /home/ubuntu /root; do \
+      [ -d "$h" ] || continue; \
+      mkdir -p "$h/.config"; \
+      printf '%s\n' '[Windows]' 'TitlebarDoubleClickCommand=Nothing' \
+        >> "$h/.config/kwinrc"; \
+      printf '%s\n' '[KDE]' 'DoubleClickInterval=250' \
+        >> "$h/.config/kdeglobals"; \
+    done; \
+    chown -R 1000:1000 /home/ubuntu/.config 2>/dev/null || true
+
 # Replace Selkies' caching service worker with a passthrough one.
 #
 # The stock SW caches the client shell, so the browser keeps serving an old
