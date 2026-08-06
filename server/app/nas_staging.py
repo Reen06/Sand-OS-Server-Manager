@@ -46,8 +46,21 @@ def _safe_component(name: str) -> str:
     return n
 
 
+def _staging_root() -> str:
+    """Where staged files live.
+
+    On the mesh, not the NAS host's own tree. Staging is only useful if the node
+    the files are FOR can read it, and since the mesh migration that means the
+    cluster mount every node shares — the local tree is visible to the NAS host
+    alone. It previously sat there and was reached over NFS, a route that never
+    completed a single mount, which is why staging has never actually delivered
+    a file to a node.
+    """
+    return os.path.join(config.nas_data_root(), _STAGING)
+
+
 def _node_dir(node: str) -> str:
-    return os.path.join(config.NAS_ROOT, _STAGING, _safe_component(node))
+    return os.path.join(_staging_root(), _safe_component(node))
 
 
 def instance_dir(node: str, instance: str) -> str:
@@ -165,7 +178,7 @@ def list_staged(node: str | None = None) -> list[dict]:
     """What is currently exposed, and to whom — the answer to 'what can that
     box see right now', which should never require reading a filesystem by hand.
     """
-    root = os.path.join(config.NAS_ROOT, _STAGING)
+    root = _staging_root()
     out: list[dict] = []
     if not os.path.isdir(root):
         return out
@@ -210,7 +223,7 @@ def prune_orphans(known_nodes: list[str]) -> list[str]:
     """
     if not known_nodes:
         return []
-    root = os.path.join(config.NAS_ROOT, _STAGING)
+    root = _staging_root()
     if not os.path.isdir(root):
         return []
     keep = {n.strip() for n in known_nodes if n and n.strip()}

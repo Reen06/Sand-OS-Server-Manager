@@ -372,7 +372,44 @@ def _mesh_available() -> bool:
 
 
 def _mesh_path(user: str, m, app_id: str = "") -> str | None:
-    """Where this mount lives inside the mesh NAS, or None if it has no place."""
+    """Where this mount lives inside the mesh NAS, or None if it has no place.
+
+    BROKERED (app-only) NODES ARE HANDLED FIRST, and that ordering is the whole
+    point. Trust used to be enforced by what a node could physically reach: an
+    app-only node had no mount, so asking for `users/<name>` simply failed. Once
+    every node gained the mesh mount that stopped being true — the path resolves
+    perfectly well now — and this function, which knows nothing about trust,
+    would happily hand back the user's whole home, other people's shares, and
+    the NAS root. Confirmed live on a node the Hub had marked app-only.
+
+    So the scope has to be applied here, in code, rather than left to the
+    filesystem. An app-only node gets exactly one thing: the files staged for
+    THIS app instance. Everything else returns None, which the caller reads as
+    "no NAS home for this mount".
+    """
+    staging = nas_scope.staging_name()
+    if staging:
+        # The user's files mount becomes the staging directory for this
+        # instance — the files someone deliberately handed to this app, and
+        # nothing else. Note the instance, not just the app: two apps on one
+        # node cannot see each other's, and neither can a second user's.
+        if m.scope == "per-user" and m.name == "home":
+            if not app_id:
+                return None
+            from . import registry
+            inst = registry.instance_name(app_id, user)
+            path = os.path.join(MESH_MOUNT, "staging", _safe(staging), _safe(inst))
+            return path
+        # A named per-user mount is this app's own settings. Those stay
+        # node-local (None sends the caller to a local volume), because they
+        # are not the user's files and must survive the staging directory
+        # being cleared when the app stops.
+        if m.scope == "per-user":
+            return None
+        # Everything else — the whole tree, another user's home, a shared
+        # folder, a share this node was never given — is precisely what
+        # brokered access exists to withhold.
+        return None
     if m.scope == "root":
         return MESH_MOUNT
     if m.scope == "user-view":
