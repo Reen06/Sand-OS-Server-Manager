@@ -371,6 +371,23 @@ def _mesh_available() -> bool:
     return config.mesh_mounted()
 
 
+def _mesh_is_scoped() -> bool:
+    """Is this node's mesh mount rooted at its own staging directory?
+
+    A brokered node should mount `/nas/staging/<node>` rather than `/nas`, so
+    the rest of the NAS is absent from its filesystem entirely — not merely
+    unmounted by policy, but genuinely not there for anyone who logs into the
+    box. The absence of the fleet tree's own top-level directories is what
+    distinguishes the two, and it is observed rather than declared: a setting
+    saying "I am scoped" could be wrong, whereas a missing `users/` cannot be.
+    """
+    try:
+        return not os.path.isdir(os.path.join(MESH_MOUNT, config.NAS_USERS_SUBPATH))
+    except OSError:
+        return False        # unreadable mount: assume full, which is the safe
+                            # assumption here (it keeps paths under staging/)
+
+
 def _mesh_path(user: str, m, app_id: str = "") -> str | None:
     """Where this mount lives inside the mesh NAS, or None if it has no place.
 
@@ -398,8 +415,24 @@ def _mesh_path(user: str, m, app_id: str = "") -> str | None:
                 return None
             from . import registry
             inst = registry.instance_name(app_id, user)
-            path = os.path.join(MESH_MOUNT, "staging", _safe(staging), _safe(inst))
-            return path
+            # Where that instance's directory sits depends on how much of the
+            # cluster this node mounts, and both arrangements are legitimate:
+            #
+            #   scoped  — the node mounts ONLY its own staging directory, so
+            #             that directory IS the root it sees. This is the one
+            #             that actually isolates: the machine cannot read
+            #             anyone's files even from a shell, because they are
+            #             not in its filesystem at all.
+            #   full    — the node mounts the whole tree and is kept to its
+            #             staging directory by this function. Correct for
+            #             apps, but only for apps.
+            #
+            # Detected rather than configured: a scoped mount has none of the
+            # fleet tree's landmarks, which is a fact about the mount itself
+            # and cannot drift out of sync the way a per-node setting would.
+            if _mesh_is_scoped():
+                return os.path.join(MESH_MOUNT, _safe(inst))
+            return os.path.join(MESH_MOUNT, "staging", _safe(staging), _safe(inst))
         # A named per-user mount is this app's own settings. Those stay
         # node-local (None sends the caller to a local volume), because they
         # are not the user's files and must survive the staging directory
