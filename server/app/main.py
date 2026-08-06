@@ -654,7 +654,7 @@ def sm_info():
         # Whether this node is holding auto-update off while someone works on
         # it. Reported here so the Hub can skip it deliberately and say so,
         # rather than the node silently reading as behind.
-        "auto_update_hold": update_hold.status(),
+        "auto_update_hold": update_hold.report(),
         # Busy mode: the Hub's Fleet tab mirrors these for the greyed-out
         # card + override button, but this node's own local state (busy.py)
         # is the real source of truth, not the Hub.

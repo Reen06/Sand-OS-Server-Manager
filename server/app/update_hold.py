@@ -188,3 +188,23 @@ if __name__ == "__main__":
     code, reason = guard()
     print(reason)
     sys.exit(code)
+
+
+def report() -> dict:
+    """What the Hub is told about this node's update block.
+
+    Both reasons in one object, because from the Hub's side "why is this node
+    not updating" is a single question. `dirty_blocking` is the one the UI
+    needs: a dirty tree only blocks while it is inside the window, so the flag
+    answers "is it stopping an update right now" rather than the much weaker
+    "are there uncommitted files", which would light a warning up on a node
+    that is updating perfectly well.
+    """
+    h = status()
+    d = dirty_status()
+    h["dirty"] = bool(d.get("dirty"))
+    h["dirty_files"] = d.get("file_count", 0)
+    h["dirty_age_seconds"] = d.get("age_seconds")
+    h["dirty_blocking"] = bool(d.get("dirty") and d.get("within_window"))
+    h["dirty_window_seconds"] = d.get("window_seconds", DIRTY_WINDOW_SECONDS)
+    return h
