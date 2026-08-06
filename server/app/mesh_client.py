@@ -43,10 +43,16 @@ def _is_wsl() -> bool:
 
 
 def mesh_mounted() -> bool:
-    try:
-        return os.path.ismount(MESH_MOUNT) and bool(os.listdir(MESH_MOUNT))
-    except OSError:
-        return False
+    """Delegates to config.mesh_mounted rather than repeating it.
+
+    This used to be a second copy of the same three lines, and the copies
+    drifted the moment one was fixed: config's learned that an empty mount is
+    still a mount (a brokered node scoped to its own staging directory is
+    legitimately empty), while this one kept reporting such a node as having no
+    mount at all — so the Hub was told "no mount" about a node whose mount was
+    healthy and in use. One implementation, one answer.
+    """
+    return config.mesh_mounted()
 
 
 def can_mount_natively() -> bool:
