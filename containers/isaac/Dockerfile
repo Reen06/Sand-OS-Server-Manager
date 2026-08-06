@@ -239,4 +239,34 @@ RUN printf '%s\n' \
     | tee /usr/share/applications/isaac-sim.desktop \
           /etc/xdg/autostart/isaac-sim.desktop > /dev/null
 
+# Desktop shortcuts, so the session is usable without a terminal.
+#
+# Both apps ship BOTH icons on purpose: one image backs both catalogue entries,
+# and someone in Lab frequently wants the Sim GUI too (and vice versa). The
+# autostart entry decides which one OPENS; these decide what you can reach
+# once you are there.
+RUN set -eux; \
+    printf '%s\n' \
+      '[Desktop Entry]' 'Type=Application' 'Name=NVIDIA Isaac Sim' \
+      'Comment=Robotics simulation (Omniverse Kit)' \
+      'Exec=/usr/local/bin/isaac-launch' \
+      'Icon=/usr/share/pixmaps/isaac-sim.png' 'Terminal=false' \
+      'Categories=Science;Engineering;' \
+      > /usr/share/applications/isaac-sim.desktop; \
+    printf '%s\n' \
+      '[Desktop Entry]' 'Type=Application' 'Name=Isaac Lab Terminal' \
+      'Comment=Shell in /workspace/isaaclab, ready for train.py' \
+      'Exec=/usr/local/bin/isaaclab-launch' \
+      'Icon=utilities-terminal' 'Terminal=false' \
+      'Categories=Science;Development;' \
+      > /usr/share/applications/isaac-lab-terminal.desktop; \
+    for d in /home/ubuntu /root; do \
+      [ -d "$d" ] || continue; \
+      mkdir -p "$d/Desktop"; \
+      cp /usr/share/applications/isaac-sim.desktop "$d/Desktop/isaac-sim.desktop"; \
+      cp /usr/share/applications/isaac-lab-terminal.desktop "$d/Desktop/isaac-lab-terminal.desktop"; \
+      chmod +x "$d/Desktop/isaac-sim.desktop" "$d/Desktop/isaac-lab-terminal.desktop"; \
+    done; \
+    chown -R 1000:1000 /home/ubuntu/Desktop
+
 USER 1000
