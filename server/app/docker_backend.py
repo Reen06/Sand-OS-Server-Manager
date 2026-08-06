@@ -381,6 +381,13 @@ def _mesh_is_scoped() -> bool:
     distinguishes the two, and it is observed rather than declared: a setting
     saying "I am scoped" could be wrong, whereas a missing `users/` cannot be.
     """
+    # A node with no mount at all is not "scoped" — it has nothing. Without
+    # this the absent users/ directory read as evidence of scoping, so a node
+    # holding pushed files was told its files lived under a mount it does not
+    # have, and every path then failed the mount check. Presence of the mount
+    # is the precondition, not an afterthought.
+    if not _mesh_available():
+        return False
     try:
         return not os.path.isdir(os.path.join(MESH_MOUNT, config.NAS_USERS_SUBPATH))
     except OSError:
