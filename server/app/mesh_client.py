@@ -60,6 +60,22 @@ def can_mount_natively() -> bool:
     return not _docker_desktop()
 
 
+def _mount_is_scoped() -> bool:
+    """Is the mount rooted at this node's own staging directory?
+
+    Observed from the mount rather than declared: a scoped mount has none of
+    the fleet tree's top-level directories. A node claiming to be restricted
+    could be wrong; a missing `users/` cannot be.
+    """
+    import os
+    if not mesh_mounted():
+        return False
+    try:
+        return not os.path.isdir(os.path.join(MESH_MOUNT, config.NAS_USERS_SUBPATH))
+    except OSError:
+        return False
+
+
 def status() -> dict:
     """What this node needs in order to use the mesh NAS."""
     native = can_mount_natively()
@@ -78,4 +94,12 @@ def status() -> dict:
         # reality is visible rather than silent.
         "nas_host": config.NAS_HOST,
         "nas_root": config.NAS_ROOT,
+        # Whether this mount covers the whole cluster or only this node's own
+        # staging directory. A brokered node holding the FULL tree can be read
+        # by anyone with a shell on it, which is the thing staging exists to
+        # prevent; the same node scoped to its staging directory cannot. The
+        # Hub needs the difference to tell a real trust violation from a
+        # correctly-restricted node — otherwise the safe arrangement is the one
+        # that gets flagged.
+        "scoped": _mount_is_scoped(),
     }
