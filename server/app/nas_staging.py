@@ -284,3 +284,90 @@ def deposit(user: str, filename: str, data: bytes, subdir: str = "") -> dict:
         f.write(data)
     return {"ok": True, "name": os.path.basename(final),
             "path": os.path.relpath(final, home), "bytes": len(data)}
+
+
+# ── Pushed staging, for nodes that cannot mount the NAS ──────────────────────
+# A brokered node normally reads its staged files through a mesh mount scoped
+# to its own staging directory. A node that cannot reach the filer at all — a
+# machine behind someone else's firewall, reached only by its reverse link —
+# has no such mount and never will. Sending it the bytes is the only way its
+# apps can be given a file.
+#
+# That is a genuinely different arrangement, not a fallback, and it is kept
+# visibly separate for one reason: these files sit on a disk outside the NAS,
+# on a machine that is trusted less than the rest. Nothing prunes them by
+# accident, nothing syncs them back, and what the node holds is always
+# answerable — see list_pushed — so "what does that machine still have of
+# mine" has an honest answer at any moment.
+
+_PUSHED_ROOT = os.environ.get(
+    "SM_PUSHED_STAGING", os.path.expanduser("~/.sandos-sm/pushed-staging"))
+
+
+def pushed_dir(instance: str) -> str:
+    """This instance's pushed-file directory on THIS node's own disk."""
+    return os.path.join(_PUSHED_ROOT, _safe_component(instance))
+
+
+def receive_pushed(instance: str, filename: str, data: bytes) -> dict:
+    """Write one pushed file for an app instance.
+
+    The name is reduced to a single safe component: it arrives from another
+    machine, and a path separator in it would be a way out of the directory
+    rather than a filename worth preserving.
+    """
+    dest = pushed_dir(instance)
+    os.makedirs(dest, exist_ok=True)
+    name = _safe_component(os.path.basename(filename or "untitled"))
+    path = os.path.join(dest, name)
+    with open(path, "wb") as f:
+        f.write(data)
+    return {"name": name, "bytes": len(data), "dir": dest}
+
+
+def list_pushed(instance: str | None = None) -> list[dict]:
+    """What this node is actually holding, read off its disk.
+
+    Deliberately not a record the node keeps of what it was sent: the question
+    worth answering is what is on the machine now, and a written record would
+    be a second version of that truth, free to drift from it.
+    """
+    out = []
+    if not os.path.isdir(_PUSHED_ROOT):
+        return out
+    names = [instance] if instance else sorted(os.listdir(_PUSHED_ROOT))
+    for inst in names:
+        d = os.path.join(_PUSHED_ROOT, _safe_component(inst))
+        if not os.path.isdir(d):
+            continue
+        files = []
+        for fn in sorted(os.listdir(d)):
+            fp = os.path.join(d, fn)
+            try:
+                st = os.stat(fp)
+            except OSError:
+                continue
+            if os.path.isfile(fp):
+                files.append({"name": fn, "bytes": st.st_size,
+                              "pushed_at": int(st.st_mtime)})
+        out.append({"instance": inst, "dir": d, "files": files,
+                    "total_bytes": sum(f["bytes"] for f in files)})
+    return out
+
+
+def clear_pushed(instance: str | None = None) -> dict:
+    """Remove pushed files — one instance's, or every one on this node.
+
+    The whole-node form is what makes "leave nothing behind" a thing somebody
+    can actually do, rather than a promise about cleanup they have to trust.
+    """
+    removed = []
+    if not os.path.isdir(_PUSHED_ROOT):
+        return {"cleared": True, "removed": removed}
+    targets = [instance] if instance else list(os.listdir(_PUSHED_ROOT))
+    for inst in targets:
+        d = os.path.join(_PUSHED_ROOT, _safe_component(inst))
+        if os.path.isdir(d):
+            shutil.rmtree(d, ignore_errors=True)
+            removed.append(inst)
+    return {"cleared": True, "removed": removed}

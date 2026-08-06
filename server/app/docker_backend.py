@@ -432,6 +432,12 @@ def _mesh_path(user: str, m, app_id: str = "") -> str | None:
             # and cannot drift out of sync the way a per-node setting would.
             if _mesh_is_scoped():
                 return os.path.join(MESH_MOUNT, _safe(inst))
+            if not _mesh_available():
+                # No mount at all, and none possible: a node behind someone
+                # else's firewall cannot reach the filer. Its files are pushed
+                # to its own disk instead, so bind that.
+                from . import nas_staging
+                return nas_staging.pushed_dir(inst)
             return os.path.join(MESH_MOUNT, "staging", _safe(staging), _safe(inst))
         # A named per-user mount is this app's own settings. Those stay
         # node-local (None sends the caller to a local volume), because they

@@ -833,6 +833,47 @@ def sm_nas_stage(body: _StageBody, request: Request):
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/sm/nas/pushed")
+async def sm_nas_pushed_receive(request: Request):
+    """Receive one staged file for an app instance, onto this node's own disk.
+
+    For nodes that cannot mount the NAS at all. The bytes arrive rather than
+    being read, because a machine behind someone else's firewall has no route
+    to the filer and never will.
+    """
+    _require_identity(request)
+    from . import nas_staging
+    form = await request.form()
+    upload = form.get("file")
+    instance = str(form.get("instance") or "").strip()
+    if not instance:
+        raise HTTPException(400, "instance is required")
+    if upload is None or not hasattr(upload, "read"):
+        raise HTTPException(400, "no file uploaded")
+    data = await upload.read()
+    name = str(form.get("filename") or getattr(upload, "filename", "") or "untitled")
+    try:
+        return nas_staging.receive_pushed(instance, name, data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/sm/nas/pushed")
+def sm_nas_pushed_list(request: Request, instance: str = ""):
+    """What this node is currently holding, read off its disk."""
+    _require_identity(request)
+    from . import nas_staging
+    return {"ok": True, "held": nas_staging.list_pushed(instance or None)}
+
+
+@app.delete("/api/sm/nas/pushed")
+def sm_nas_pushed_clear(request: Request, instance: str = ""):
+    """Delete pushed files — one instance's, or every one on this node."""
+    _require_admin(request)
+    from . import nas_staging
+    return {"ok": True, **nas_staging.clear_pushed(instance or None)}
+
+
 class _InstanceBody(BaseModel):
     node: str
     instance: str
