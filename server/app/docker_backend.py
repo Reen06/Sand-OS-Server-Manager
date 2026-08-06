@@ -475,37 +475,63 @@ def _nfs_target(user: str, m, app_id: str = "") -> tuple[str, str]:
     return f"{config.NAS_USERS_SUBPATH}/{_safe(user)}", f"sm-nfs-users-{_safe(user)}"
 
 
-def _nfs_volume_create(vol: str, device: str, host: str | None = None) -> None:
-    if _docker(["volume", "inspect", vol], timeout=10, host=host).returncode != 0:
-        _docker(["volume", "create", "--driver", "local", "--opt", "type=nfs",
-                 "--opt", f"o=addr={config.NAS_HOST},rw,nfsvers=4",
-                 "--opt", f"device={device}", vol], timeout=15, host=host)
+# _nfs_volume_create removed with the NFS route (see _ensure_nfs). It only ever
+# produced volumes that could not be mounted, and a volume that exists but
+# cannot mount is worse than one never created: it fails at container start,
+# far from the code that made it. _nfs_target is kept — naming volumes is pure
+# string work, and app_storage uses it to find data written when this route was
+# believed to work.
 
 
 def _ensure_nfs(user: str, m, host: str | None = None, app_id: str = "") -> str:
-    """Ensure the NAS dir exists + an NFS-backed docker volume for it, in the
-    given daemon; return the volume name. The dir is created via a throwaway
-    mount of the NFS root, so this works from ANY node/daemon (the app node
-    need not be the NAS)."""
+    """RETIRED. Raises unless this mount has no NAS home in the first place.
+
+    This used to reach the NAS over NFS when the mesh mount was absent. It
+    never once succeeded: the NAS host re-exports a FUSE (SeaweedFS) mount over
+    kernel NFS, and the Hub's own records show no NFSv4 client has ever
+    completed a mount against it. What it did instead was hang — an incomplete
+    mount is uninterruptible, so the 120s timeout could not even kill it, and
+    the caller was left holding a timed-out `alpine mkdir` naming neither the
+    NAS nor the real cause.
+
+    That is worse than having no fallback. It cost a full debugging session:
+    FreeCAD would not start on a node, reporting a timed-out mkdir, when the
+    actual problem was that the node had never had `weed` installed and so had
+    no mesh mount. An honest error would have said so in seconds.
+
+    Both early returns are preserved exactly — a mount this node may not see,
+    and an app-only node's node-local settings, are legitimate answers rather
+    than failures. Only the genuinely-broken path now raises.
+    """
     subpath, vol = _nfs_target(user, m, app_id=app_id)
     if vol == _SKIP_MOUNT:
         return _SKIP_MOUNT     # do not attach this mount at all
     if not vol:
         return ""              # app-only node: caller falls back to a local volume
-    _nfs_volume_create("sm-nfs-root", ":/", host=host)       # NFSv4 pseudo-root
-    # A brand-new NFSv4 client establishing its first session/lease against the
-    # NAS can occasionally take well over 45s under load (observed live, not
-    # theoretical) — a fixed 45s Python subprocess timeout can't actually kill
-    # a process stuck on NFS I/O (uninterruptible D-state), so it just gives up
-    # and reports failure while the real `docker run` keeps going orphaned in
-    # the background, competing with the NEXT retry's own attempt at the exact
-    # same path. That pile-up of orphaned concurrent mkdirs is what made this
-    # look like a hard deadlock rather than occasional slowness. Give it real
-    # room instead of walking away early.
-    _docker(["run", "--rm", "-v", "sm-nfs-root:/r", "alpine",
-             "mkdir", "-p", f"/r/{subpath}"], timeout=120, host=host)   # dir on the NAS
-    _nfs_volume_create(vol, f":/{subpath}", host=host)
-    return vol
+    # Which of the three situations this is. "Mount the mesh" is useless advice
+    # on a node where it is already mounted, and an error that misdescribes the
+    # machine it came from is how the original timeout stayed misdiagnosed.
+    if nas_scope.staging_name():
+        raise RuntimeError(
+            f"{config.NODE_NAME} has brokered (app-only) NAS access, which reaches "
+            f"staged files over NFS from {config.NAS_HOST} — the route retired here, "
+            f"because no client ever completed a mount through it. Staging for this "
+            f"node is not currently exported on the NAS host either. Export it there, "
+            f"or give this node the mesh mount and a trust level that suits it.")
+    if not _mesh_available():
+        raise RuntimeError(
+            f"{config.NODE_NAME} has no mesh NAS mount at {config.NAS_MESH_MOUNT}, so "
+            f"it cannot provide NAS storage for this app. Mount it on that node "
+            f"(sandos-nas-mount.service, which needs the `weed` binary in "
+            f"/usr/local/bin) and start the app again. The NFS route this used to fall "
+            f"back to has been removed — it never completed a mount, and only turned a "
+            f"missing mesh mount into a two-minute timeout.")
+    raise RuntimeError(
+        f"{config.NODE_NAME} has the mesh NAS mounted at {config.NAS_MESH_MOUNT}, but "
+        f"this mount ({m.scope}/{m.name}) has no place inside it. That is a gap in the "
+        f"mount's definition rather than a setup problem on this node — the NFS route "
+        f"that used to absorb such cases has been removed, because it never completed "
+        f"a mount.")
 
 
 def _expand_mounts(user: str, mounts) -> list:
@@ -611,7 +637,12 @@ def _mount_args(app_id: str, user: str, mounts, host: str | None = None) -> list
                 nas_roster.prune_stale_mountpoints(vol, _view_children(m.path, mounts))
                 nas_roster.ensure_view_children(vol, _view_rel_paths(m.path, mounts))
         elif mode == "nfs" and config.NAS_ENABLED:
-            vol = _ensure_nfs(user, m, host=host, app_id=app_id)  # legacy single-server NFS
+            # No mesh path for this mount. Either it is one this node must not
+            # attach, or it is node-local settings on an app-only node — both
+            # answered inside. Anything else is a node that needs the NAS and
+            # has no mount, which _ensure_nfs now says plainly instead of
+            # timing out against an NFS route that never worked.
+            vol = _ensure_nfs(user, m, host=host, app_id=app_id)
             if vol == _SKIP_MOUNT:
                 continue          # fleet-shared data this node may not see
             if not vol:
