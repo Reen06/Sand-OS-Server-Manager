@@ -310,6 +310,136 @@ else
   $SUDO true
 fi
 
+# ── Docker prerequisite ───────────────────────────────────────────────────────
+# Docker is not optional — every app this manages is a container — but the old
+# check was `command -v docker`, which is wrong in both directions.
+#
+# It says "not installed" for a Docker that is installed and working. This
+# script runs under sudo, and sudo's secure_path deliberately does NOT include
+# /snap/bin, so a snap-installed Docker (the default on Ubuntu if you install
+# it from the Software store) is invisible to root while working perfectly for
+# the user who just installed it. Reported live: "Docker is required but not
+# installed" on a machine where `docker ps` runs fine.
+#
+# And it says "installed" for a Docker that cannot run anything, because a
+# binary on PATH says nothing about whether the daemon is up. That failure
+# surfaces much later, halfway through an install, as an unrelated-looking error.
+#
+# So: find it wherever it actually is, install it if it is genuinely absent,
+# and make sure the daemon is running before claiming success.
+
+# Where docker really is, ignoring PATH. Echoes the path, or nothing.
+_find_docker() {
+  local p
+  p="$(command -v docker 2>/dev/null)" && [ -n "$p" ] && { printf '%s' "$p"; return 0; }
+  # The places a docker binary lands that sudo's secure_path will not search.
+  for p in /usr/bin/docker /usr/local/bin/docker /snap/bin/docker \
+           /var/lib/snapd/snap/bin/docker /opt/docker/bin/docker; do
+    [ -x "$p" ] && { printf '%s' "$p"; return 0; }
+  done
+  return 1
+}
+
+# Is the daemon actually able to do work? This is the question that matters —
+# not whether a binary exists.
+_docker_works() { docker info &>/dev/null; }
+
+_install_docker() {
+  command -v apt-get &>/dev/null || return 1
+  local id="" codename=""
+  # shellcheck disable=SC1091
+  [ -r /etc/os-release ] && . /etc/os-release
+  id="${ID:-debian}"
+  # UBUNTU_CODENAME first: Ubuntu derivatives (Mint, Pop!_OS, Zorin) set their
+  # OWN VERSION_CODENAME, which Docker's repo has never heard of, and the
+  # install then fails on a 404 for a suite that does not exist.
+  codename="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
+  case "${ID_LIKE:-} $id" in
+    *ubuntu*) id="ubuntu" ;;
+    *debian*) [ "$id" = "ubuntu" ] || id="debian" ;;
+  esac
+  [ -n "$codename" ] || return 1
+
+  # Docker's own repo, not the distro's docker.io. Two hard requirements:
+  # CDI device support (`--device nvidia.com/gpu=all`, how GPU apps get the
+  # GPU) needs Docker 25+, and buildx is a separate plugin the distro package
+  # does not always carry. docker.io on an LTS release is regularly older than
+  # both, which produces a node that installs cleanly and then cannot start a
+  # GPU app.
+  # curl and ca-certificates are needed to fetch the signing key. A minimal
+  # server image (and most container/LXC templates) ships with neither, so
+  # this cannot assume them any more than it assumes Docker.
+  if ! command -v curl &>/dev/null || [ ! -e /etc/ssl/certs/ca-certificates.crt ]; then
+    $SUDO apt-get update -q >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -q curl ca-certificates >/dev/null 2>&1 || return 1
+  fi
+  $SUDO install -m 0755 -d /etc/apt/keyrings || return 1
+  $SUDO rm -f /etc/apt/keyrings/docker.asc
+  curl -fsSL "https://download.docker.com/linux/${id}/gpg" \
+    | $SUDO tee /etc/apt/keyrings/docker.asc >/dev/null || return 1
+  $SUDO chmod a+r /etc/apt/keyrings/docker.asc
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${id} ${codename} stable" \
+    | $SUDO tee /etc/apt/sources.list.d/docker.list >/dev/null || return 1
+  $SUDO apt-get update -q || return 1
+  DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -q \
+    docker-ce docker-ce-cli containerd.io docker-buildx-plugin >/dev/null 2>&1
+}
+
+_start_docker() {
+  # WSL without systemd has no units at all; `service` still works there, and
+  # a Docker Desktop-backed engine needs neither.
+  # Captured, not piped into `grep -q`: that exits at the first match, the
+  # producer dies on SIGPIPE, and pipefail then reports a FOUND unit as a
+  # failed pipeline — inverting the answer.
+  local _units=""
+  command -v systemctl &>/dev/null && _units="$(systemctl list-unit-files 2>/dev/null || true)"
+  if [ -n "$_units" ] && [[ "$_units" == *docker.service* ]]; then
+    $SUDO systemctl enable --now docker >/dev/null 2>&1 || true
+  elif command -v service &>/dev/null; then
+    $SUDO service docker start >/dev/null 2>&1 || true
+  fi
+  # Starting is not instant; give it a few seconds before declaring failure.
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    _docker_works && return 0
+    sleep 1
+  done
+  _docker_works
+}
+
+ensure_docker() {
+  local bin
+  if bin="$(_find_docker)"; then
+    # Found somewhere sudo would not have looked — put its directory on PATH
+    # so the ~40 later `docker ...` calls in this script resolve too, rather
+    # than failing one at a time further in.
+    case ":${PATH}:" in
+      *":$(dirname "$bin"):"*) ;;
+      *) PATH="$(dirname "$bin"):${PATH}"; export PATH
+         info "Found Docker at ${bin} (outside this shell's PATH)" ;;
+    esac
+  else
+    warn "Docker not found — installing it now (it is required for every app)."
+    if ! _install_docker; then
+      die "Could not install Docker automatically on this system.
+     Install it, then re-run this installer:
+       https://docs.docker.com/engine/install/"
+    fi
+    _find_docker >/dev/null || die "Docker installed but its binary is still not found."
+    ok "Docker installed"
+  fi
+
+  if ! _docker_works; then
+    info "Docker is present but not responding — starting the daemon…"
+    if ! _start_docker; then
+      die "Docker is installed but the daemon will not start.
+     Check:  sudo systemctl status docker
+     Then re-run this installer."
+    fi
+    ok "Docker daemon started"
+  fi
+}
+
 # Run a command AS a given user, whether or not we are already root.
 #
 # Not "$SUDO -u user cmd": $SUDO is empty when running as root — which is the
@@ -364,7 +494,7 @@ cat << 'INTRO'
 
 INTRO
 
-command -v docker &>/dev/null || die "Docker is required but not installed. Install Docker first."
+ensure_docker
 command -v python3 &>/dev/null || die "python3 is required but not found."
 # Having python3 is not the same as being able to build a venv. Debian ships
 # them as separate packages, so a bare Debian or Proxmox host passes the check
