@@ -681,6 +681,14 @@ def sm_info():
         # but the Hub needs it to know what to copy FROM when the NAS role moves
         # to another machine — guessing that path would be guessing at data.
         "nas_root": config.NAS_ROOT,
+        # What is physically plugged into this machine's USB ports — the
+        # drives it carries, and any dev board or serial device attached to
+        # it. Carried on this probe rather than a second endpoint because the
+        # Hub already polls this one every few seconds and the map wants it
+        # for every node at once; usb_inventory caches so the repeated polls
+        # cost nothing. Never raises: a node whose USB scan fails must still
+        # report the rest of itself.
+        "usb": _usb_safe(),
         # This node's contribution to the mesh NAS pool, so the Hub can build
         # the fleet-wide picture from the probe it already makes rather than a
         # second round-trip per node. Never raises: a node with no helper, or a
@@ -948,6 +956,21 @@ def _pool_sources_safe() -> dict:
         return {"sources": [], "total_bytes": 0, "used_bytes": 0,
                 "free_bytes": 0, "posix_free_bytes": 0,
                 "offline_sources": [], "app_hosting_bytes": 0}
+
+
+def _usb_safe() -> dict:
+    """USB inventory for the probe payload, or an empty shape.
+
+    Same rule as _pool_status_safe below: this rides the probe every node
+    depends on, so a machine with no lsusb, no lsblk, or a scan that simply
+    failed must still report everything else about itself. Losing a whole node
+    from the fleet because its USB scan broke would hide far more than it shows.
+    """
+    try:
+        from . import usb_inventory
+        return usb_inventory.list_all()
+    except Exception:  # noqa: BLE001
+        return {"storage": [], "peripherals": [], "ignored": 0, "at": 0}
 
 
 def _pool_status_safe() -> dict:
