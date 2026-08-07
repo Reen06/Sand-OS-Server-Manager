@@ -196,6 +196,22 @@ RUN printf '%s\n' \
     '# Isaac Lab: a shell in the Lab workspace with Isaac Sim on PATH, since' \
     '# most Lab work is scripted rather than a single GUI app.' \
     'cd /workspace/isaaclab 2>/dev/null || cd /isaac-sim' \
+    '# Drop VirtualGL from LD_PRELOAD for this terminal.' \
+    '#' \
+    '# The Selkies desktop preloads libdlfaker.so + libvglfaker.so to give X11' \
+    '# apps GPU-accelerated OpenGL. libdlfaker intercepts dlopen() -- and cuDNN' \
+    '# loads its own sub-libraries that way, so torch died with' \
+    '#   Unable to load any of {libcudnn_graph.so.9.10.2, ...}' \
+    '#   Invalid handle. Cannot load symbol cudnnCreate' \
+    '# the moment training touched the GPU, after the environment had already' \
+    '# built successfully. Proven by running the same training with and without' \
+    '# these two entries: identical failure, then a clean iteration.' \
+    '#' \
+    '# Isaac renders through Vulkan, not GLX, so it does not need VirtualGL --' \
+    '# a headed run in this terminal works without it. Only the two faker libs' \
+    '# are removed; the joystick interposer stays.' \
+    'LD_PRELOAD="$(printf %s "$LD_PRELOAD" | tr : "\\n" | grep -v -e vglfaker -e dlfaker | paste -sd:)"' \
+    'export LD_PRELOAD' \
     'exec konsole --noclose -e /bin/bash' \
     > /usr/local/bin/isaaclab-launch && chmod +x /usr/local/bin/isaaclab-launch
 
