@@ -204,6 +204,21 @@ def all_disks() -> list[dict]:
     def _part(p: str | None) -> str:
         return p or ""
 
+    def _num(v) -> int:
+        """lsblk's numeric fields, whatever type this util-linux hands back.
+
+        With -b these are byte counts, but older util-linux emits them as JSON
+        STRINGS while newer versions emit numbers — so arithmetic on them threw
+        TypeError on one machine and worked on another running the same code.
+        Coerce rather than trust the type.
+        """
+        if v is None or v == "":
+            return 0
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return 0
+
     disks = []
     for d in devices:
         if d.get("type") != "disk":
@@ -220,13 +235,12 @@ def all_disks() -> list[dict]:
                 "name": p.get("name", ""),
                 "uuid": p.get("uuid") or "",
                 "label": p.get("label") or "",
-                "size_bytes": p.get("size") or 0,
+                "size_bytes": _num(p.get("size")),
                 "fstype": fs,
                 "mountpoint": mp,
                 "mounted": bool(mp),
-                "avail_bytes": p.get("fsavail") or 0,
-                "used_bytes": (p.get("fssize") or 0) - (p.get("fsavail") or 0)
-                              if p.get("fssize") else 0,
+                "avail_bytes": _num(p.get("fsavail")),
+                "used_bytes": max(0, _num(p.get("fssize")) - _num(p.get("fsavail"))),
                 # The single fact that decides what this partition may be used
                 # for. Unformatted ("") is not POSIX-capable yet, but is a
                 # candidate for formatting, which the UI treats differently.
@@ -236,7 +250,7 @@ def all_disks() -> list[dict]:
         disks.append({
             "name": f"/dev/{d.get('name','')}",
             "model": (d.get("model") or "").strip(),
-            "size_bytes": d.get("size") or 0,
+            "size_bytes": _num(d.get("size")),
             "transport": (d.get("tran") or "").lower(),   # sata / usb / nvme
             "rotational": bool(d.get("rota")),            # spinning rust vs SSD
             "removable": bool(d.get("rm")) or bool(d.get("hotplug")),
