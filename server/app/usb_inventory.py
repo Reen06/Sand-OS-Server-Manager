@@ -35,6 +35,8 @@ import subprocess
 import threading
 import time
 
+from .usb_storage import _NON_POSIX_FSTYPES
+
 _TTL = 15.0                      # seconds; a plug/unplug shows up within this
 _lock = threading.Lock()
 _cache: dict = {}
@@ -167,6 +169,83 @@ def storage() -> list[dict]:
     return out
 
 
+def all_disks() -> list[dict]:
+    """EVERY real disk on this machine, not just the removable ones.
+
+    The USB view above answers "what is plugged in". This answers "what storage
+    does this machine have", which is the question the Hub's NAS settings need:
+    a bulk node's capacity is usually an internal SATA array that no USB scan
+    will ever see, and choosing where a pool lives is impossible without it.
+
+    Two things are reported that the raw device list does not give you, because
+    both are decisions the UI would otherwise have to make wrongly:
+
+      posix_ok  — whether the filesystem can hold Unix ownership. vfat/exfat/
+                  ntfs cannot, so they can carry bulk media but never user
+                  homes, and can never back a second dockerd. Surfaced per
+                  partition so the UI can say why a 2 TB drive is not offered
+                  as pool storage instead of silently omitting it.
+
+      is_system — whether this disk carries / or /boot. Never offer to
+                  repartition the disk the OS is running from.
+
+    loop and rom devices are excluded: a snap-heavy Ubuntu box has thirty-odd
+    loop mounts that are squashfs images of installed software, not storage.
+    """
+    try:
+        out = subprocess.run(
+            ["lsblk", "-J", "-b", "-o",
+             "NAME,TRAN,SIZE,LABEL,UUID,MOUNTPOINT,TYPE,HOTPLUG,FSTYPE,ROTA,RM,FSAVAIL,FSSIZE,MODEL"],
+            capture_output=True, text=True, timeout=10).stdout
+        devices = json.loads(out).get("blockdevices", [])
+    except Exception:  # noqa: BLE001
+        return []
+
+    def _part(p: str | None) -> str:
+        return p or ""
+
+    disks = []
+    for d in devices:
+        if d.get("type") != "disk":
+            continue
+        parts, is_system = [], False
+        for p in d.get("children") or []:
+            if p.get("type") not in ("part", "lvm", "crypt"):
+                continue
+            mp = _part(p.get("mountpoint"))
+            if mp in ("/", "/boot", "/boot/efi"):
+                is_system = True
+            fs = (p.get("fstype") or "").lower()
+            parts.append({
+                "name": p.get("name", ""),
+                "uuid": p.get("uuid") or "",
+                "label": p.get("label") or "",
+                "size_bytes": p.get("size") or 0,
+                "fstype": fs,
+                "mountpoint": mp,
+                "mounted": bool(mp),
+                "avail_bytes": p.get("fsavail") or 0,
+                "used_bytes": (p.get("fssize") or 0) - (p.get("fsavail") or 0)
+                              if p.get("fssize") else 0,
+                # The single fact that decides what this partition may be used
+                # for. Unformatted ("") is not POSIX-capable yet, but is a
+                # candidate for formatting, which the UI treats differently.
+                "posix_ok": bool(fs) and fs not in _NON_POSIX_FSTYPES,
+                "formatted": bool(fs),
+            })
+        disks.append({
+            "name": f"/dev/{d.get('name','')}",
+            "model": (d.get("model") or "").strip(),
+            "size_bytes": d.get("size") or 0,
+            "transport": (d.get("tran") or "").lower(),   # sata / usb / nvme
+            "rotational": bool(d.get("rota")),            # spinning rust vs SSD
+            "removable": bool(d.get("rm")) or bool(d.get("hotplug")),
+            "is_system": is_system,
+            "partitions": parts,
+        })
+    return disks
+
+
 def list_all(force: bool = False) -> dict:
     global _cache, _cache_at
     with _lock:
@@ -176,6 +255,10 @@ def list_all(force: bool = False) -> dict:
         periph, ignored = peripherals()
         _cache = {
             "storage": storage(),
+            # Every disk, not just the removable ones — what the Hub's NAS
+            # settings need in order to offer a real choice of where storage
+            # lives.
+            "disks": all_disks(),
             "peripherals": periph,
             "ignored": ignored,
             "at": int(time.time()),
