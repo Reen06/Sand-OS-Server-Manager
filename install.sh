@@ -440,6 +440,58 @@ ensure_docker() {
   fi
 }
 
+# Find a Sand-OS Hub on this machine's own /24, so the installer can offer a
+# real default instead of making the operator go and look the address up.
+#
+# Probes /api/fleet/nas-host, which is unauthenticated precisely so a node that
+# has no Hub session yet can ask this question, and which answers with a JSON
+# object naming the fleet's NAS host — a signature no other service on a home
+# network is going to return by accident.
+#
+# Bounded on purpose: 2-second timeouts, 40 at a time, and it gives up rather
+# than delaying an install for a network where there is no Hub to find.
+_discover_hub() {
+  local base tmp ip out found=""
+  command -v curl &>/dev/null || return 1
+  base="$(printf '%s' "${SM_LAN_IP:-}" | awk -F. 'NF==4{print $1"."$2"."$3}')"
+  [ -n "$base" ] || return 1
+  tmp="$(mktemp -d)" || return 1
+  for ip in $(seq 1 254); do
+    {
+      # Captured, not piped into grep -q: that exits at the first match, curl
+      # dies on SIGPIPE, and pipefail then turns a HIT into a failed pipeline.
+      out="$(curl -fsSk --max-time 2 "https://${base}.${ip}/api/fleet/nas-host" 2>/dev/null || true)"
+      # Newline-terminated: without it `cat hit.*` runs consecutive hits
+      # together into one nonsense address. A Hub with two LAN addresses (eth0
+      # and wlan0, as this one has) answers on both, so multiple hits for a
+      # single Hub is the normal case, not an edge one.
+      # Record the address we reached AND the host the Hub names in its reply,
+      # so the choice below can prefer the Hub's own canonical address.
+      case "$out" in *'"host"'*)
+        printf '%s %s\n' "${base}.${ip}" \
+          "$(printf '%s' "$out" | sed -n 's/.*"host"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')" \
+          > "${tmp}/hit.${ip}" ;;
+      esac
+    } &
+    while [ "$(jobs -rp 2>/dev/null | wc -l)" -ge 40 ]; do wait -n 2>/dev/null || break; done
+  done
+  wait 2>/dev/null || true
+  # A Hub with several LAN addresses answers on each, and picking whichever
+  # sorts first gives an address the rest of the fleet does not use — this one
+  # answers on both .117 and .177 while every existing node is configured with
+  # .177. Prefer an address the Hub itself names, falling back to whatever we
+  # reached. Note the named host is the fleet's NAS host, which is usually but
+  # not necessarily the Hub, so it is only accepted when we actually reached a
+  # Hub at that same address.
+  local hits canonical
+  hits="$(cat "${tmp}"/hit.* 2>/dev/null || true)"
+  canonical="$(printf '%s\n' "$hits" | awk 'NF==2 && $1==$2 {print $1; exit}')"
+  found="${canonical:-$(printf '%s\n' "$hits" | awk 'NF>=1{print $1; exit}')}"
+  rm -rf "$tmp"
+  [ -n "$found" ] || return 1
+  printf 'https://%s' "$found"
+}
+
 # Run a command AS a given user, whether or not we are already root.
 #
 # Not "$SUDO -u user cmd": $SUDO is empty when running as root — which is the
@@ -834,7 +886,32 @@ cat << 'DESC'
 
 DESC
 
-SM_HUB_URL=$(read_auto "Hub URL  (e.g. https://10.0.0.177 — blank for standalone)" "$(_env_or SM_HUB_URL "$ENROLL_HUB_BASE")")
+# Which Hub this node joins is the most consequential answer in this script,
+# and it was asked with read_auto — which only prompts under --advanced. In
+# normal mode it silently took its default, and with no enrollment link that
+# default is blank, so a plain `sudo bash install.sh` could ONLY ever produce a
+# standalone node. Reported live: a machine meant to join the mesh came up
+# standalone, and because the Hub is also where the fleet's NAS host is
+# discovered, its NAS then defaulted to itself as well.
+#
+# read_auto's own rule is "did the installer work this out" vs "is this a
+# decision only the operator can make". A blank Hub URL is not a value the
+# installer worked out — it is the absence of one, and "blank means standalone"
+# is a real choice, not a derived default. So: use a value when we genuinely
+# have one (an enrollment link, or a Hub found on this network), and otherwise
+# always ask, in every mode.
+_hub_default="$(_env_or SM_HUB_URL "$ENROLL_HUB_BASE")"
+if [ -z "$_hub_default" ]; then
+  info "Looking for a Sand-OS Hub on this network…"
+  _hub_default="$(_discover_hub || true)"
+  [ -n "$_hub_default" ] && ok "Found a Hub at ${_hub_default}" \
+                         || warn "No Hub found automatically — enter its URL below"
+fi
+if [ -n "$_hub_default" ]; then
+  SM_HUB_URL=$(read_auto "Hub URL  (e.g. https://10.0.0.177 — blank for standalone)" "$_hub_default")
+else
+  SM_HUB_URL=$(read_val "Hub URL  (e.g. https://10.0.0.177 — blank for standalone)" "")
+fi
 # A bare IP/hostname with no scheme (an easy slip — "just the IP" instead of
 # the full URL) doesn't fail here; it silently gets written into the env
 # file as-is and only crashes later, deep in an unrelated request handler,
