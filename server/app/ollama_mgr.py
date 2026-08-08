@@ -503,6 +503,13 @@ def set_lan_access(enabled: bool) -> dict:
     container pulled out from under it, which would drop whatever is mid-
     generation. `pending` is the honest answer to "is this live yet".
     """
+    # Refused outright off the home network, rather than saved and quietly
+    # ignored: a stored "on" that never takes effect reads as exposure that
+    # exists, and someone would eventually act on that belief.
+    if enabled and not lan_exposure_allowed():
+        return {"ok": False, "lan_enabled": False, "lan_allowed": False,
+                "error": "this server is not on the home network — Ollama can only "
+                         "be reached through the WireGuard tunnel"}
     try:
         if enabled:
             os.makedirs(os.path.dirname(_LAN_STATE_FILE), exist_ok=True)
@@ -514,17 +521,47 @@ def set_lan_access(enabled: bool) -> dict:
                 pass
     except OSError as e:
         return {"ok": False, "error": str(e)}
-    return {"ok": True, "lan_enabled": enabled, "pending": ollama_running()}
+    return {"ok": True, "lan_enabled": enabled, "lan_allowed": True,
+            "pending": ollama_running()}
+
+
+# Nodes whose own address is a WireGuard address are not on the home network —
+# they reach the fleet through the tunnel from somebody else's LAN. Overridable
+# because the subnet is a property of the deployment, not of this code.
+WG_SUBNET = os.environ.get("SM_WG_SUBNET", "10.79.114.0/24")
+
+
+def lan_exposure_allowed() -> bool:
+    """Whether this node may publish Ollama on all interfaces.
+
+    False for a node that is not on the home network. Publishing there means
+    0.0.0.0 on somebody else's LAN — an unauthenticated LLM API offered to a
+    network we neither own nor trust — and it buys nothing, because such a node
+    is reached through the tunnel it dialled out on, never by an inbound
+    connection to that port.
+
+    Decided from the node's own address rather than from anything the Hub says,
+    so it still holds if the API is called directly. A machine cannot talk
+    itself out of this by losing contact with the Hub.
+    """
+    import ipaddress
+    try:
+        return ipaddress.ip_address(config.LAN_IP) not in ipaddress.ip_network(
+            WG_SUBNET, strict=False)
+    except ValueError:
+        return True     # undetermined address: keep the existing behaviour
 
 
 def lan_port_args() -> list[str]:
     """The -p flags Ollama's container is created with.
 
-    Bound to loopback when LAN access is off. The port is still published, so
-    everything on the node itself — the SM proxy, and Open WebUI reaching it by
-    container name — is unaffected; it simply stops answering other machines.
+    Bound to loopback when LAN access is off, and ALWAYS on a node that is not
+    on the home network — see lan_exposure_allowed(). The port is still
+    published, so everything on the node itself — the SM proxy, and Open WebUI
+    reaching it by container name — is unaffected; it simply stops answering
+    other machines.
     """
-    if get_lan_access():
+    if get_lan_access() and lan_exposure_allowed():
         return ["-p", f"{OLLAMA_LAN_PORT}:{OLLAMA_LAN_PORT}"]
     return ["-p", f"127.0.0.1:{OLLAMA_LAN_PORT}:{OLLAMA_LAN_PORT}"]
 
@@ -575,6 +612,27 @@ def set_internet_access(enabled: bool) -> dict:
 
 
 def _ollama_container_ip() -> str:
+    """The Ollama container's address, for the internet block rule.
+
+    `.NetworkSettings.IPAddress` is populated ONLY for the default bridge. Ollama
+    runs with `--network sm-llm-net` (so Open WebUI can reach it by name), and on
+    any user-defined network that field is the empty string -- the address lives
+    under `.NetworkSettings.Networks.<name>.IPAddress`.
+
+    That made the internet toggle inert rather than loud: with no IP the rule was
+    never inserted, so "internet off" reported saved-but-not-applied and the
+    container kept full outbound access. A blocked-looking control that blocks
+    nothing is worse than no control, so read the Networks map and fall back to
+    the legacy field only for a container still on the default bridge.
+    """
+    r = subprocess.run(
+        ["docker", "inspect", "-f",
+         "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", "sm-ollama"],
+        capture_output=True, text=True, timeout=10,
+    )
+    for ip in (r.stdout or "").split():
+        if ip:
+            return ip
     r = subprocess.run(
         ["docker", "inspect", "-f", "{{.NetworkSettings.IPAddress}}", "sm-ollama"],
         capture_output=True, text=True, timeout=10,

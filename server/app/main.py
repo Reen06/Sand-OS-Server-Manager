@@ -2142,6 +2142,10 @@ def ollama_get_lan(request: Request):
     _require_identity(request)
     return {"ok": True, "lan_enabled": ollama_mgr.get_lan_access(),
             "port": ollama_mgr.OLLAMA_LAN_PORT,
+            # False on a node that is not on the home network, where publishing
+            # to the LAN is refused outright. The UI hides the control rather
+            # than offering a switch that cannot be thrown.
+            "lan_allowed": ollama_mgr.lan_exposure_allowed(),
             # Whether the SETTING and the RUNNING container currently agree.
             # Published ports are fixed at creation, so a live container keeps
             # whatever it was started with until it is restarted.
