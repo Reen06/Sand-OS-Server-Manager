@@ -731,6 +731,44 @@ CATALOG: dict[str, AppDef] = {
         mounts=[Mount(name="ollama-models", path="/root/.ollama", scope="shared")],
         env={"OLLAMA_HOST": "0.0.0.0"},
     ),
+    "comfyui": AppDef(
+        id="comfyui",
+        # Per-node like Ollama, and for the same reason: the models are the app.
+        # A checkpoint is several gigabytes sitting on the machine with the GPU,
+        # so "run it elsewhere" means moving the models too — which is exactly
+        # what the fleet's transfer action already does, deliberately, rather
+        # than pretending an instance can hop nodes for free.
+        multi_node=True,
+        label="ComfyUI",
+        icon="cpu",
+        color="violet",
+        desc="Node-graph image generation — download models and run them on the GPU.",
+        image=config.COMFYUI_IMAGE,
+        dockerhub_repo="reen16/comfyui",   # §11 publish target
+        build_context="containers/comfyui",
+        kind="web",
+        mode="shared",
+        internal_port=8188,
+        gpu=True,
+        # No hard cap, same call as Ollama: the real constraint is VRAM, and a
+        # RAM ceiling here would kill a model load that the GPU could have
+        # handled, for no benefit.
+        mem_limit="",
+        proxy_subpath="root",
+        # Node-local volumes, NOT the NAS. A checkpoint is 2-7 GB and gets read
+        # repeatedly during sampling; serving that over NFS would make every
+        # generation wait on the network for data that has to end up in this
+        # machine's VRAM anyway. Ollama's models are local for the same reason.
+        mounts=[
+            Mount(name="comfyui-models", path="/opt/ComfyUI/models", scope="shared"),
+            # Generated images, and the workflows/settings the UI writes. Kept
+            # so a container recreate does not throw away someone's outputs or
+            # send them back to a blank canvas.
+            Mount(name="comfyui-output", path="/opt/ComfyUI/output", scope="shared"),
+            Mount(name="comfyui-input", path="/opt/ComfyUI/input", scope="shared"),
+            Mount(name="comfyui-user", path="/opt/ComfyUI/user", scope="shared"),
+        ],
+    ),
     "open-webui": AppDef(
         id="open-webui",
         label="Open WebUI",

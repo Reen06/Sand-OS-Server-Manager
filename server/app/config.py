@@ -288,6 +288,10 @@ OLLAMA_IMAGE = os.environ.get("SM_OLLAMA_IMAGE", "ollama/ollama:latest")
 # string pattern rather than the (content-hashed, unstable across rebuilds)
 # filename.
 OPEN_WEBUI_IMAGE = os.environ.get("SM_OPEN_WEBUI_IMAGE", "sandos-open-webui:latest")
+
+# ComfyUI — built locally from containers/comfyui (see its Dockerfile for why
+# it starts from PyTorch's CUDA image rather than installing torch from PyPI).
+COMFYUI_IMAGE = os.environ.get("SM_COMFYUI_IMAGE", "sandos-comfyui:latest")
 # Secret used to sign Open WebUI JWT sessions — generate once, keep stable.
 OPEN_WEBUI_SECRET_KEY = os.environ.get("SM_OPEN_WEBUI_SECRET_KEY", "change-me-owui-secret")
 
