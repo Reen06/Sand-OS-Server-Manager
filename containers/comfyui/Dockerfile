@@ -6,7 +6,15 @@
 # and the host driver. Starting from an image where torch is already correct
 # removes the one dependency in this stack most likely to install "successfully"
 # and then fail at runtime with a CUDA mismatch.
-FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
+#
+# The torch VERSION is not free to choose either. ComfyUI now pulls in
+# comfy_kitchen, which registers custom ops annotated `list[int]`. torch 2.5's
+# infer_schema rejects that type outright, so the image built perfectly and
+# then died on import every single time — and because SM runs containers with
+# --rm, the container erased itself before the traceback could be read. It
+# presented as "launch succeeds, nothing runs, no logs anywhere". 2.8 accepts
+# those annotations.
+FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
