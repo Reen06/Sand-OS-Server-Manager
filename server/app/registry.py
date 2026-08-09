@@ -755,6 +755,13 @@ CATALOG: dict[str, AppDef] = {
         # handled, for no benefit.
         mem_limit="",
         proxy_subpath="root",
+        # Two hours, not the default ten minutes. This app's two headline
+        # actions both run long with nobody watching: downloading a checkpoint
+        # is several gigabytes, and a queued batch keeps generating after the
+        # phone screen locks. At the default, the idle reaper would kill a
+        # model download most of the way through and leave a partial file —
+        # the failure would look like a bad download rather than a timeout.
+        keepalive_seconds=7200,
         # Node-local volumes, NOT the NAS. A checkpoint is 2-7 GB and gets read
         # repeatedly during sampling; serving that over NFS would make every
         # generation wait on the network for data that has to end up in this
