@@ -269,6 +269,30 @@ def _require_admin_or_local(request: Request) -> None:
 
 
 # ── Fleet NAS: shared-folder management (admin-only) ──────────────────────────
+class _ModelRmBody(BaseModel):
+    folder: str = ""
+    name: str
+
+
+@app.get("/api/apps/{app_id}/models")
+def app_models(app_id: str, request: Request):
+    _require_identity(request)
+    from . import model_dl
+    return model_dl.list_models(app_id)
+
+
+@app.post("/api/apps/{app_id}/models/delete")
+def app_models_delete(app_id: str, body: _ModelRmBody, request: Request):
+    _require_admin(request)
+    from . import model_dl
+    try:
+        return model_dl.delete_model(app_id, body.folder, body.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
 class _ModelDlBody(BaseModel):
     url: str
     filename: str = ""

@@ -201,3 +201,89 @@ def status(app_id: str) -> dict:
     live = next((j for j in jobs if j.get("state") == "running"), None)
     head = live or jobs[0]
     return {**head, "jobs": jobs}
+
+
+# ── What is on disk ──────────────────────────────────────────────────────────
+# Read inside the container for the same reason downloads write there: the model
+# directory is a root-owned volume the Server Manager cannot see from the host.
+_LIST_SCRIPT = r'''
+import json, os, shutil, sys
+root = sys.argv[1]
+out = []
+for dirpath, dirnames, filenames in os.walk(root):
+    dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+    for fn in filenames:
+        if fn.startswith(".") or fn.endswith(".json"):
+            continue
+        full = os.path.join(dirpath, fn)
+        try:
+            st = os.stat(full)
+        except OSError:
+            continue
+        rel = os.path.relpath(dirpath, root)
+        out.append({"folder": "" if rel == "." else rel, "name": fn,
+                    "size": st.st_size, "mtime": int(st.st_mtime),
+                    # A .part is an interrupted download, not a usable model.
+                    # Shown so the space it holds is accounted for and can be
+                    # reclaimed, rather than being invisible weight on the disk.
+                    "partial": fn.endswith(".part")})
+try:
+    du = shutil.disk_usage(root)
+    disk = {"free": du.free, "total": du.total}
+except Exception:
+    disk = {}
+print(json.dumps({"models": out, "disk": disk}))
+'''
+
+
+def list_models(app_id: str) -> dict:
+    if app_id not in _MODEL_ROOT:
+        return {"models": [], "disk": {}, "used": 0}
+    container = _container(app_id)
+    if not container:
+        return {"models": [], "disk": {}, "used": 0, "error": "app not running"}
+    r = subprocess.run(["docker", "exec", container, "python", "-c",
+                        _LIST_SCRIPT, _MODEL_ROOT[app_id]],
+                       capture_output=True, text=True, timeout=60)
+    try:
+        d = json.loads((r.stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {"models": [], "disk": {}, "used": 0,
+                "error": (r.stderr or "could not read models")[-200:]}
+    d["used"] = sum(m["size"] for m in d.get("models", []))
+    d["models"].sort(key=lambda m: m["size"], reverse=True)
+    return d
+
+
+def delete_model(app_id: str, folder: str, name: str) -> dict:
+    """Remove one model file.
+
+    Validated the same way a download is: the folder must be one ComfyUI reads
+    from and the name is reduced to a basename, so nothing here can be pointed
+    at a path outside the model tree however it is spelled.
+    """
+    if app_id not in _MODEL_ROOT:
+        raise ValueError(f"{app_id} has no known model directory")
+    folder = (folder or "").strip("/")
+    if folder and folder not in _DIRS:
+        raise ValueError(f"unknown model directory {folder!r}")
+    base = os.path.basename(name or "")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,220}", base):
+        raise ValueError("unusable filename")
+    container = _container(app_id)
+    if not container:
+        raise RuntimeError(f"{app_id} is not running on this node")
+    root = _MODEL_ROOT[app_id]
+    path = f"{root}/{folder}/{base}" if folder else f"{root}/{base}"
+    r = subprocess.run(
+        ["docker", "exec", container, "python", "-c",
+         # Re-checked inside the container against the resolved real path: the
+         # validation above is about the request, this is about where the path
+         # actually lands once symlinks are followed.
+         "import os,sys;p=os.path.realpath(sys.argv[1]);r=os.path.realpath(sys.argv[2]);"
+         "sys.exit(2) if not p.startswith(r + os.sep) else None;"
+         "os.remove(p);print('ok')", path, root],
+        capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or "delete failed").strip()[-200:])
+    return {"ok": True, "removed": f"{folder}/{base}" if folder else base}
