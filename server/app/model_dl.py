@@ -65,6 +65,9 @@ name = os.path.basename(dest)
 
 def report(**kw):
     kw.setdefault("filename", name)
+    # The source is what makes a model safe to delete: without it, removing the
+    # file is one-way. Recorded on every report so it survives a restart.
+    kw.setdefault("url", url)
     kw.setdefault("at", int(time.time()))
     with open(stat + ".tmp", "w") as f:
         json.dump(kw, f)
@@ -232,6 +235,24 @@ for dirpath, dirnames, filenames in os.walk(root):
                     # Shown so the space it holds is accounted for and can be
                     # reclaimed, rather than being invisible weight on the disk.
                     "partial": fn.endswith(".part")})
+# Where each file came from, if this node fetched it. A model with a recorded
+# source can be deleted and pulled back; one without cannot, and the UI has to
+# be able to tell those apart before offering to remove anything.
+src = {}
+d = os.path.join(root, ".sm-downloads")
+if os.path.isdir(d):
+    for fn in os.listdir(d):
+        if not fn.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(d, fn)) as f:
+                j = json.load(f)
+            if j.get("url") and j.get("filename"):
+                src[j["filename"]] = j["url"]
+        except Exception:
+            pass
+for m in out:
+    m["source"] = src.get(m["name"], "")
 try:
     du = shutil.disk_usage(root)
     disk = {"free": du.free, "total": du.total}
