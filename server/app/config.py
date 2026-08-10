@@ -292,6 +292,14 @@ OPEN_WEBUI_IMAGE = os.environ.get("SM_OPEN_WEBUI_IMAGE", "sandos-open-webui:late
 # ComfyUI — built locally from containers/comfyui (see its Dockerfile for why
 # it starts from PyTorch's CUDA image rather than installing torch from PyPI).
 COMFYUI_IMAGE = os.environ.get("SM_COMFYUI_IMAGE", "sandos-comfyui:latest")
+
+# Hugging Face access token, for pulling models whose repo is GATED -- one that
+# requires a licence to have been accepted on the account. Those cannot be
+# fetched anonymously at all, by any tool, which is why a gated model shows up
+# as "here is a link, go and get it yourself" instead of downloading. Empty by
+# default and read from the node's env file, so no token is ever committed and
+# a node without one simply keeps the anonymous behaviour.
+HF_TOKEN = os.environ.get("SM_HF_TOKEN", "").strip()
 # Secret used to sign Open WebUI JWT sessions — generate once, keep stable.
 OPEN_WEBUI_SECRET_KEY = os.environ.get("SM_OPEN_WEBUI_SECRET_KEY", "change-me-owui-secret")
 

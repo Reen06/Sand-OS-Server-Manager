@@ -762,6 +762,13 @@ CATALOG: dict[str, AppDef] = {
         # model download most of the way through and leave a partial file —
         # the failure would look like a bad download rather than a timeout.
         keepalive_seconds=7200,
+        # Both names on purpose: huggingface_hub reads HF_TOKEN, while older
+        # code paths (and ComfyUI-Manager's downloader) still look for
+        # HUGGINGFACE_HUB_TOKEN. Absent when no token is configured, rather
+        # than set to an empty string -- an empty credential is treated as a
+        # BAD one by the Hub API and fails louder than sending nothing.
+        env=({"HF_TOKEN": config.HF_TOKEN,
+              "HUGGINGFACE_HUB_TOKEN": config.HF_TOKEN} if config.HF_TOKEN else {}),
         # Node-local volumes, NOT the NAS. A checkpoint is 2-7 GB and gets read
         # repeatedly during sampling; serving that over NFS would make every
         # generation wait on the network for data that has to end up in this
