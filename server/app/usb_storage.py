@@ -667,9 +667,13 @@ def roots_for(user: str) -> list[dict]:
         if not dev["mountpoint"] or not dev["assign"]:
             continue
         if dev["assign"] == "shared" or dev["assign"] == f"user:{_safe_user(user)}":
+            # "USB" only when it is one. Internal drives are assignable now, and
+            # labelling a fixed 2TB NVMe "USB sandos-nas" in the file picker
+            # describes hardware the user does not have.
+            kind = "USB" if dev.get("removable", True) else "Drive"
             out.append({
                 "id": f"usb:{dev['uuid']}",
-                "label": f"USB {dev['label']}",
+                "label": f"{kind} {dev['label']}",
                 "path": dev["mountpoint"],
             })
     return out
