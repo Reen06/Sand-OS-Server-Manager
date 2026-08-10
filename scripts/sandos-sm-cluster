@@ -250,6 +250,13 @@ cmd_apply() {
   # ever lands — from the same physical drive, both growing into the same free
   # space. Without it, pinning bulk to a machine meant that machine could serve
   # nothing else.
+  #
+  # USE A CUSTOM TAG, never "hdd". SeaweedFS normalises "hdd" to the DEFAULT
+  # disk type, whose name is the empty string — so tagging a directory "hdd"
+  # is indistinguishable from not tagging it, the matching filer rule matches
+  # everything, and bulk data scatters across the fleet exactly as if no rule
+  # existed. It fails silently: the flag is accepted, the volume server starts,
+  # and only the placement is wrong. "bulk" (or any name of your own) works.
   (( $# > 0 )) || die "no directories given"
   local dirs="" maxes="" disks="" any_disk=0
   for spec in "$@"; do
