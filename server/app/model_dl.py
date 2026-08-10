@@ -16,7 +16,7 @@ Bounded on purpose -- this takes a URL from a browser and writes it to disk:
   * https only, and only from hosts that actually serve model weights
   * the filename is reduced to a basename, so no path can escape the directory
   * the subdirectory must be one ComfyUI actually reads
-  * one job per app at a time, so a stuck download cannot be stacked up
+  * an admin-only endpoint, and a model already present is never refetched
 """
 from __future__ import annotations
 
@@ -51,32 +51,70 @@ _DIRS = {
 _lock = threading.Lock()
 _jobs: dict[str, dict] = {}
 
-# Runs in the container. Streams to a .part file and renames only on success,
-# so a failed or killed download can never look like a complete model -- which
-# would otherwise surface much later as a corrupt-checkpoint error.
+# Runs detached inside the container, reporting into a status file rather than
+# over a pipe. A pipe made the transfer a child of the Server Manager, so
+# restarting SM -- or anything that recycled it -- killed a multi-gigabyte
+# download at whatever percent it had reached. A status file also means progress
+# survives SM restarting and can still be read afterwards.
 _SCRIPT = r'''
 import json, os, sys, urllib.request
-url, dest = sys.argv[1], sys.argv[2]
+url, dest, stat = sys.argv[1], sys.argv[2], sys.argv[3]
 os.makedirs(os.path.dirname(dest), exist_ok=True)
-tmp = dest + ".part"
-req = urllib.request.Request(url, headers={"User-Agent": "sandos-sm/1.0"})
-tok = os.environ.get("HF_TOKEN", "")
-if tok and ("huggingface.co" in url or "hf.co" in url):
-    req.add_header("Authorization", "Bearer " + tok)
-with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
-    total = int(r.headers.get("Content-Length") or 0)
-    done = last = 0
-    while True:
-        chunk = r.read(1 << 20)
-        if not chunk:
-            break
-        f.write(chunk)
-        done += len(chunk)
-        if done - last >= (1 << 23):       # report every 8 MB, not every MB
-            last = done
-            print(json.dumps({"done": done, "total": total}), flush=True)
-os.replace(tmp, dest)
-print(json.dumps({"done": done, "total": total, "complete": True}), flush=True)
+os.makedirs(os.path.dirname(stat), exist_ok=True)
+name = os.path.basename(dest)
+
+def report(**kw):
+    kw.setdefault("filename", name)
+    kw.setdefault("at", int(__import__("time").time()))
+    with open(stat + ".tmp", "w") as f:
+        json.dump(kw, f)
+    os.replace(stat + ".tmp", stat)
+
+try:
+    # Already here: say so instead of spending an hour fetching it again. This
+    # is the common case when a template lists several models and only some are
+    # missing -- re-downloading a 5 GB file nobody asked for is worse than
+    # useless, it costs the bandwidth the missing one needs.
+    if os.path.exists(dest):
+        report(state="done", done=os.path.getsize(dest),
+               total=os.path.getsize(dest), already=True)
+        sys.exit(0)
+
+    tmp = dest + ".part"
+    have = os.path.getsize(tmp) if os.path.exists(tmp) else 0
+    req = urllib.request.Request(url, headers={"User-Agent": "sandos-sm/1.0"})
+    tok = os.environ.get("HF_TOKEN", "")
+    if tok and ("huggingface.co" in url or "hf.co" in url):
+        req.add_header("Authorization", "Bearer " + tok)
+    # Resume where an interrupted attempt stopped. These files are gigabytes and
+    # the machine is not always stable; starting from zero every time is what
+    # turns one bad moment into an unfinishable download.
+    if have:
+        req.add_header("Range", "bytes=%d-" % have)
+    report(state="running", done=have, total=0)
+
+    with urllib.request.urlopen(req, timeout=60) as r:
+        resumed = r.status == 206
+        total = int(r.headers.get("Content-Length") or 0) + (have if resumed else 0)
+        if not resumed:
+            have = 0                       # server ignored Range: start over
+        done = have
+        last = 0
+        with open(tmp, "ab" if resumed else "wb") as f:
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+                done += len(chunk)
+                if done - last >= (1 << 23):
+                    last = done
+                    report(state="running", done=done, total=total)
+    os.replace(tmp, dest)
+    report(state="done", done=done, total=total)
+except Exception as e:
+    report(state="failed", error=str(e)[:300])
+    sys.exit(1)
 '''
 
 
@@ -110,32 +148,8 @@ def _validate(app_id: str, url: str, filename: str, subdir: str) -> tuple[str, s
     return name, f"{_MODEL_ROOT[app_id]}/{d}/{name}"
 
 
-def _run(app_id: str, url: str, dest: str, job: dict) -> None:
-    try:
-        p = subprocess.Popen(
-            ["docker", "exec", "-i", job["container"], "python", "-c", _SCRIPT, url, dest],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        for line in p.stdout:
-            line = line.strip()
-            if not line.startswith("{"):
-                continue
-            try:
-                d = json.loads(line)
-            except ValueError:
-                continue
-            with _lock:
-                job.update(done=d.get("done", 0), total=d.get("total", 0))
-                if d.get("complete"):
-                    job.update(state="done", finished=time.time())
-        err = (p.stderr.read() or "").strip()
-        p.wait()
-        with _lock:
-            if job["state"] != "done":
-                job.update(state="failed",
-                           error=(err.splitlines() or ["download failed"])[-1][:300])
-    except Exception as e:  # noqa: BLE001
-        with _lock:
-            job.update(state="failed", error=str(e)[:300])
+def _statfile(app_id: str, name: str) -> str:
+    return f"{_MODEL_ROOT[app_id]}/.sm-downloads/{name}.json"
 
 
 def start(app_id: str, url: str, filename: str = "", subdir: str = "") -> dict:
@@ -143,21 +157,47 @@ def start(app_id: str, url: str, filename: str = "", subdir: str = "") -> dict:
     container = _container(app_id)
     if not container:
         raise RuntimeError(f"{app_id} is not running on this node")
+    # Detached, and deliberately NOT one-at-a-time. A template routinely lists
+    # several missing models; refusing the second because the first is still
+    # running surfaced in the page as "download failed", which is both wrong and
+    # the opposite of helpful. They run alongside each other and each reports
+    # its own progress.
+    stat = _statfile(app_id, name)
+    subprocess.run(["docker", "exec", "-d", container, "python", "-c",
+                    _SCRIPT, url, dest, stat], check=True, timeout=30)
     with _lock:
-        cur = _jobs.get(app_id)
-        if cur and cur["state"] == "running":
-            raise RuntimeError(f"already downloading {cur['filename']}")
-        job = {"state": "running", "filename": name, "dest": dest, "url": url,
-               "container": container, "done": 0, "total": 0,
-               "started": time.time(), "error": ""}
-        _jobs[app_id] = job
-    threading.Thread(target=_run, args=(app_id, url, dest, job), daemon=True).start()
+        _jobs[app_id] = {"filename": name, "started": time.time()}
     return {"ok": True, "filename": name, "dest": dest}
 
 
 def status(app_id: str) -> dict:
-    with _lock:
-        j = _jobs.get(app_id)
-        if not j:
-            return {"state": "idle"}
-        return {k: v for k, v in j.items() if k != "container"}
+    """Progress of every download this app has going, newest first.
+
+    Read from the container rather than from memory, so it survives the Server
+    Manager restarting -- which, with detached transfers, no longer stops them.
+    """
+    if app_id not in _MODEL_ROOT:
+        return {"state": "idle", "jobs": []}
+    container = _container(app_id)
+    if not container:
+        return {"state": "idle", "jobs": []}
+    d = f"{_MODEL_ROOT[app_id]}/.sm-downloads"
+    out = subprocess.run(
+        ["docker", "exec", container, "sh", "-c",
+         f"cat {d}/*.json 2>/dev/null | sed 's/}}{{/}}\\n{{/g'"],
+        capture_output=True, text=True, timeout=20).stdout
+    jobs = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            jobs.append(json.loads(line))
+        except ValueError:
+            continue
+    jobs.sort(key=lambda j: j.get("at", 0), reverse=True)
+    if not jobs:
+        return {"state": "idle", "jobs": []}
+    live = next((j for j in jobs if j.get("state") == "running"), None)
+    head = live or jobs[0]
+    return {**head, "jobs": jobs}
