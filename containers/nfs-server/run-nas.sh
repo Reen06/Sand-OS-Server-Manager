@@ -28,7 +28,11 @@ mkdir -p "$NAS_ROOT/users" "$NAS_ROOT/shared" "$NAS_ROOT/staging"
 #
 # Space-separated list of addresses/CIDRs. The NAS host itself must be here or
 # its own apps lose their mounts.
-NAS_TRUSTED="${NAS_TRUSTED:-127.0.0.1 ${NAS_SELF_IP:-10.0.0.164}}"
+# Self address is DETECTED. It used to fall back to one specific machine's IP,
+# which on any other host exported nothing useful to itself while silently
+# trusting a stranger's address.
+_self_ip="${NAS_SELF_IP:-$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1); exit}')}"
+NAS_TRUSTED="${NAS_TRUSTED:-127.0.0.1 ${_self_ip}}"
 
 _export_args=()
 _n=0

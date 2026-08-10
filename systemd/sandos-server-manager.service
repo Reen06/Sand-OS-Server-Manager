@@ -6,18 +6,26 @@ Requires=docker.service
 
 [Service]
 Type=simple
-User=control
-Environment=SM_LAN_IP=10.0.0.164
-Environment=SM_PORT=8170
+# Placeholder values below are substituted by systemd/install.sh from what it
+# detects on the machine it is run on. This file used to carry one specific
+# machine's username, repo path, LAN address and WireGuard address as literals,
+# which meant every other install started a service pointing at a user and a
+# directory that did not exist — and published a private network's addressing
+# in a shared repository.
+User=@@SM_USER@@
+Environment=SM_LAN_IP=@@SM_LAN_IP@@
+Environment=SM_PORT=@@SM_PORT@@
 # WireGuard IP injected as a second TURN candidate so VPN/mobile clients can
-# reach the TURN relay (the LAN IP is unreachable from outside the LAN).
-Environment=SM_TURN_EXTRA_HOST=10.79.114.1
+# reach the TURN relay (the LAN IP is unreachable from outside the LAN). Left
+# empty when the machine has no tunnel — an empty value is simply ignored,
+# whereas a stale one advertises a relay candidate that can never answer.
+Environment=SM_TURN_EXTRA_HOST=@@SM_TURN_EXTRA_HOST@@
 # Optional overrides (set SM_HUB_URL here to turn on Hub SSO):
-#   /etc/sandos-server-manager.env   e.g.  SM_HUB_URL=https://10.0.0.177
+#   /etc/sandos-server-manager.env   e.g.  SM_HUB_URL=https://<your-hub>
 EnvironmentFile=-/etc/sandos-server-manager.env
-WorkingDirectory=/home/control/Sand OS Remote/Sand-OS-Server-Manager/server
-# Executable path is quoted because the repo path contains spaces.
-ExecStart="/home/control/Sand OS Remote/Sand-OS-Server-Manager/server/.venv/bin/uvicorn" app.main:app --host 0.0.0.0 --port 8170
+WorkingDirectory=@@SM_REPO@@/server
+# Executable path is quoted because the repo path may contain spaces.
+ExecStart="@@SM_REPO@@/server/.venv/bin/uvicorn" app.main:app --host 0.0.0.0 --port @@SM_PORT@@
 Restart=on-failure
 RestartSec=3
 

@@ -5,15 +5,24 @@
 # turns that into the export list nfsd actually enforces. Run it after changing
 # a node's trust level, or on a timer.
 #
-#   ./sync-nas-policy.sh                      # uses HUB_URL default below
-#   HUB_URL=https://10.79.114.1 ./sync-nas-policy.sh
+#   ./sync-nas-policy.sh                      # reads the node's configured Hub
+#   HUB_URL=https://<hub> ./sync-nas-policy.sh
 #
 # Talks to the Hub over the MESH address, not the public hostname: the Hub
 # serves its API to the mesh only and answers a deliberate 404 to anything
 # arriving from the public internet.
 set -euo pipefail
 
-HUB_URL="${HUB_URL:-https://10.79.114.1}"
+# The Hub this node was installed against, from its own environment file. Not a
+# literal: a baked-in address belongs to the mesh this was written on, so every
+# other deployment would silently point at a stranger's machine.
+HUB_URL="${HUB_URL:-}"
+if [ -z "$HUB_URL" ] && [ -r /etc/sandos-server-manager.env ]; then
+  # \042 \047 = double and single quote, stripped in case the env file quotes
+  # the value. Octal because the alternative is nested-quote soup.
+  HUB_URL=$(sed -n 's/^[[:space:]]*SM_HUB_URL=//p' /etc/sandos-server-manager.env | tail -1 | tr -d '\042\047')
+fi
+[ -n "$HUB_URL" ] || { echo "sync-nas-policy: no Hub configured (set HUB_URL or SM_HUB_URL)" >&2; exit 2; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 # -k: the Hub is normally fronted by Caddy's internal CA. Same posture as every

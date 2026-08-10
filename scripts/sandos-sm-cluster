@@ -13,9 +13,37 @@
 set -euo pipefail
 
 UNIT=/etc/systemd/system/seaweedfs-volume.service
-MASTER="${SM_SEAWEED_MASTER:-10.0.0.177:9333}"
 
 die() { echo "sandos-sm-cluster: $*" >&2; exit 1; }
+
+# Which mesh this node joins. Read from the node's own environment file, which
+# the installer writes from what it discovered on the network it was installed
+# to — never a literal here.
+#
+# This used to default to one specific machine's address. That address belonged
+# to the mesh this script was written on, so any OTHER deployment inherited it:
+# a node installed elsewhere would quietly try to join a cluster it has never
+# heard of, on a network it may not even be able to reach, and report a volume
+# server that never registers. A wrong default is worse than none, because the
+# failure looks like a network problem rather than a configuration one.
+_seaweed_master() {
+  local m="${SM_SEAWEED_MASTER:-}"
+  if [ -z "$m" ] && [ -r /etc/sandos-server-manager.env ]; then
+    m=$(sed -n 's/^[[:space:]]*SM_SEAWEED_MASTER=//p' /etc/sandos-server-manager.env \
+        | tail -1 | tr -d '\042\047')
+  fi
+  if [ -z "$m" ] && [ -r /etc/sandos-server-manager.env ]; then
+    # Fall back to the NAS host this node was pointed at, which is the machine
+    # running the mesh's master, on its standard port.
+    local h
+    h=$(sed -n 's/^[[:space:]]*SM_NAS_HOST=//p' /etc/sandos-server-manager.env \
+        | tail -1 | tr -d '\042\047')
+    [ -n "$h" ] && m="${h}:9333"
+  fi
+  [ -n "$m" ] || die "no SeaweedFS master configured — set SM_SEAWEED_MASTER (or SM_NAS_HOST) in /etc/sandos-server-manager.env"
+  echo "$m"
+}
+MASTER="$(_seaweed_master)"
 
 _node_ip() {
   ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1); exit}'

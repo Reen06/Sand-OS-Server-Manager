@@ -36,7 +36,7 @@
 #     SM_ENROLL_LINK    one-time Hub enrollment link (vpn mode only)
 #
 #   Example:
-#     sudo SM_HUB_URL=https://10.0.0.177 SM_NODE_NAME=mini-eclipse \
+#     sudo SM_HUB_URL=https://hub.example.lan SM_NODE_NAME=workshop-01 \
 #          bash install.sh --unattended
 set -euo pipefail
 
@@ -908,9 +908,9 @@ if [ -z "$_hub_default" ]; then
                          || warn "No Hub found automatically — enter its URL below"
 fi
 if [ -n "$_hub_default" ]; then
-  SM_HUB_URL=$(read_auto "Hub URL  (e.g. https://10.0.0.177 — blank for standalone)" "$_hub_default")
+  SM_HUB_URL=$(read_auto "Hub URL  (e.g. https://192.0.2.10 — blank for standalone)" "$_hub_default")
 else
-  SM_HUB_URL=$(read_val "Hub URL  (e.g. https://10.0.0.177 — blank for standalone)" "")
+  SM_HUB_URL=$(read_val "Hub URL  (e.g. https://192.0.2.10 — blank for standalone)" "")
 fi
 # A bare IP/hostname with no scheme (an easy slip — "just the IP" instead of
 # the full URL) doesn't fail here; it silently gets written into the env
@@ -1333,6 +1333,11 @@ SM_EXTERNAL_BASE=${SM_EXTERNAL_BASE}
 SM_NAS_ENABLED=${SM_NAS_ENABLED}
 SM_NAS_HOST=${SM_NAS_HOST}
 SM_NAS_ROOT=${SM_NAS_ROOT}
+# Which mesh this node's volume server joins, if it ever contributes storage.
+# Derived from the NAS host DISCOVERED above (the Hub is asked which machine
+# already runs the fleet's storage), never a literal — a baked-in address would
+# make every deployment but the original one try to join a stranger's cluster.
+SM_SEAWEED_MASTER=${SM_SEAWEED_MASTER:-${SM_NAS_HOST}:9333}
 
 # ── Compute capacity ──────────────────────────────────────────────────────────
 # Override GPU auto-detection (true/false).
@@ -1495,9 +1500,44 @@ if [ -f "${REPO_ROOT}/scripts/sandos-sm-cluster" ]; then
   ok "Cluster allocation helper installed at ${CLUSTER_HELPER}"
 fi
 
+# Drive-graft helper. Assigning a drive to the NAS bind-mounts it into the NAS
+# tree, which needs root — so like the helpers above it is a fixed, root-owned
+# script with one narrow sudoers entry rather than a general grant.
+#
+# NAS_ROOT is baked in at install time because sudo does not pass the
+# environment through: the script's own fallback is only ever right on the
+# machine it was written on, and everywhere else the bind would silently target
+# a path that does not exist.
+USB_BIND_HELPER=/usr/local/bin/sandos-usb-bind
+_usb_bind_src="${REPO_ROOT}/containers/nfs-server/sandos-usb-bind"
+if [ -f "$_usb_bind_src" ]; then
+  _usb_bind_tmp=$(mktemp)
+  sed "s|^NAS=.*|NAS=\"\${NAS_ROOT:-${SM_NAS_ROOT}}\"|" "$_usb_bind_src" > "$_usb_bind_tmp"
+  $SUDO install -o root -g root -m 0755 "$_usb_bind_tmp" "$USB_BIND_HELPER"
+  rm -f "$_usb_bind_tmp"
+  ok "Drive-graft helper installed at ${USB_BIND_HELPER}"
+else
+  warn "sandos-usb-bind not found — drives cannot be assigned to the NAS on this node"
+fi
+
+# The NAS tree itself. Created here rather than on first use because assignment
+# and per-user paths both resolve INTO it: without these, a drive assigned to a
+# user grafts nowhere and the failure reads as a broken drive.
+if [ "$SM_NAS_ENABLED" = "true" ] && [ -n "$SM_NAS_ROOT" ]; then
+  $SUDO -u "$CURRENT_USER" mkdir -p "${SM_NAS_ROOT}/users" "${SM_NAS_ROOT}/shared/media" 2>/dev/null \
+    || { $SUDO mkdir -p "${SM_NAS_ROOT}/users" "${SM_NAS_ROOT}/shared/media"; \
+         $SUDO chown -R "${CURRENT_USER}:${CURRENT_USER}" "$SM_NAS_ROOT"; }
+  ok "NAS tree ready at ${SM_NAS_ROOT} (users/, shared/media/)"
+fi
+
 _sudoers_tmp=$(mktemp)
 {
   echo "${CURRENT_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl restart ${UNIT_NAME}"
+  [ -f "$USB_BIND_HELPER" ] && echo "${CURRENT_USER} ALL=(root) NOPASSWD: ${USB_BIND_HELPER}"
+  # Contributing storage enables the node's volume server. The Hub drives this
+  # from its own UI, over SSH as this user, so the grant has to exist up front
+  # or the button reports success while nothing starts.
+  echo "${CURRENT_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl enable --now seaweedfs-volume, /usr/bin/systemctl disable --now seaweedfs-volume, /usr/bin/systemctl restart seaweedfs-volume, /usr/bin/systemctl start seaweedfs-volume, /usr/bin/systemctl stop seaweedfs-volume"
   [ -f "$POOL_HELPER" ] && echo "${CURRENT_USER} ALL=(root) NOPASSWD: ${POOL_HELPER}"
   [ -f "$GATEWAY_HELPER" ] && echo "${CURRENT_USER} ALL=(root) NOPASSWD: ${GATEWAY_HELPER}"
   [ -f "$CLUSTER_HELPER" ] && echo "${CURRENT_USER} ALL=(root) NOPASSWD: ${CLUSTER_HELPER}"
