@@ -57,7 +57,7 @@ _jobs: dict[str, dict] = {}
 # download at whatever percent it had reached. A status file also means progress
 # survives SM restarting and can still be read afterwards.
 _SCRIPT = r'''
-import json, os, sys, urllib.request
+import json, os, sys, time, urllib.request
 url, dest, stat = sys.argv[1], sys.argv[2], sys.argv[3]
 os.makedirs(os.path.dirname(dest), exist_ok=True)
 os.makedirs(os.path.dirname(stat), exist_ok=True)
@@ -65,7 +65,7 @@ name = os.path.basename(dest)
 
 def report(**kw):
     kw.setdefault("filename", name)
-    kw.setdefault("at", int(__import__("time").time()))
+    kw.setdefault("at", int(time.time()))
     with open(stat + ".tmp", "w") as f:
         json.dump(kw, f)
     os.replace(stat + ".tmp", stat)
@@ -99,7 +99,7 @@ try:
         if not resumed:
             have = 0                       # server ignored Range: start over
         done = have
-        last = 0
+        last = 0.0
         with open(tmp, "ab" if resumed else "wb") as f:
             while True:
                 chunk = r.read(1 << 20)
@@ -107,8 +107,13 @@ try:
                     break
                 f.write(chunk)
                 done += len(chunk)
-                if done - last >= (1 << 23):
-                    last = done
+                # Time-based, not byte-based. A byte threshold reports
+                # constantly on a fast link and almost never on a slow one --
+                # the bar either flickers or sits dead. Twice a second gives
+                # the page something fresh on every poll at any speed.
+                now = time.time()
+                if now - last >= 0.5:
+                    last = now
                     report(state="running", done=done, total=total)
     os.replace(tmp, dest)
     report(state="done", done=done, total=total)
