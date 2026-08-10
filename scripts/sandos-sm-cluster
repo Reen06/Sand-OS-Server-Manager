@@ -137,8 +137,9 @@ cmd_status_docker() {
 }
 
 cmd_apply_docker() {
-  # $1 = comma-joined HOST dirs, $2 = comma-joined maxes
-  local hostdirs="$1" maxes="$2"
+  # $1 = comma-joined HOST dirs, $2 = comma-joined maxes, $3 = comma-joined
+  # disk types (may be empty; see cmd_apply)
+  local hostdirs="$1" maxes="$2" disks="${3:-}"
   local image mserver ip port dc rack restart
 
   if docker inspect "$CONTAINER" >/dev/null 2>&1; then
@@ -194,10 +195,18 @@ refusing to start a second one that would contend for port ${port}"
   # `|| true` for the bootstrap case: there is no container to remove the first
   # time, and under `set -e` that non-zero exit would abort before creating one.
   docker rm -f -v "$CONTAINER" >/dev/null 2>&1 || true
+  # Carry the existing disk types forward when the caller did not supply any.
+  # Otherwise a routine re-apply — resizing a drive, say — would quietly strip
+  # the tagging that keeps bulk data pinned to this machine, and the next bulk
+  # write would scatter across the fleet with nothing to show it had changed.
+  [[ -z "$disks" ]] && disks=$(_docker_arg -disk)
+  local diskarg=()
+  [[ -n "$disks" ]] && diskarg=(-disk="$disks")
   docker run -d --name "$CONTAINER" --network host \
     --restart "${restart:-unless-stopped}" "${mounts[@]}" "$image" \
     volume -mserver="$mserver" -ip="$ip" -port="$port" \
-    -dir="$cdirs" -max="$maxes" -dataCenter="$dc" -rack="$rack" >/dev/null
+    -dir="$cdirs" -max="$maxes" "${diskarg[@]}" \
+    -dataCenter="$dc" -rack="$rack" >/dev/null
   sleep 3
   cmd_status_docker
 }
@@ -232,13 +241,25 @@ cmd_status() {
 }
 
 cmd_apply() {
-  # apply <dir>:<max> [<dir>:<max> ...]
+  # apply <dir>:<max>[:<disktype>] [<dir>:<max>[:<disktype>] ...]
+  #
+  # The optional third field is what makes one machine able to serve every tier
+  # at once. SeaweedFS places a write on storage whose disk type matches the
+  # rule for that path, so a node offering both an untagged directory and a
+  # tagged one can hold ordinary replicated files AND be the only place bulk
+  # ever lands — from the same physical drive, both growing into the same free
+  # space. Without it, pinning bulk to a machine meant that machine could serve
+  # nothing else.
   (( $# > 0 )) || die "no directories given"
-  local dirs="" maxes=""
+  local dirs="" maxes="" disks="" any_disk=0
   for spec in "$@"; do
-    local d="${spec%:*}" m="${spec##*:}"
+    local d m t
+    IFS=':' read -r d m t <<< "$spec"
+    t="${t:-}"
     [[ "$d" =~ ^/[A-Za-z0-9._/-]*$ ]] || die "not a plain absolute path: $d"
     [[ "$m" =~ ^[0-9]+$ ]] || die "max must be a whole number, got: $m for $d"
+    [[ "$t" =~ ^[A-Za-z0-9_-]*$ ]] || die "bad disk type: $t"
+    [[ -n "$t" ]] && any_disk=1
     mountpoint -q "$d" 2>/dev/null || [[ -d "$d" ]] || die "no such directory: $d"
     mkdir -p "$d"
     # A directory that holds volumes must keep a limit that can contain them.
@@ -250,10 +271,15 @@ cmd_apply() {
     fi
     dirs+="${dirs:+,}$d"
     maxes+="${maxes:+,}$m"
+    disks+="${disks:+,}$t"
   done
+  # Only pass -disk when at least one directory is tagged. An all-empty list is
+  # accepted by SeaweedFS but says nothing, and leaving the flag off keeps the
+  # command identical to what every existing node already runs.
+  (( any_disk )) || disks=""
 
   if [[ "$(_mode)" == docker ]]; then
-    cmd_apply_docker "$dirs" "$maxes"
+    cmd_apply_docker "$dirs" "$maxes" "$disks"
     return
   fi
 
