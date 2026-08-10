@@ -1181,10 +1181,41 @@ def url_for(inst: Instance) -> str:
     return f"http://{config.LAN_IP}:{inst.web_port}"
 
 
+_last_reconcile = 0.0
+
+
+def _relaxed_reconcile() -> None:
+    """reconcile_from_docker(), at most once every 30s.
+
+    status() is polled constantly by the Hub, so an unconditional reconcile
+    would put a `docker ps` behind every poll from every viewer.
+    """
+    global _last_reconcile
+    now = time.monotonic()
+    if now - _last_reconcile < 30:
+        return
+    _last_reconcile = now
+    try:
+        reconcile_from_docker()
+    except Exception:  # noqa: BLE001 - adoption is best effort; never break status
+        pass
+
+
 def status(app_id: str, user: str) -> str:
     """stopped | starting (running, web not ready) | active (connected) | idle."""
     from . import app_images
     inst = _instances.get((app_id, _eff(app_id, user)))
+    if not inst:
+        # This registry is per-process and only filled by reconcile_from_docker()
+        # at service startup. That single pass is not enough on a machine where
+        # Docker is not ready when SM starts -- confirmed live on a WSL node that
+        # recycles: the container was running, docker knew it, and SM reported
+        # "stopped" forever because its one chance to look had already passed.
+        # Adopt it now instead, rate-limited so this stays a cheap check.
+        if docker_backend.running(instance_name(app_id, user),
+                                  host=app_images.active_docker_host(app_id)):
+            _relaxed_reconcile()
+            inst = _instances.get((app_id, _eff(app_id, user)))
     if not inst or not docker_backend.running(inst.name, host=app_images.active_docker_host(app_id)):
         return "stopped"
     app = APPS.get(app_id)
