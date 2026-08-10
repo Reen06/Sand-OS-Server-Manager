@@ -269,6 +269,37 @@ def _require_admin_or_local(request: Request) -> None:
 
 
 # ── Fleet NAS: shared-folder management (admin-only) ──────────────────────────
+class _ModelDlBody(BaseModel):
+    url: str
+    filename: str = ""
+    subdir: str = ""
+
+
+@app.post("/api/apps/{app_id}/model-download")
+def app_model_download(app_id: str, body: _ModelDlBody, request: Request):
+    """Fetch a model onto this node, into the app's own model directory.
+
+    Admin-only: it writes to disk from a caller-supplied URL. model_dl bounds
+    what that can mean (https, known model hosts, a basename, a real model
+    directory) -- this just decides who may ask.
+    """
+    _require_admin(request)
+    from . import model_dl
+    try:
+        return model_dl.start(app_id, body.url, body.filename, body.subdir)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/apps/{app_id}/model-download")
+def app_model_download_status(app_id: str, request: Request):
+    _require_identity(request)
+    from . import model_dl
+    return model_dl.status(app_id)
+
+
 @app.get("/api/nas/usb")
 def usb_list(request: Request):
     _require_admin(request)
