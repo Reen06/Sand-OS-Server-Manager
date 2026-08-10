@@ -13,7 +13,18 @@ NAS="${NAS_ROOT:-/home/control/sandos-nas}"
 case "${1:-}" in
   bind)
     src="${2:-}"; dst="${3:-}"
-    [[ "$src" == /media/* || "$src" == /run/media/* ]] || { echo "bad src" >&2; exit 2; }
+    # /media and /run/media are where the desktop auto-mounts removable drives.
+    # /mnt is where a permanently installed internal drive belongs, and internal
+    # drives are assignable too now -- without this an internal source failed
+    # here with a bare "bad src" AFTER the caller had already mounted and
+    # recorded it, which reads as the drive being faulty rather than the path
+    # being unexpected.
+    #
+    # This is still a narrow grant, and dst below is what actually bounds it:
+    # the destination must be inside the NAS tree's USB- prefix, so the grant
+    # cannot be turned into a generic mount no matter what src is named.
+    [[ "$src" == /media/* || "$src" == /run/media/* || "$src" == /mnt/* ]] \
+        || { echo "bad src" >&2; exit 2; }
     [[ "$dst" == "$NAS"/users/*/USB-* || "$dst" == "$NAS"/shared/media/USB-* ]] \
         || { echo "bad dst" >&2; exit 2; }
     [[ "$src" == *..* || "$dst" == *..* ]] && { echo "bad path" >&2; exit 2; }
