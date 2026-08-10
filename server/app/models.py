@@ -89,6 +89,15 @@ class Mount:
     #          RUNTIME override (see app_storage.py), not set here on the AppDef —
     #          `storage` above is just the mount's default/fallback.
     storage: str = "local"
+    # Where a NAS-backed `shared` mount lives inside the NAS, as a relative
+    # path, instead of the default flat `shared/{name}`. Purely cosmetic to the
+    # machinery and entirely the point to a person: it is what lets one app's
+    # several mounts sit together under one folder they can open in Files —
+    # `comfyui/output`, `comfyui/input` — rather than scattering sibling
+    # directories across the top of the shared tree. The docker volume name is
+    # unaffected (it still comes from `name`), so the local fallback is
+    # unchanged if the NAS is not mounted.
+    nas_path: str = ""
 
 
 @dataclass

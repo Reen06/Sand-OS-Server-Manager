@@ -483,6 +483,15 @@ def _mesh_path(user: str, m, app_id: str = "") -> str | None:
         # m.name is the share's slug (set by _expand_shares, not by an AppDef).
         return os.path.join(MESH_MOUNT, config.NAS_SHARES_SUBPATH, _safe(m.name))
     if m.scope == "shared":
+        # An app may group its mounts under one folder (Mount.nas_path) so a
+        # person browsing the NAS finds "comfyui/output" rather than a row of
+        # sibling directories. Each segment is sanitised individually — joining
+        # first would let _safe flatten the separators back into the name.
+        rel = getattr(m, "nas_path", "")
+        if rel:
+            parts = [_safe(p) for p in rel.split("/") if p not in ("", ".", "..")]
+            if parts:
+                return os.path.join(MESH_MOUNT, config.NAS_SHARED_SUBPATH, *parts)
         return os.path.join(MESH_MOUNT, config.NAS_SHARED_SUBPATH, _safe(m.name))
     if m.name != "home":
         # A named per-user mount is this app's settings for this user, kept in a

@@ -769,18 +769,41 @@ CATALOG: dict[str, AppDef] = {
         # BAD one by the Hub API and fails louder than sending nothing.
         env=({"HF_TOKEN": config.HF_TOKEN,
               "HUGGINGFACE_HUB_TOKEN": config.HF_TOKEN} if config.HF_TOKEN else {}),
-        # Node-local volumes, NOT the NAS. A checkpoint is 2-7 GB and gets read
-        # repeatedly during sampling; serving that over NFS would make every
-        # generation wait on the network for data that has to end up in this
-        # machine's VRAM anyway. Ollama's models are local for the same reason.
+        # Split deliberately between the node's own disk and the fleet NAS,
+        # because the two kinds of data want opposite things.
+        #
+        # MODELS stay node-local. A checkpoint is 2-19 GB and gets read
+        # repeatedly during sampling; serving that over the network would make
+        # every generation wait on data that has to end up in this machine's
+        # VRAM anyway. Ollama's models are local for the same reason.
+        #
+        # Everything a PERSON makes goes to the NAS, under one comfyui/ folder
+        # they can open in Files or Nextcloud. Pictures and workflows are
+        # written once and read rarely, so the network costs nothing noticeable
+        # — and keeping them on one node's disk was the real problem: outputs
+        # were reachable only from the machine that happened to render them,
+        # and a workflow had to be downloaded to a phone and re-uploaded to be
+        # filed anywhere.
         mounts=[
             Mount(name="comfyui-models", path="/opt/ComfyUI/models", scope="shared"),
-            # Generated images, and the workflows/settings the UI writes. Kept
-            # so a container recreate does not throw away someone's outputs or
-            # send them back to a blank canvas.
-            Mount(name="comfyui-output", path="/opt/ComfyUI/output", scope="shared"),
-            Mount(name="comfyui-input", path="/opt/ComfyUI/input", scope="shared"),
+            Mount(name="comfyui-output", path="/opt/ComfyUI/output", scope="shared",
+                  storage="nfs", nas_path="comfyui/output"),
+            Mount(name="comfyui-input", path="/opt/ComfyUI/input", scope="shared",
+                  storage="nfs", nas_path="comfyui/input"),
+            # The user directory holds comfyui.db (SQLite, with a lock file)
+            # alongside the settings, and SQLite's locking over a FUSE-mounted
+            # cluster filesystem is not something to gamble a database on — so
+            # this one stays node-local.
             Mount(name="comfyui-user", path="/opt/ComfyUI/user", scope="shared"),
+            # …and the workflows alone are lifted back out onto the NAS, mounted
+            # over the top of the local `user` volume. _mount_args orders parents
+            # before children by path depth, so this lands after it rather than
+            # being hidden by it. The effect is that ComfyUI's own "save
+            # workflow" writes straight to the NAS, with no export/import step
+            # and no second UI to maintain.
+            Mount(name="comfyui-workflows",
+                  path="/opt/ComfyUI/user/default/workflows", scope="shared",
+                  storage="nfs", nas_path="comfyui/workflows"),
         ],
     ),
     "open-webui": AppDef(
