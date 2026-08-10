@@ -63,10 +63,31 @@ _rack() { hostname | tr '[:upper:]' '[:lower:]'; }
 # detected rather than assumed.
 CONTAINER=seaweedfs-volume
 
+# Pinned, and deliberately the STANDARD build. SeaweedFS also publishes a
+# `large_disk` variant, which panics in the FUSE write path on this fleet —
+# a node built that way crashed over a hundred times a day. Overridable, but
+# not casually.
+SEAWEED_IMAGE="${SM_SEAWEED_IMAGE:-chrislusf/seaweedfs:4.40}"
+# Topology label, not an address: replication rules are written in terms of
+# racks within a data centre, and every node in one mesh must agree on the name
+# or the cluster believes it spans places it does not.
+SEAWEED_DC="${SM_SEAWEED_DC:-home}"
+SEAWEED_PORT="${SM_SEAWEED_PORT:-8080}"
+
+# How this node runs its volume server.
+#
+# Docker is preferred wherever Docker exists, because it is the same on every
+# machine: no `weed` binary to install at a matching version, no service user,
+# no unit to keep in step. The native path remains for nodes with no Docker,
+# and — importantly — for a node ALREADY running the systemd unit, which must
+# not be silently migrated out from under a working cluster member.
 _mode() {
-  if command -v docker >/dev/null 2>&1 \
-     && docker inspect "$CONTAINER" >/dev/null 2>&1; then
+  if systemctl is-active --quiet "$CONTAINER" 2>/dev/null; then
+    echo systemd
+  elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     echo docker
+  elif [ -f "$UNIT" ]; then
+    echo systemd
   else
     echo systemd
   fi
@@ -119,11 +140,35 @@ cmd_apply_docker() {
   # $1 = comma-joined HOST dirs, $2 = comma-joined maxes
   local hostdirs="$1" maxes="$2"
   local image mserver ip port dc rack restart
-  image=$(docker inspect -f '{{.Config.Image}}' "$CONTAINER")
-  mserver=$(_docker_arg -mserver); ip=$(_docker_arg -ip); port=$(_docker_arg -port)
-  dc=$(_docker_arg -dataCenter); rack=$(_docker_arg -rack)
-  restart=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$CONTAINER")
-  [[ -n "$image" && -n "$mserver" ]] || die "could not read the existing container's settings"
+
+  if docker inspect "$CONTAINER" >/dev/null 2>&1; then
+    # Existing member: carry its identity forward untouched. Re-deriving these
+    # could RENAME the node's rack, and the cluster would then treat one machine
+    # as two places — a rule asking for copies on two racks could be satisfied
+    # by this box alone, which is the opposite of what it asks for.
+    image=$(docker inspect -f '{{.Config.Image}}' "$CONTAINER")
+    mserver=$(_docker_arg -mserver); ip=$(_docker_arg -ip); port=$(_docker_arg -port)
+    dc=$(_docker_arg -dataCenter); rack=$(_docker_arg -rack)
+    restart=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$CONTAINER")
+    [[ -n "$image" && -n "$mserver" ]] || die "could not read the existing container's settings"
+  else
+    # First contribution from this node: no container to copy settings from, so
+    # derive them. Without this branch a node that had never stored anything
+    # fell through to the native path and needed a matching `weed` binary and a
+    # service user that a fresh machine does not have — so "contribute storage"
+    # reported success and started nothing.
+    image="$SEAWEED_IMAGE"; mserver="$MASTER"
+    ip=$(_node_ip); port="$SEAWEED_PORT"
+    dc="$SEAWEED_DC"; rack=$(_rack); restart="unless-stopped"
+    [[ -n "$ip" ]] || die "could not determine this node's address"
+    [[ -n "$mserver" ]] || die "no SeaweedFS master configured"
+    # Refuse to start a second server fighting an existing one for the port.
+    if pgrep -f 'weed .*volume' >/dev/null 2>&1; then
+      die "a volume server is already running on this node outside Docker — \
+refusing to start a second one that would contend for port ${port}"
+    fi
+    docker image inspect "$image" >/dev/null 2>&1 || docker pull "$image" >/dev/null
+  fi
 
   # Keep the rack EXACTLY as it is. A rack rename would make the cluster treat
   # this machine as a new place, and a rule asking for copies on two racks could
@@ -146,7 +191,9 @@ cmd_apply_docker() {
   # down, which is why the Hub says so before doing it.
   # -v so any anonymous volume the previous container created goes with it.
   # Bind mounts are unaffected: the drives themselves are never touched.
-  docker rm -f -v "$CONTAINER" >/dev/null
+  # `|| true` for the bootstrap case: there is no container to remove the first
+  # time, and under `set -e` that non-zero exit would abort before creating one.
+  docker rm -f -v "$CONTAINER" >/dev/null 2>&1 || true
   docker run -d --name "$CONTAINER" --network host \
     --restart "${restart:-unless-stopped}" "${mounts[@]}" "$image" \
     volume -mserver="$mserver" -ip="$ip" -port="$port" \
@@ -276,8 +323,43 @@ refusing to start a second one that would fight it for port 8080"
   cmd_status
 }
 
+# Start contributing with no numbers supplied, choosing where from the machine
+# itself. The Hub cannot make this choice: which disks exist, how big they are
+# and which hold POSIX filesystems are facts about the node, and the obvious
+# Hub-side default — "the NAS root" — is frequently the SYSTEM disk. On one real
+# node that was 51GB free while an idle 1000GB data drive sat beside it.
+#
+# Deliberately conservative: it picks a directory, not a size. `max=0` means
+# unlimited-by-count, and the real per-drive caps are set afterwards from the
+# storage page, which is where someone can see the whole fleet at once.
+cmd_bootstrap() {
+  local best="" bestavail=0 mp avail fstype
+  while read -r mp fstype avail; do
+    case "$fstype" in ext2|ext3|ext4|xfs|btrfs) ;; *) continue ;; esac
+    # Skip pseudo/boot/system mounts: contributing from the disk the OS runs on
+    # competes with the OS for space, and filling it is a much worse failure
+    # than storing nothing.
+    case "$mp" in /|/boot|/boot/*|/var|/var/*|/usr|/usr/*) continue ;; esac
+    (( avail > bestavail )) && { bestavail=$avail; best=$mp; }
+  done < <(df -B1 --output=target,fstype,avail 2>/dev/null | tail -n +2 \
+           | awk 'NF>=3 {print $1, $2, $3}')
+
+  if [[ -z "$best" ]]; then
+    # Nothing dedicated — fall back to the configured NAS root, which at least
+    # exists. Reported plainly rather than silently, because a node contributing
+    # from its system disk is worth knowing about.
+    best=$(sed -n 's/^[[:space:]]*SM_NAS_ROOT=//p' /etc/sandos-server-manager.env 2>/dev/null \
+           | tail -1 | tr -d '\042\047')
+    best="${best:-$HOME/sandos-nas}"
+    echo "sandos-sm-cluster: no dedicated data filesystem found; using $best" >&2
+  fi
+  mkdir -p "$best/.cluster"
+  cmd_apply "$best/.cluster:0"
+}
+
 case "${1:-}" in
-  status) cmd_status ;;
-  apply)  shift; cmd_apply "$@" ;;
-  *) die "usage: sandos-sm-cluster {status|apply <dir>:<max> [<dir>:<max>...]}" ;;
+  status)    cmd_status ;;
+  apply)     shift; cmd_apply "$@" ;;
+  bootstrap) cmd_bootstrap ;;
+  *) die "usage: sandos-sm-cluster {status|apply <dir>:<max> [<dir>:<max>...]|bootstrap}" ;;
 esac
