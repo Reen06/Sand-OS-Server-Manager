@@ -190,6 +190,25 @@ def status(app_id: str) -> dict:
     if not container:
         return {"state": "idle", "jobs": []}
     d = f"{_MODEL_ROOT[app_id]}/.sm-downloads"
+    # Finished entries clear themselves after a few hours. A completed download
+    # is worth seeing while you are still working; a week later it is a list of
+    # everything you have ever fetched, which buries whatever is running now.
+    # Anything still running, or failed, is kept -- a failure nobody has read
+    # yet is the one thing that must not disappear on a timer.
+    subprocess.run(
+        ["docker", "exec", container, "python", "-c",
+         "import json,os,sys,time\n"
+         "d=sys.argv[1]\n"
+         "os.path.isdir(d) or sys.exit(0)\n"
+         "for f in os.listdir(d):\n"
+         "    p=os.path.join(d,f)\n"
+         "    try:\n"
+         "        j=json.load(open(p))\n"
+         "    except Exception:\n"
+         "        continue\n"
+         "    if j.get('state')=='done' and time.time()-j.get('at',0) > 3*3600:\n"
+         "        os.remove(p)\n", d],
+        capture_output=True, text=True, timeout=20)
     out = subprocess.run(
         ["docker", "exec", container, "sh", "-c",
          f"cat {d}/*.json 2>/dev/null | sed 's/}}{{/}}\\n{{/g'"],
@@ -313,3 +332,22 @@ def delete_model(app_id: str, folder: str, name: str) -> dict:
     if r.returncode != 0:
         raise RuntimeError((r.stderr or "delete failed").strip()[-200:])
     return {"ok": True, "removed": f"{folder}/{base}" if folder else base}
+
+
+def clear_job(app_id: str, filename: str) -> dict:
+    """Drop one finished entry from the download list on request.
+
+    Only the status record is removed -- never the model. Someone tidying a
+    list must not be able to delete gigabytes by accident from the same click.
+    """
+    if app_id not in _MODEL_ROOT:
+        raise ValueError("unknown app")
+    base = os.path.basename(filename or "")
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,220}", base):
+        raise ValueError("unusable filename")
+    container = _container(app_id)
+    if not container:
+        raise RuntimeError("app is not running on this node")
+    subprocess.run(["docker", "exec", container, "rm", "-f",
+                    _statfile(app_id, base)], capture_output=True, timeout=20)
+    return {"ok": True, "cleared": base}

@@ -274,6 +274,18 @@ class _ModelRmBody(BaseModel):
     name: str
 
 
+@app.post("/api/apps/{app_id}/model-download/clear")
+def app_model_dl_clear(app_id: str, body: _ModelRmBody, request: Request):
+    _require_identity(request)
+    from . import model_dl
+    try:
+        return model_dl.clear_job(app_id, body.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+
+
 @app.get("/api/apps/{app_id}/models")
 def app_models(app_id: str, request: Request):
     _require_identity(request)
