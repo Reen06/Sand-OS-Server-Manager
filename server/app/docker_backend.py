@@ -494,6 +494,20 @@ def _mesh_path(user: str, m, app_id: str = "") -> str | None:
                 return os.path.join(MESH_MOUNT, config.NAS_SHARED_SUBPATH, *parts)
         return os.path.join(MESH_MOUNT, config.NAS_SHARED_SUBPATH, _safe(m.name))
     if m.name != "home":
+        # A per-user mount carrying nas_path is the app's WORK, not its
+        # settings — pictures someone made, workflows they saved — so it goes
+        # somewhere they can actually find it: a plainly-named folder in their
+        # home, beside their other files. That placement is what makes the
+        # existing sharing rules apply to it for free: an admin browsing
+        # Household sees users/<name>/ComfyUI the same way they see anything
+        # else of that person's, with no second permission model to keep in
+        # step. Settings, below, stay hidden in .appdata where they belong.
+        rel = getattr(m, "nas_path", "")
+        if rel:
+            parts = [_safe(p) for p in rel.split("/") if p not in ("", ".", "..")]
+            if parts:
+                return os.path.join(MESH_MOUNT, config.NAS_USERS_SUBPATH,
+                                    _safe(user), *parts)
         # A named per-user mount is this app's settings for this user, kept in a
         # private corner of their home so it follows them between machines.
         return os.path.join(MESH_MOUNT, config.NAS_USERS_SUBPATH, _safe(user),

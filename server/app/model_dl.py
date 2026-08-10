@@ -127,11 +127,34 @@ except Exception as e:
 
 
 def _container(app_id: str) -> str:
+    """A running container of this app on this node — ANY of them.
+
+    The models are a property of the node, not of a person: they sit in one
+    shared volume that every user's instance of the app mounts at the same
+    path. So for listing, fetching and deleting them, one container is as good
+    as another, and asking for a particular user's would only mean the model
+    manager stopped working the moment that user's instance was not the one
+    running.
+
+    Written as a prefix match rather than an exact name because a per-user app
+    has no single name to ask for — `sm-comfyui-braeden`, not `sm-comfyui`.
+    The exact shared name is still tried first, so nothing changes for apps
+    that have one.
+    """
     from . import registry
-    name = registry.instance_name(app_id, "")     # shared-aware
-    out = subprocess.run(["docker", "ps", "-q", "--filter", f"name=^{name}$"],
+    exact = registry.instance_name(app_id, "")
+    out = subprocess.run(["docker", "ps", "-q", "--filter", f"name=^{exact}$"],
                          capture_output=True, text=True, timeout=15).stdout.strip()
-    return name if out else ""
+    if out:
+        return exact
+    prefix = f"sm-{registry._safe(app_id)}-"
+    r = subprocess.run(["docker", "ps", "--filter", f"name=^{prefix}",
+                        "--format", "{{.Names}}"],
+                       capture_output=True, text=True, timeout=15)
+    for line in r.stdout.splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
 
 
 def _validate(app_id: str, url: str, filename: str, subdir: str) -> tuple[str, str]:

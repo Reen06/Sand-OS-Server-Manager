@@ -747,7 +747,14 @@ CATALOG: dict[str, AppDef] = {
         dockerhub_repo="reen16/comfyui",   # §11 publish target
         build_context="containers/comfyui",
         kind="web",
-        mode="shared",
+        # Per-user, not shared: whose pictures these are has to be answerable
+        # before they can be filed in anyone's home, and a single shared
+        # instance cannot answer it. The models stay one shared copy on the
+        # node (see the mounts), so this costs a container per active user, not
+        # a second copy of a 19 GB checkpoint. Only one user can realistically
+        # generate at a time on one GPU — that was already true; this makes it
+        # visible instead of silent.
+        mode="per-user",
         internal_port=8188,
         gpu=True,
         # No hard cap, same call as Ollama: the real constraint is VRAM, and a
@@ -785,16 +792,23 @@ CATALOG: dict[str, AppDef] = {
         # and a workflow had to be downloaded to a phone and re-uploaded to be
         # filed anywhere.
         mounts=[
+            # The one thing that stays shared between users, and node-local:
+            # the models are the app, and a checkpoint downloaded once should
+            # not be downloaded again per person.
             Mount(name="comfyui-models", path="/opt/ComfyUI/models", scope="shared"),
-            Mount(name="comfyui-output", path="/opt/ComfyUI/output", scope="shared",
-                  storage="nfs", nas_path="comfyui/output"),
-            Mount(name="comfyui-input", path="/opt/ComfyUI/input", scope="shared",
-                  storage="nfs", nas_path="comfyui/input"),
+            # Everything a person makes lands in THEIR NAS home, under a
+            # plainly-named folder — so an admin, or a housemate, sees it
+            # through exactly the sharing rules that already govern the rest of
+            # that person's files. No new permission model.
+            Mount(name="comfyui-output", path="/opt/ComfyUI/output", scope="per-user",
+                  storage="nfs", nas_path="ComfyUI/output"),
+            Mount(name="comfyui-input", path="/opt/ComfyUI/input", scope="per-user",
+                  storage="nfs", nas_path="ComfyUI/input"),
             # The user directory holds comfyui.db (SQLite, with a lock file)
             # alongside the settings, and SQLite's locking over a FUSE-mounted
             # cluster filesystem is not something to gamble a database on — so
-            # this one stays node-local.
-            Mount(name="comfyui-user", path="/opt/ComfyUI/user", scope="shared"),
+            # this one stays node-local, now one per person.
+            Mount(name="comfyui-user", path="/opt/ComfyUI/user", scope="per-user"),
             # …and the workflows alone are lifted back out onto the NAS, mounted
             # over the top of the local `user` volume. _mount_args orders parents
             # before children by path depth, so this lands after it rather than
@@ -802,8 +816,8 @@ CATALOG: dict[str, AppDef] = {
             # workflow" writes straight to the NAS, with no export/import step
             # and no second UI to maintain.
             Mount(name="comfyui-workflows",
-                  path="/opt/ComfyUI/user/default/workflows", scope="shared",
-                  storage="nfs", nas_path="comfyui/workflows"),
+                  path="/opt/ComfyUI/user/default/workflows", scope="per-user",
+                  storage="nfs", nas_path="ComfyUI/workflows"),
         ],
     ),
     "open-webui": AppDef(
