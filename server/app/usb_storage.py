@@ -105,15 +105,53 @@ def _lsblk() -> list[dict]:
 _NON_POSIX_FSTYPES = {"vfat", "exfat", "ntfs", "ntfs3"}
 
 
+# A disk carrying any of these is the machine's own — never offerable, whatever
+# else is on it. Judged per DISK rather than per partition: a system disk's data
+# partition is still on the disk you must not repartition, and offering sdb1
+# because only sdb5 happens to be `/` is how someone loses a boot volume.
+_SYSTEM_MOUNTS = {"/", "/boot", "/boot/efi", "/usr", "/var", "/home", "[SWAP]"}
+
+
+def _is_system_disk(disk: dict) -> bool:
+    for part in disk.get("children") or []:
+        mp = (part.get("mountpoint") or "").strip()
+        if mp:
+            norm = mp.rstrip("/") or "/"
+            if norm in _SYSTEM_MOUNTS or norm.startswith("/boot"):
+                return True
+        if (part.get("fstype") or "").lower() == "swap":
+            return True
+    return False
+
+
 def usb_partitions() -> list[dict]:
-    """Partitions on hotplug/USB disks: [{name,uuid,label,size,mountpoint,fstype,disk}].
-    `disk` (e.g. "/dev/sdc") is the parent whole-disk device — lets the
-    provisioning wizard trace a partition back to what it'd repartition."""
+    """Partitions that may be ASSIGNED to the pool.
+
+    Named for USB because that is all it used to return, and it is load-bearing
+    in enough call sites that renaming it is a separate change from widening it.
+
+    It now also returns partitions on INTERNAL data disks. A dedicated internal
+    drive is the most natural thing to contribute to a NAS, and it was the one
+    kind of drive that could not be added at all: the picker filtered on
+    `tran == "usb" or hotplug`, and a SATA data drive reports `sata`/`hotplug=0`
+    — indistinguishable, by that test, from the boot disk.
+
+    Safe to widen HERE specifically because assignment only mounts an existing
+    filesystem and records it. The destructive path — provision_drive(), which
+    repartitions and runs mkfs — is fed by usb_disks(), which is deliberately
+    left USB-only. Widening both would have put the system disk one click from
+    being repartitioned.
+
+    Belt and braces anyway: any disk carrying a system mountpoint or swap is
+    excluded outright, so an internal disk is offered only when it holds
+    nothing the machine needs to boot.
+    """
     out = []
     for disk in _lsblk():
         if disk.get("type") != "disk":
             continue
-        if disk.get("tran") != "usb" and not disk.get("hotplug"):
+        removable = disk.get("tran") == "usb" or bool(disk.get("hotplug"))
+        if not removable and _is_system_disk(disk):
             continue
         for part in disk.get("children") or []:
             if part.get("type") == "part" and part.get("uuid"):
@@ -125,6 +163,9 @@ def usb_partitions() -> list[dict]:
                     "mountpoint": part.get("mountpoint"),
                     "fstype": (part.get("fstype") or "").lower(),
                     "disk": f"/dev/{disk['name']}",
+                    # Lets the UI say which it is, and lets provisioning refuse
+                    # anything it should not be repartitioning.
+                    "removable": removable,
                 })
     return out
 
@@ -522,6 +563,17 @@ def provision_drive(disk: str, mode: str, **kwargs) -> dict:
         raise ValueError("bad disk path")
     if mode not in ("single", "split"):
         raise ValueError("mode must be 'single' or 'split'")
+    # This wipes a whole disk, so it refuses anything it cannot see in the
+    # removable inventory. usb_disks() is already USB-only, which makes this
+    # check redundant TODAY -- it is here so that widening that function later,
+    # for some unrelated reason, cannot quietly turn the repartitioning wizard
+    # loose on an internal drive. The assignment path was widened to include
+    # internal disks; this one must not follow it by accident.
+    if not any(d.get("name") == disk or f"/dev/{d.get('name')}" == disk
+               for d in usb_disks()):
+        raise ValueError(
+            f"{disk} is not a removable disk — provisioning wipes and "
+            "repartitions, and is deliberately limited to USB/hotplug drives")
     with _provision_lock:
         existing = _provision_jobs.get(disk)
         if existing and not existing["done"]:
