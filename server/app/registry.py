@@ -801,7 +801,7 @@ CATALOG: dict[str, AppDef] = {
             # through exactly the sharing rules that already govern the rest of
             # that person's files. No new permission model.
             Mount(name="comfyui-output", path="/opt/ComfyUI/output", scope="per-user",
-                  storage="nfs", nas_path="ComfyUI/output"),
+                  storage="nfs", nas_path="ComfyUI/output", hide_outputs=True),
             Mount(name="comfyui-input", path="/opt/ComfyUI/input", scope="per-user",
                   storage="nfs", nas_path="ComfyUI/input"),
             # The user directory holds comfyui.db (SQLite, with a lock file)

@@ -98,6 +98,13 @@ class Mount:
     # unaffected (it still comes from `name`), so the local fallback is
     # unchanged if the NAS is not mounted.
     nas_path: str = ""
+    # On an APP-ONLY (untrusted) node, move each finished file out of this
+    # mount as soon as it is written, into a sibling directory the container
+    # does not mount. The app can still write; it cannot read back what it
+    # produced, and the results leave with the staging directory when access is
+    # revoked. Ignored on a trusted node, where the files are already in the
+    # owner's own home and hiding them would serve nothing. See output_sweep.
+    hide_outputs: bool = False
 
 
 @dataclass

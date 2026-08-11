@@ -117,6 +117,11 @@ def _startup() -> None:
     glances_svc.start()   # local Glances REST server for the Fleet monitor panel
     _autostart_apps()            # bring the always-on AI stack up after a reboot
     _resync_nas_policy_if_host() # re-read export policy from the Hub after a reboot
+    # App-only nodes only: move each finished output out of the app's reach as
+    # it is written, so results leave with the staging directory. No-op on a
+    # trusted node, where the files are already in their owner's own home.
+    from . import output_sweep
+    output_sweep.start()
     # No-op unless this node was provisioned with a link token. Where it does
     # run, it is the only way the Hub can drive this node at all: see
     # hub_link.py for why a firewalled-shut inbound port leaves no alternative.

@@ -432,34 +432,20 @@ def _mesh_path(user: str, m, app_id: str = "") -> str | None:
         # nothing else. Note the instance, not just the app: two apps on one
         # node cannot see each other's, and neither can a second user's.
         if m.scope == "per-user" and m.name == "home":
-            if not app_id:
+            return _staging_instance_dir(staging, app_id, user)
+        # An app's own WORK on an app-only node (pictures it generates, files
+        # you hand it) also belongs in staging rather than a node-local volume.
+        # A local volume would strand it: nothing collects it when access is
+        # revoked, so the results would sit on an untrusted machine indefinitely
+        # and never reach the person who asked for them. Each mount gets its own
+        # subdirectory under `work/`, which is the part the container sees —
+        # `collected/`, its sibling, is deliberately not mounted (see
+        # output_sweep).
+        if m.scope == "per-user" and getattr(m, "nas_path", ""):
+            base = _staging_instance_dir(staging, app_id, user)
+            if not base:
                 return None
-            from . import registry
-            inst = registry.instance_name(app_id, user)
-            # Where that instance's directory sits depends on how much of the
-            # cluster this node mounts, and both arrangements are legitimate:
-            #
-            #   scoped  — the node mounts ONLY its own staging directory, so
-            #             that directory IS the root it sees. This is the one
-            #             that actually isolates: the machine cannot read
-            #             anyone's files even from a shell, because they are
-            #             not in its filesystem at all.
-            #   full    — the node mounts the whole tree and is kept to its
-            #             staging directory by this function. Correct for
-            #             apps, but only for apps.
-            #
-            # Detected rather than configured: a scoped mount has none of the
-            # fleet tree's landmarks, which is a fact about the mount itself
-            # and cannot drift out of sync the way a per-node setting would.
-            if _mesh_is_scoped():
-                return os.path.join(MESH_MOUNT, _safe(inst))
-            if not _mesh_available():
-                # No mount at all, and none possible: a node behind someone
-                # else's firewall cannot reach the filer. Its files are pushed
-                # to its own disk instead, so bind that.
-                from . import nas_staging
-                return nas_staging.pushed_dir(inst)
-            return os.path.join(MESH_MOUNT, "staging", _safe(staging), _safe(inst))
+            return os.path.join(base, "work", _staging_leaf(m))
         # A named per-user mount is this app's own settings. Those stay
         # node-local (None sends the caller to a local volume), because they
         # are not the user's files and must survive the staging directory
@@ -482,6 +468,54 @@ def _mesh_path(user: str, m, app_id: str = "") -> str | None:
     if m.scope == "share":
         # m.name is the share's slug (set by _expand_shares, not by an AppDef).
         return os.path.join(MESH_MOUNT, config.NAS_SHARES_SUBPATH, _safe(m.name))
+    return _mesh_path_trusted(user, m)
+
+
+def _staging_leaf(m) -> str:
+    """The subdirectory name a mount gets inside an instance's staging area.
+
+    The LAST segment of nas_path, so `ComfyUI/output` and `ComfyUI/input` stay
+    distinguishable as `output` and `input` rather than colliding on the app
+    name."""
+    parts = [p for p in (getattr(m, "nas_path", "") or "").split("/")
+             if p not in ("", ".", "..")]
+    return _safe(parts[-1]) if parts else _safe(m.name)
+
+
+def _staging_instance_dir(staging: str, app_id: str, user: str) -> str | None:
+    """This instance's staging directory on an app-only node."""
+    if not app_id:
+        return None
+    from . import registry
+    inst = registry.instance_name(app_id, user)
+    # Where that instance's directory sits depends on how much of the
+    # cluster this node mounts, and both arrangements are legitimate:
+    #
+    #   scoped  — the node mounts ONLY its own staging directory, so
+    #             that directory IS the root it sees. This is the one
+    #             that actually isolates: the machine cannot read
+    #             anyone's files even from a shell, because they are
+    #             not in its filesystem at all.
+    #   full    — the node mounts the whole tree and is kept to its
+    #             staging directory by this function. Correct for
+    #             apps, but only for apps.
+    #
+    # Detected rather than configured: a scoped mount has none of the
+    # fleet tree's landmarks, which is a fact about the mount itself
+    # and cannot drift out of sync the way a per-node setting would.
+    if _mesh_is_scoped():
+        return os.path.join(MESH_MOUNT, _safe(inst))
+    if not _mesh_available():
+        # No mount at all, and none possible: a node behind someone
+        # else's firewall cannot reach the filer. Its files are pushed
+        # to its own disk instead, so bind that.
+        from . import nas_staging
+        return nas_staging.pushed_dir(inst)
+    return os.path.join(MESH_MOUNT, "staging", _safe(staging), _safe(inst))
+
+
+def _mesh_path_trusted(user: str, m) -> str | None:
+    """Placement on a node that mounts the whole tree."""
     if m.scope == "shared":
         # An app may group its mounts under one folder (Mount.nas_path) so a
         # person browsing the NAS finds "comfyui/output" rather than a row of

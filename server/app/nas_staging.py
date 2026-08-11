@@ -135,13 +135,23 @@ def collect(node: str, instance: str, user: str) -> dict:
     collected = []
     try:
         os.makedirs(out, exist_ok=True)
-        for name in sorted(os.listdir(src_dir)):
-            if name == ".sandos-staging.json":
-                continue
-            s = os.path.join(src_dir, name)
-            if os.path.isfile(s):
-                shutil.copy2(s, os.path.join(out, name))
-                collected.append(name)
+        # Walked rather than listed. An app's results are not necessarily loose
+        # files at the top: output_sweep files them under collected/<mount>/,
+        # and an app may write subfolders of its own. A flat listdir saw none of
+        # that and reported "nothing produced" while the work sat one directory
+        # down.
+        for root, _dirs, names in os.walk(src_dir):
+            for name in sorted(names):
+                if name == ".sandos-staging.json":
+                    continue
+                s = os.path.join(root, name)
+                if not os.path.isfile(s):
+                    continue
+                rel = os.path.relpath(s, src_dir)
+                dst = os.path.join(out, rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(s, dst)
+                collected.append(rel)
     except OSError:
         pass
     if not collected:
