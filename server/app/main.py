@@ -122,6 +122,12 @@ def _startup() -> None:
     # trusted node, where the files are already in their owner's own home.
     from . import output_sweep
     output_sweep.start()
+    # Recreate any container still holding a FUSE connection that died with a
+    # mount restart. Nothing else notices: Docker reports such a container
+    # healthy while every path under the mount answers ENOTCONN, and one sat
+    # that way for seven days before anyone looked.
+    from . import remount_heal
+    remount_heal.start()
     # No-op unless this node was provisioned with a link token. Where it does
     # run, it is the only way the Hub can drive this node at all: see
     # hub_link.py for why a firewalled-shut inbound port leaves no alternative.
