@@ -43,6 +43,10 @@ _PROBE_TIMEOUT = 8
 # mount restart is repaired before someone opens the app and finds it empty.
 _INTERVAL = 300
 _STARTUP_DELAY = 60
+# Containers recreated on the previous pass. If one is stale AGAIN it means
+# recreating did not help, so recreating a third time will not either — that is
+# a churn loop, not a repair. Belt and braces behind the dead-mount check above.
+_last_repaired: set = set()
 
 
 def _sh(*args: str, timeout: int = 20) -> tuple[int, str]:
@@ -92,12 +96,41 @@ def scan(repair: bool = True) -> dict:
         return {"checked": 0, "stale": [], "repaired": [], "failed": [],
                 "note": f"{MOUNT} is not mounted"}
 
+    # `mountpoint -q` is NOT sufficient. A FUSE mount whose connection has died
+    # still HAS an entry in /proc/mounts, so it still answers as a mountpoint
+    # while every access returns ENOTCONN. Recreating containers against a mount
+    # in that state achieves nothing: the fresh container is stale the instant it
+    # starts, the next scan finds it stale again, and this loops — recreating a
+    # user's app every interval, forever, reporting "repaired" each time.
+    #
+    # Observed doing exactly that: ComfyUI recreated on a 5-minute cycle while
+    # the host mount was itself dead. Nothing here can fix a dead mount, so the
+    # only correct action is to say so and stop.
+    rc, probe = _sh("ls", MOUNT, timeout=_PROBE_TIMEOUT)
+    if rc != 0 and ("not connected" in probe.lower() or "transport endpoint" in probe.lower()):
+        log.error("remount_heal: %s is itself dead (%s) — NOT recreating containers, "
+                  "they would be stale again immediately. Fix the mount first: "
+                  "umount -l %s && systemctl restart sandos-nas-mount",
+                  MOUNT, probe.strip()[:80], MOUNT)
+        return {"checked": 0, "stale": [], "repaired": [], "failed": [],
+                "note": f"{MOUNT} is mounted but dead — fix the mount, not the containers"}
+
     bound = _bound_containers()
     stale = [(n, d) for n, d in bound if _is_stale(n, d)]
     out = {"checked": len(bound), "stale": [n for n, _ in stale],
            "repaired": [], "failed": []}
     if not stale or not repair:
         return out
+
+    repeat = {n for n, _ in stale} & _last_repaired
+    if repeat:
+        log.error("remount_heal: %s went stale again after being recreated — "
+                  "recreating will not fix this. Something outside these "
+                  "containers is wrong; not touching them again.", sorted(repeat))
+        out["failed"] = sorted(repeat)
+        stale = [(n, d) for n, d in stale if n not in repeat]
+        if not stale:
+            return out
 
     by_name = {i["name"]: (i["app_id"], i["user"])
                for i in registry.instances_summary()}
@@ -125,6 +158,8 @@ def scan(repair: bool = True) -> dict:
         except Exception as e:  # noqa: BLE001
             log.exception("remount_heal: %s failed: %s", name, e)
             out["failed"].append(name)
+    _last_repaired.clear()
+    _last_repaired.update(out["repaired"])
     return out
 
 
