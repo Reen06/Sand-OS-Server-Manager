@@ -27,6 +27,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -183,9 +184,29 @@ def _local_free_bytes() -> int | None:
         return None
 
 
+def _node_name() -> str:
+    """This machine, as people call it — the storage menu is read on a Hub page
+    listing several nodes, where "this server" answers nothing."""
+    return getattr(config, "NODE_NAME", "") or socket.gethostname()
+
+
 def _nas_free_bytes() -> int | None:
+    """Free space on the MESH, from the mesh's own mount.
+
+    Not NAS_ROOT: that is a local staging tree that happens to live on the
+    node's system disk, so measuring it reported the system disk's free space
+    under a "Fleet NAS" label — the same number as the local option, on every
+    node. Two identical figures is what gave it away.
+
+    None when the mesh is not mounted here, which is a real answer: a node that
+    cannot see the mesh cannot store anything on it, and offering the choice
+    would write to a local directory while claiming otherwise.
+    """
+    mount = getattr(config, "NAS_MESH_MOUNT", "") or ""
+    if not mount or not os.path.ismount(mount):
+        return None
     try:
-        return shutil.disk_usage(config.NAS_ROOT).free
+        return shutil.disk_usage(mount).free
     except OSError:
         return None
 
@@ -204,14 +225,23 @@ def list_locations(app_id: str, user: str) -> dict:
     rows = []
     for m in _relocatable(app_id):
         mode, usb_uuid = effective_storage(app_id, user, m)
-        options = [{"mode": "local", "label": "This server (local disk)", "free_bytes": local_free}]
-        if config.NAS_ENABLED:
-            options.append({"mode": "nfs", "label": "Fleet NAS (shared across nodes)",
-                             "free_bytes": nas_free})
+        # Names say WHERE the bytes land and what that costs you, because that
+        # is the actual decision. "USB:" was plainly wrong once internal drives
+        # became selectable — the drive this most often names is a SATA disk
+        # bolted inside the machine.
+        options = [{"mode": "local", "label": f"{_node_name()} — system disk",
+                    "free_bytes": local_free}]
+        # Only offered where the mesh is actually mounted. Elsewhere the write
+        # would land on a local directory under a name promising otherwise.
+        if config.NAS_ENABLED and nas_free is not None:
+            options.append({"mode": "nfs", "label": "Mesh NAS — replicated across machines",
+                            "free_bytes": nas_free})
         for d in devices:
+            kind = "USB drive" if d.get("removable") else "internal drive"
+            label = d.get("label") or d.get("name") or "drive"
             options.append({
                 "mode": "usb", "usb_uuid": d["uuid"],
-                "label": f"USB: {d['label']}",
+                "label": f"{label} — {kind} on {_node_name()}",
                 "free_bytes": usb_storage.free_bytes_for(d["uuid"]),
             })
         rows.append({
