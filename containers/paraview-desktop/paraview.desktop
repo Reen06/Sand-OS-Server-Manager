@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ParaView
+GenericName=Scientific Visualization
+Comment=Full ParaView desktop, streamed
+Exec=/usr/local/bin/paraview-launch.sh %F
+Icon=/opt/paraview/share/icons/hicolor/96x96/apps/paraview.png
+Terminal=false
+Categories=Graphics;Science;Engineering;
+X-KDE-autostart-after=panel
+X-GNOME-Autostart-enabled=true

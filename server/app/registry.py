@@ -502,6 +502,42 @@ CATALOG: dict[str, AppDef] = {
         packaged_dockerfile="Dockerfile.packaged",
         dockerhub_repo="reen16/openfoamgui",
     ),
+    "paraview-desktop": AppDef(
+        id="paraview-desktop",
+        multi_node=True,   # per-user; reads the user's own NAS home, no shared state
+        label="ParaView Desktop",
+        icon="cpu",           # whitelisted; matches the other streamed desktop apps
+        color="green",        # same family as the ParaViewWeb app
+        desc="Full ParaView desktop, streamed — GPU rendering, full filter library.",
+        image=config.PARAVIEW_DESKTOP_IMAGE,
+        dockerhub_repo="reen16/paraview-desktop",
+        build_context="containers/paraview-desktop",
+        kind="streamed",
+        mode="per-user",
+        internal_port=8080,   # Selkies, same as the other streamed apps
+        # GPU is the POINT of this app existing alongside ParaViewWeb: that one
+        # renders with OSMesa on the CPU, which is why it stays usable on a
+        # small node and why it struggles with a large dataset. This one wants
+        # the card.
+        gpu=True,
+        # Higher than FreeCAD's 3g: ParaView loads whole datasets into memory,
+        # and the meshes this exists to open are the ones that do not fit
+        # comfortably anywhere else.
+        mem_limit="8g",
+        encoder="nvh264enc",
+        resize=True,
+        # Qt scales as a whole under QT_SCALE_FACTOR, which is why the image
+        # declares app_scale=false — one slider is the entire story here.
+        env={"QT_SCALE_FACTOR": "1.5"},
+        keepalive_seconds=600,
+        # The same NAS home every other app already sees, so a mesh written by
+        # OpenFOAM or a file dropped in Files is simply there. Mounted at a
+        # visible path rather than over $HOME: ParaView's own settings live in
+        # ~/.config and are better kept out of the shared tree.
+        mounts=[
+            Mount(name="home", path="/home/ubuntu/NAS", scope="per-user", storage="nfs"),
+        ],
+    ),
     "paraview": AppDef(
         id="paraview",
         multi_node=True,   # per-user; reads datasets, no shared mutable state

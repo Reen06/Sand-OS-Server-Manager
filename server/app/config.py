@@ -241,6 +241,16 @@ OPENFOAM_GUI_PACKAGED_IMAGE = os.environ.get("SM_OPENFOAM_GUI_PACKAGED_IMAGE", "
 # real here.
 PARAVIEW_IMAGE = os.environ.get("SM_PARAVIEW_IMAGE", "sandos-paraview:latest")
 
+# ParaView DESKTOP — the full Qt application streamed over WebRTC, separate from
+# the ParaViewWeb app above. Two different programs, not two skins: ParaViewWeb
+# is a fixed browser visualizer rendering with OSMesa on the CPU; this is the
+# real client with the full filter library, the Python shell, plugins and GPU
+# rendering. Built locally (containers/paraview-desktop) — ~700MB of Kitware
+# tarball on top of the Selkies desktop base, so there is no useful upstream
+# image to pull.
+PARAVIEW_DESKTOP_IMAGE = os.environ.get(
+    "SM_PARAVIEW_DESKTOP_IMAGE", "sandos-paraview-desktop:latest")
+
 # OnlyOffice Document Server — catalogued as an alternative to Collabora, but
 # NOT deployed by default (needs ~4GB RAM headroom the box may not have —
 # nothing is pulled/built until someone actually presses Start on it).
