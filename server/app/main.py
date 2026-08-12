@@ -2344,6 +2344,30 @@ def sm_app_icon_png(app_id: str):
                     headers={"Cache-Control": "public, max-age=3600"})
 
 
+# app_id -> path prefixes the APP authenticates rather than the Hub session.
+# Only the OCI container registry, and only for the forge that serves one.
+_APP_AUTHED_PATHS = {"forgejo": ("v2/", "v2")}
+
+
+def _is_app_authenticated_path(app_id: str, path: str) -> bool:
+    """True where the APP performs authentication, so this proxy must not.
+
+    A container registry is the case: the client is Docker, which cannot hold a
+    Hub session, and authenticates against the registry itself — Basic, then a
+    bearer token — with Forgejo enforcing that on every /v2/ request. Gating it
+    here means `docker login` receives OUR 401 instead of the registry's
+    challenge, and no credential can ever succeed.
+
+    Deliberately an exact prefix on a named app rather than a general flag, so
+    it cannot widen to the rest of the app by accident: "v2extra" is not exempt.
+    """
+    prefixes = _APP_AUTHED_PATHS.get(app_id)
+    if not prefixes:
+        return False
+    p = (path or "").lstrip("/")
+    return p in prefixes or any(p.startswith(x) for x in prefixes if x.endswith("/"))
+
+
 def _is_native_pwa_public_asset(app_id: str, path: str) -> bool:
     """manifest.json + static/* for a native_pwa app (Open WebUI) — PUBLIC on
     purpose, same reasoning as _PWA_ASSETS above: browsers fetch a PWA's own
@@ -2364,6 +2388,10 @@ def _is_native_pwa_public_asset(app_id: str, path: str) -> bool:
 async def stream_http(app_id: str, path: str, request: Request):
     if _is_native_pwa_public_asset(app_id, path):
         user, role = "_pwa", None
+    elif _is_app_authenticated_path(app_id, path):
+        # The app authenticates this itself; passing a username here would only
+        # be injected as an SSO identity the registry must not honour.
+        user, role = "_app_auth", None
     else:
         ident = _require_app(request, app_id)
         user, role = ident["username"], ident.get("role")
