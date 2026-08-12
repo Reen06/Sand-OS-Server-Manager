@@ -407,6 +407,22 @@ HUB_LOGIN_URL = os.environ.get("SM_HUB_LOGIN_URL", HUB_URL or "")
 # everywhere, rather than trying to make an app answer to several.
 PUBLIC_BASE_URL = _with_scheme(os.environ.get("SM_PUBLIC_BASE_URL", "")) or HUB_URL
 
+
+def public_subdomain_url(sub: str) -> str:
+    """https://<sub>.<public host>/ — the address of an app that gets its own
+    hostname rather than a path under the dashboard.
+
+    Derived from PUBLIC_BASE_URL rather than configured separately: the Hub's
+    Caddy issues these subdomain certs from the same DuckDNS record, so they are
+    the same domain by construction and a second setting could only ever drift
+    out of agreement with the first.
+    """
+    base = PUBLIC_BASE_URL or ""
+    if "://" not in base:
+        return base
+    scheme, host = base.split("://", 1)
+    return f"{scheme}://{sub}.{host.strip('/')}/"
+
 # Apps to auto-launch on SM startup (comma-separated ids). OPT-IN, empty by
 # default — nothing starts on boot unless the operator explicitly lists apps
 # via SM_AUTOSTART_APPS. Every app is on-demand: it launches when opened. This

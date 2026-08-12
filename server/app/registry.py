@@ -545,6 +545,11 @@ CATALOG: dict[str, AppDef] = {
         # links that resolve to the HUB's root and 404 — the app renders its own
         # 404 page, which looks like a broken app rather than a broken base path.
         proxy_subpath="root",
+        # A container registry is defined at /v2/ of a HOST. Docker builds that
+        # URL itself from the image reference, so a registry under a path cannot
+        # exist — "host/apps/stream/forgejo" is not a valid image name, and no
+        # amount of rewriting makes `docker pull` look anywhere but the host root.
+        own_subdomain=True,       # served at git.<domain>
         env={
             # Forgejo derives AppSubURL — and therefore every asset and redirect
             # path — from ROOT_URL's PATH component. The host part only affects
@@ -553,7 +558,8 @@ CATALOG: dict[str, AppDef] = {
             # deployment's hostname into shipped code. Degrades to a bare path if
             # the node has no Hub URL configured, which is still correct for
             # assets — the half that breaks the UI.
-            "FORGEJO__server__ROOT_URL": f"{config.PUBLIC_BASE_URL}{config.EXTERNAL_BASE}/stream/forgejo/",
+            # Its own hostname, not a path under the dashboard — see own_subdomain.
+            "FORGEJO__server__ROOT_URL": config.public_subdomain_url("git"),
             # The install wizard is already past; without this a fresh container
             # on an existing data volume can still decide it wants to re-run it.
             "FORGEJO__security__INSTALL_LOCK": "true",
