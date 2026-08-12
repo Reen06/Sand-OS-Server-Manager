@@ -95,12 +95,23 @@ def _upstream_path(app_id: str, path: str) -> str:
     return path
 
 
-def _fwd_headers(app, request: Request, user: str, role: str | None = None) -> dict:
+def _fwd_headers(app, request: Request, user: str, role: str | None = None,
+                 keep_client_auth: bool = False) -> dict:
     """Build upstream request headers: drop hop/conditional headers, inject the
     Selkies basic-auth for streamed apps only, and set a TRUSTED SSO header
-    (stripping any client-supplied copy) for apps that use header SSO."""
+    (stripping any client-supplied copy) for apps that use header SSO.
+
+    keep_client_auth passes the CLIENT's Authorization through instead of
+    dropping it. Off by default and rightly so — for every other app the
+    client's credentials are none of the app's business, and the proxy supplies
+    whatever auth the app needs. A container registry inverts that: Docker's
+    credentials are the ONLY thing that identifies the caller, and stripping
+    them makes the registry issue an anonymous token that then fails, which
+    reads as a rejected password rather than a discarded header.
+    """
+    drop = _HOP - {"authorization"} if keep_client_auth else _HOP
     fwd = {k: v for k, v in request.headers.items()
-           if k.lower() not in _HOP and k.lower() not in _NO_FORWARD_REQ}
+           if k.lower() not in drop and k.lower() not in _NO_FORWARD_REQ}
     streamed = app.streamed if app else True
     if streamed:
         fwd["Authorization"] = _auth()          # instance basic-auth (Selkies only)
@@ -353,7 +364,13 @@ async def http(app_id: str, path: str, request: Request, user: str, role: str | 
         log.warning("HTTP %s /%s user=%s → no running instance", request.method, path, user)
         return Response("app not running", status_code=502)
     target = f"http://127.0.0.1:{port}/{_upstream_path(app_id, path)}"
-    fwd = _fwd_headers(registry.APPS.get(app_id), request, user, role)
+    # The registry authenticates the caller from Docker's own credentials, so
+    # they must survive this hop — see _fwd_headers. The same predicate that let
+    # the request past the identity gate decides this, so the two can never
+    # disagree about which paths the app owns.
+    from .main import _is_app_authenticated_path      # deferred: circular import
+    fwd = _fwd_headers(registry.APPS.get(app_id), request, user, role,
+                       keep_client_auth=_is_app_authenticated_path(app_id, path))
     client = _get_client()
     req = client.build_request(request.method, target, params=dict(request.query_params),
                                headers=fwd, content=await request.body())
