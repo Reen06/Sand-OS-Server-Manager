@@ -565,7 +565,40 @@ CATALOG: dict[str, AppDef] = {
             # server would fight it for the port and crash-loop the container
             # with "bind: address already in use". Verified live.
             "FORGEJO__server__START_SSH_SERVER": "false",
+
+            # ── Hub SSO ──────────────────────────────────────────────────────
+            # The Hub session is the gate; Forgejo trusts the username the proxy
+            # injects and provisions an account on first sight, so every Hub user
+            # simply HAS a forge account without anyone creating one.
+            # Accounts made directly in Forgejo keep working alongside these —
+            # this adds an auth source, it does not replace the local one.
+            "FORGEJO__service__ENABLE_REVERSE_PROXY_AUTHENTICATION": "true",
+            "FORGEJO__service__ENABLE_REVERSE_PROXY_AUTO_REGISTRATION": "true",
+            "FORGEJO__security__REVERSE_PROXY_AUTHENTICATION_USER": "X-WEBAUTH-USER",
+            # Which source addresses may assert that header. The SM proxy reaches
+            # the published 127.0.0.1 port, so from inside the container the
+            # connection arrives from the Docker bridge gateway, not loopback —
+            # leaving this at its 127.0.0.0/8 default silently ignores the header
+            # and everyone lands on the sign-in page anyway.
+            "FORGEJO__security__REVERSE_PROXY_TRUSTED_PROXIES": "127.0.0.0/8,::1/128,172.16.0.0/12",
         },
+        # Trusted-header SSO. proxy.py strips any client-supplied copy before
+        # injecting the real one, so a browser cannot assert its own identity.
+        #
+        # WHAT THIS TRUSTS: anything able to reach the container's published port
+        # directly can forge this header. That port is bound to 127.0.0.1 on the
+        # host, so the boundary is "a process on the node itself" — not the LAN,
+        # and not the mesh.
+        sso_header="X-WEBAUTH-USER",
+        # Forgejo reserves "admin" — it owns the /admin route, so no account can
+        # ever carry that name and the Hub's admin would be locked out entirely
+        # (verified against a live instance: "CreateUser: name is reserved").
+        #
+        # "admin" in Forgejo is a PERMISSION FLAG, not a name, so the Hub admin
+        # can still genuinely BE the forge administrator — just spelled in full.
+        # Any other Hub user passes through unchanged and is auto-provisioned
+        # under their own name.
+        sso_user_map={"admin": "administrator"},
     ),
     "paraview-desktop": AppDef(
         id="paraview-desktop",

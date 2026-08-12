@@ -159,6 +159,14 @@ class AppDef:
     # the account instead of leaving it pending.
     sso_role_header: str | None = None
     sso_role_value: str = "user"
+    # Rewrites of the Hub username before it is injected, for apps that refuse
+    # certain names. Forgejo reserves "admin" (it owns the /admin route), so a
+    # Hub user literally called admin can never exist there — auto-registration
+    # fails with "name is reserved" and that person can never sign in at all.
+    # An explicit map rather than a clever transform: it is greppable, it is
+    # obvious in review which names are special, and a name that is NOT mapped
+    # fails loudly at first sign-in rather than silently becoming someone else.
+    sso_user_map: dict[str, str] = field(default_factory=dict)
     # Apps under the shared /apps/stream/{id}/ subpath get OUR synthetic
     # PWA manifest+icon injected (see proxy.py _inject_pwa) so "Open in
     # window" installs each as its OWN distinctly-iconed app — most apps have

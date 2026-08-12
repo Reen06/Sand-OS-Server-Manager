@@ -110,7 +110,11 @@ def _fwd_headers(app, request: Request, user: str, role: str | None = None) -> d
     # it; stripping it caused an auth→login redirect loop.
     if app and app.sso_header:
         fwd.pop(app.sso_header.lower(), None)    # never trust a client-sent copy
-        fwd[app.sso_header] = user               # inject the authenticated identity
+        # Some apps refuse particular names outright (Forgejo reserves "admin"),
+        # which would leave that person unable to sign in at all rather than
+        # merely inconvenienced. The map is applied here, at the one place the
+        # identity crosses into the app, so nothing downstream has to know.
+        fwd[app.sso_header] = app.sso_user_map.get(user, user)
     if app and app.sso_role_header:
         fwd.pop(app.sso_role_header.lower(), None)
         # A Hub ADMIN gets promoted to the app's own admin role too (Open
