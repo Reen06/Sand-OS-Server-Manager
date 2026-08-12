@@ -53,6 +53,35 @@ RUN set -eux; \
     rm -f /tmp/pv.tar.gz; \
     test -x /opt/paraview/bin/paraview
 
+# Two fixes to the base image, both carried over from ../freecad-streamer —
+# they are properties of this Selkies base, not of the app on top of it, so any
+# image built on it needs them. Placed AFTER the ParaView download so a change
+# here does not invalidate that ~690MB layer.
+#
+# 1. selkies-gstreamer 1.6.2 ships on_signalling_error/on_audio_signalling_error
+#    as `async def` that call the BLOCKING time.sleep(2) on every "no peer yet"
+#    retry, stalling the single-threaded asyncio signalling loop for 2s each
+#    time. Symptom seen live on this image: the viewer's loading bars render but
+#    the status text ("connecting to stream", "registering with peer id…") never
+#    appears, because signalling progress never reaches the browser. Compounding
+#    stalls also stop the socket servicing new offers at all, which is the
+#    "refuses to reconnect after a few disconnects" bug.
+RUN set -eux; \
+    f=/usr/local/lib/python3.12/dist-packages/selkies_gstreamer/__main__.py; \
+    grep -q "time.sleep(2)" "$f"; \
+    sed -i "s/time\\.sleep(2)/await asyncio.sleep(2)/g" "$f"; \
+    ! grep -q "           time.sleep(2)" "$f"
+
+# 2. gst-web's hidden Ctrl+Shift+LeftClick -> requestPointerLock() hotkey.
+#    ParaView uses Ctrl+Click and Shift+Click constantly for selection and
+#    camera work, so this silently grabs the pointer mid-workflow and reads as
+#    an unwanted auto-fullscreen. Same reasoning as FreeCAD, same fix.
+RUN set -eux; \
+    f=/opt/gst-web/input.js; \
+    grep -q "if (down && event.button === 0 && event.ctrlKey && event.shiftKey) {" "$f"; \
+    sed -i "s/if (down && event.button === 0 && event.ctrlKey && event.shiftKey) {/if (false \&\& down \&\& event.button === 0 \&\& event.ctrlKey \&\& event.shiftKey) { \/\/ disabled: ParaView uses Ctrl+Shift+Click for selection/" "$f"; \
+    grep -q "if (false && down" "$f"
+
 COPY paraview-launch.sh /usr/local/bin/paraview-launch.sh
 RUN chmod +x /usr/local/bin/paraview-launch.sh
 
