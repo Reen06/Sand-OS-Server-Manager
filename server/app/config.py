@@ -396,6 +396,17 @@ HUB_VERIFY_TLS = os.environ.get("SM_HUB_VERIFY_TLS", "false").lower() == "true"
 # Where to send unauthenticated users to log in (the Hub dashboard).
 HUB_LOGIN_URL = os.environ.get("SM_HUB_LOGIN_URL", HUB_URL or "")
 
+# The address people actually type. HUB_URL is how this NODE reaches the Hub —
+# usually a LAN IP — which is not necessarily how a browser gets there, and some
+# apps care about the difference. Forgejo builds its canonical URL from this and
+# warns on every page when the browser's address does not match it.
+#
+# One value, because an app can only have one canonical URL: reaching the same
+# app by a second name still warns. Split-horizon DNS (the same hostname
+# resolving to the LAN address at home) is the way to make one name correct
+# everywhere, rather than trying to make an app answer to several.
+PUBLIC_BASE_URL = _with_scheme(os.environ.get("SM_PUBLIC_BASE_URL", "")) or HUB_URL
+
 # Apps to auto-launch on SM startup (comma-separated ids). OPT-IN, empty by
 # default — nothing starts on boot unless the operator explicitly lists apps
 # via SM_AUTOSTART_APPS. Every app is on-demand: it launches when opened. This

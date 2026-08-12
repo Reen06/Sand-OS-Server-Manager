@@ -553,7 +553,7 @@ CATALOG: dict[str, AppDef] = {
             # deployment's hostname into shipped code. Degrades to a bare path if
             # the node has no Hub URL configured, which is still correct for
             # assets — the half that breaks the UI.
-            "FORGEJO__server__ROOT_URL": f"{config.HUB_URL}{config.EXTERNAL_BASE}/stream/forgejo/",
+            "FORGEJO__server__ROOT_URL": f"{config.PUBLIC_BASE_URL}{config.EXTERNAL_BASE}/stream/forgejo/",
             # The install wizard is already past; without this a fresh container
             # on an existing data volume can still decide it wants to re-run it.
             "FORGEJO__security__INSTALL_LOCK": "true",
