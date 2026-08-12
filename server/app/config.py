@@ -251,6 +251,11 @@ PARAVIEW_IMAGE = os.environ.get("SM_PARAVIEW_IMAGE", "sandos-paraview:latest")
 PARAVIEW_DESKTOP_IMAGE = os.environ.get(
     "SM_PARAVIEW_DESKTOP_IMAGE", "sandos-paraview-desktop:latest")
 
+# Forgejo — git forge + OCI container registry. Upstream image, pulled not built:
+# there is nothing to fork here, and pinning the major track means security
+# updates arrive without a rebuild.
+FORGEJO_IMAGE = os.environ.get("SM_FORGEJO_IMAGE", "codeberg.org/forgejo/forgejo:12")
+
 # OnlyOffice Document Server — catalogued as an alternative to Collabora, but
 # NOT deployed by default (needs ~4GB RAM headroom the box may not have —
 # nothing is pulled/built until someone actually presses Start on it).

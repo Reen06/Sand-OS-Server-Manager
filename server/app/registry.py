@@ -502,6 +502,44 @@ CATALOG: dict[str, AppDef] = {
         packaged_dockerfile="Dockerfile.packaged",
         dockerhub_repo="reen16/openfoamgui",
     ),
+    "forgejo": AppDef(
+        id="forgejo",
+        # One forge for the household, not one per person. Forgejo has its OWN
+        # user model — orgs, repo ownership, per-repo collaborators — and running
+        # a private copy per person would mean nobody could ever share a repo,
+        # which is most of what a forge is for. Who may reach it is the Hub's
+        # question; what they can see inside it is Forgejo's.
+        mode="shared",
+        multi_node=False,   # a git forge is stateful; two instances = two truths
+        label="Forgejo",
+        icon="database",      # whitelisted; closest to "a store of repositories"
+        color="orange",
+        desc="Git forge and container registry — your own GitHub, on the mesh.",
+        image=config.FORGEJO_IMAGE,
+        kind="web",
+        internal_port=3000,
+        gpu=False,
+        # Forgejo itself is a ~300MB Go binary; the headroom is for git
+        # operations, which spike during a large clone or a repack.
+        mem_limit="2g",
+        # Its whole state — repos, the SQLite DB, LFS, and the container
+        # registry's image layers — lives under /data. One volume, so a backup
+        # or a move is one thing rather than four.
+        #
+        # storage="local" is the DEFAULT, not the intended resting place: a
+        # node's Docker root is usually its system disk, and a registry holding
+        # multi-GB app images will outgrow that. Point it at the node's bulk
+        # drive with the per-app storage move once installed — that path already
+        # copies, verifies, then flips, and leaves the old copy until told.
+        #
+        # Deliberately NOT storage="nfs". Git repositories on network or FUSE
+        # storage are a documented corruption and performance risk — the same
+        # reason GitLab deprecated NFS for Gitaly. Redundancy comes from dumps
+        # into the mesh Protected tier, not from putting the live repos there.
+        mounts=[
+            Mount(name="forgejo-data", path="/data", scope="shared", storage="local"),
+        ],
+    ),
     "paraview-desktop": AppDef(
         id="paraview-desktop",
         multi_node=True,   # per-user; reads the user's own NAS home, no shared state
