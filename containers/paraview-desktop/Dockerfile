@@ -82,6 +82,39 @@ RUN set -eux; \
     sed -i "s/if (down && event.button === 0 && event.ctrlKey && event.shiftKey) {/if (false \&\& down \&\& event.button === 0 \&\& event.ctrlKey \&\& event.shiftKey) { \/\/ disabled: ParaView uses Ctrl+Shift+Click for selection/" "$f"; \
     grep -q "if (false && down" "$f"
 
+# THE ONE THAT BREAKS THE STREAM BEHIND THE HUB.
+#
+# The web client builds its signalling WebSocket and TURN-credentials fetch from
+# ABSOLUTE paths — "/{appName}/signalling/" and "/turn" — which resolve to the
+# Hub's own root instead of the app's subpath (/apps/stream/paraview-desktop/)
+# and 404. The stream then never starts and, because signalling never progresses,
+# the viewer's status line stays BLANK: no "Connecting to server", no
+# "Registering with server, peer ID: …". The loading bars render because they are
+# static markup, which makes it look like a hung app rather than a routing bug.
+#
+# Observed exactly that on this image before this patch. Rewriting the paths to be
+# relative to the current location works both at the root and behind the proxy.
+RUN set -eux; \
+    f=/opt/gst-web/app.js; \
+    grep -q '"/" + app.appName + "/signalling/"' "$f"; \
+    sed -i \
+      -e 's#"/" + app.appName + "/signalling/"#window.location.pathname + "webrtc/signalling/"#g' \
+      -e 's#fetch("/turn")#fetch("turn")#g' \
+      -e 's#fetch("/publish/" + app.appName)#fetch("publish/" + app.appName)#g' \
+      "$f"; \
+    grep -q 'window.location.pathname + "webrtc/signalling/"' "$f"; \
+    ! grep -q 'fetch("/turn")' "$f"
+
+# Auto-resize the remote display to match the browser window, so the stream fills
+# the viewport with no letterboxing.
+ENV SELKIES_ENABLE_RESIZE=true
+
+# Replace the Selkies CACHING service worker with a passthrough one: no caching,
+# so the client shell can never go stale against a rebuilt image, but a real
+# fetch handler so the app stays installable. Same file FreeCAD uses — the
+# behaviour wanted is identical and duplicating it would let the two drift.
+COPY paraview-sw.js /opt/gst-web/sw.js
+
 COPY paraview-launch.sh /usr/local/bin/paraview-launch.sh
 RUN chmod +x /usr/local/bin/paraview-launch.sh
 
