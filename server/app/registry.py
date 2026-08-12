@@ -539,6 +539,33 @@ CATALOG: dict[str, AppDef] = {
         mounts=[
             Mount(name="forgejo-data", path="/data", scope="shared", storage="local"),
         ],
+        # Strip to the container root and tell Forgejo its external address,
+        # exactly as Filebrowser does with FB_BASEURL. Forgejo builds asset and
+        # redirect URLs from ROOT_URL, so without this it emits absolute "/assets/…"
+        # links that resolve to the HUB's root and 404 — the app renders its own
+        # 404 page, which looks like a broken app rather than a broken base path.
+        proxy_subpath="root",
+        env={
+            # Forgejo derives AppSubURL — and therefore every asset and redirect
+            # path — from ROOT_URL's PATH component. The host part only affects
+            # absolute links (clone URLs, webhooks, email), so it is built from
+            # the Hub's own configured URL rather than hardcoding one
+            # deployment's hostname into shipped code. Degrades to a bare path if
+            # the node has no Hub URL configured, which is still correct for
+            # assets — the half that breaks the UI.
+            "FORGEJO__server__ROOT_URL": f"{config.HUB_URL}{config.EXTERNAL_BASE}/stream/forgejo/",
+            # The install wizard is already past; without this a fresh container
+            # on an existing data volume can still decide it wants to re-run it.
+            "FORGEJO__security__INSTALL_LOCK": "true",
+            # A forge is not a signup page. Accounts come from the Hub.
+            "FORGEJO__service__DISABLE_REGISTRATION": "true",
+            # The OCI container registry — the other half of why this app exists.
+            "FORGEJO__packages__ENABLED": "true",
+            # The image runs its own OpenSSH on 22; Forgejo's built-in Go SSH
+            # server would fight it for the port and crash-loop the container
+            # with "bind: address already in use". Verified live.
+            "FORGEJO__server__START_SSH_SERVER": "false",
+        },
     ),
     "paraview-desktop": AppDef(
         id="paraview-desktop",
