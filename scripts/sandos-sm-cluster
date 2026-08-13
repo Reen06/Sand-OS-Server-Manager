@@ -258,7 +258,15 @@ cmd_apply() {
   # existed. It fails silently: the flag is accepted, the volume server starts,
   # and only the placement is wrong. "bulk" (or any name of your own) works.
   (( $# > 0 )) || die "no directories given"
-  local dirs="" maxes="" disks="" any_disk=0
+  # Arrays, not string concatenation: SeaweedFS's -disk list is POSITIONAL
+  # against -dir, so an untagged directory ahead of a tagged one must still
+  # hold its empty slot. String-building with "${disks:+,}$t" cannot tell
+  # "no entries yet" apart from "entries so far were all empty" — it silently
+  # drops the leading empty slot, -dir and -disk end up with different counts,
+  # and SeaweedFS refuses to start (fatal, crash-looping the container) with
+  # no indication this script caused it.
+  local -a dirs_a=() maxes_a=() disks_a=()
+  local any_disk=0
   for spec in "$@"; do
     local d m t
     IFS=':' read -r d m t <<< "$spec"
@@ -276,10 +284,14 @@ cmd_apply() {
     if (( m > 0 && have > m )); then
       die "$d already holds $have volumes, cannot set its limit to $m — move them off first"
     fi
-    dirs+="${dirs:+,}$d"
-    maxes+="${maxes:+,}$m"
-    disks+="${disks:+,}$t"
+    dirs_a+=("$d")
+    maxes_a+=("$m")
+    disks_a+=("$t")
   done
+  local dirs maxes disks
+  dirs=$(IFS=,; echo "${dirs_a[*]}")
+  maxes=$(IFS=,; echo "${maxes_a[*]}")
+  disks=$(IFS=,; echo "${disks_a[*]}")
   # Only pass -disk when at least one directory is tagged. An all-empty list is
   # accepted by SeaweedFS but says nothing, and leaving the flag off keeps the
   # command identical to what every existing node already runs.
