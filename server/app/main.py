@@ -806,6 +806,13 @@ def sm_info():
              # by design, so gating them 401s the icon fetch during "Add to
              # Home Screen" and the OS falls back to a generic/blank icon.
              "native_pwa": a.native_pwa,
+             # Whether this app is served on a hostname of its own rather than
+             # under /apps/stream/. The dashboard needs this to open the right
+             # URL, and it has been a hardcoded list in the frontend — which is
+             # exactly how Forgejo came to open on a path where its assets 404,
+             # because the list was not updated when the app was added.
+             # Reported by the node, which is where the AppDef actually lives.
+             "own_subdomain": a.own_subdomain,
              # Everything a peer-install flow (Hub-brokered) needs to know
              # about this node's copy of the app, so it can be offered as a
              # transfer source to a fresh node that doesn't have it yet.
