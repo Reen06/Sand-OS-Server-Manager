@@ -879,6 +879,54 @@ def sm_ssh_authorize(request: Request, body: _SshAuthorizeBody):
     return {"ok": True, "user": getpass.getuser(), "ssh_port": config.SSH_PORT}
 
 
+class _RegistryLoginBody(BaseModel):
+    registry: str
+    username: str
+    token: str
+
+
+@app.post("/api/sm/registry/login")
+def sm_registry_login(request: Request, body: _RegistryLoginBody):
+    """Log this node's Docker into the mesh's own container registry.
+
+    Called by the Hub at enrolment so a freshly installed node can pull app
+    images with no one typing a credential. Rides the same Hub-session admin
+    trust as every other Hub-driven action here.
+
+    The credential is minted per node and scoped read-only, so what lands in
+    this machine's docker config can pull images and cannot publish one — see
+    the Hub's forge_registry service for why that boundary matters.
+    """
+    _require_admin(request)
+    registry_host = (body.registry or "").strip()
+    user = (body.username or "").strip()
+    token = (body.token or "").strip()
+    if not registry_host or not user or not token:
+        return JSONResponse({"ok": False, "error": "registry, username and token are all required"},
+                            status_code=400)
+
+    try:
+        # --password-stdin, never an argument: a command's argv is readable by
+        # every user on the box for as long as it runs.
+        p = subprocess.run(
+            ["docker", "login", registry_host, "-u", user, "--password-stdin"],
+            input=token, capture_output=True, text=True, timeout=60)
+    except (subprocess.SubprocessError, OSError) as e:
+        return JSONResponse({"ok": False, "error": str(e)[:200]}, status_code=502)
+
+    if p.returncode != 0:
+        err = (p.stderr or p.stdout or "").strip().splitlines()
+        err = err[-1] if err else "docker login failed"
+        # Overwhelmingly the cause on a node that has never been told where the
+        # registry lives, and it presents as an auth error rather than a DNS one.
+        if "no such host" in err or "dial tcp" in err:
+            err += (f" — this node cannot resolve {registry_host};"
+                    " it needs the mesh DNS or a hosts entry")
+        return JSONResponse({"ok": False, "error": err[:300]}, status_code=502)
+
+    return {"ok": True, "registry": registry_host, "username": user}
+
+
 @app.get("/api/apps/{app_id}/instance-name")
 def sm_instance_name(app_id: str, request: Request):
     """The container/staging identity this node would use for this caller.
