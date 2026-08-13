@@ -379,8 +379,11 @@ async def http(app_id: str, path: str, request: Request, user: str, role: str | 
     # the request past the identity gate decides this, so the two can never
     # disagree about which paths the app owns.
     from .main import _is_app_authenticated_path      # deferred: circular import
+    # Computed once: it decides both what we send upstream (the client's own
+    # credentials) and what we send back (an untouched body with its length).
+    _appauth = _is_app_authenticated_path(app_id, path)
     fwd = _fwd_headers(registry.APPS.get(app_id), request, user, role,
-                       keep_client_auth=_is_app_authenticated_path(app_id, path))
+                       keep_client_auth=_appauth)
     client = _get_client()
     req = client.build_request(request.method, target, params=dict(request.query_params),
                                headers=fwd, content=await request.body())
@@ -401,8 +404,17 @@ async def http(app_id: str, path: str, request: Request, user: str, role: str | 
     log.info("HTTP %s /%s user=%s → %s", request.method, path, user, r.status_code)
     app = registry.APPS.get(app_id)
     streamed = app.streamed if app else True
+    # Registry responses go back byte-for-byte, headers included.
+    #
+    # Content-Length is hop-by-hop for our purposes everywhere else — we rewrite
+    # HTML, so a length copied from upstream would be wrong. A registry body is
+    # never rewritten, and Docker REQUIRES the length: without it the response
+    # becomes chunked and `docker pull` fails with "missing or empty
+    # Content-Length header". Push succeeds either way, which makes this look
+    # like a broken pull rather than a stripped response header.
+    _resp_drop = _HOP - {"content-length"} if _appauth else _HOP
     out = {k: v for k, v in r.headers.items()
-           if k.lower() not in _HOP and k.lower() != "set-cookie"
+           if k.lower() not in _resp_drop and k.lower() != "set-cookie"
            and (not streamed or k.lower() not in _STRIP_RESP)}
     # Never allow the proxy response to be cached. For streamed apps this was
     # already required (stale paths broke the proxy). For web apps, passing
@@ -410,7 +422,10 @@ async def http(app_id: str, path: str, request: Request, user: str, role: str | 
     # brotli-encoded response as "plain" HTML (SM stripped Content-Encoding but
     # couldn't decompress without brotlicffi) — browser rendered binary garbage
     # and kept serving it from cache indefinitely, bypassing all fixes.
-    out["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    if not _appauth:
+        # Not for the registry: Docker relies on the upstream's own caching
+        # semantics for layers, and forcing no-store re-downloads every blob.
+        out["Cache-Control"] = "no-store, no-cache, must-revalidate"
     ct = (r.headers.get("content-type") or "").lower()
 
     # Everything below needs the full body in memory to rewrite it — genuinely
