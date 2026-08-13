@@ -112,6 +112,10 @@ def _fwd_headers(app, request: Request, user: str, role: str | None = None,
     drop = _HOP - {"authorization"} if keep_client_auth else _HOP
     fwd = {k: v for k, v in request.headers.items()
            if k.lower() not in drop and k.lower() not in _NO_FORWARD_REQ}
+    if app and app.sso_header:
+        # Unconditionally: a client must never be able to assert this header,
+        # including on the paths where we deliberately assert nothing ourselves.
+        fwd.pop(app.sso_header.lower(), None)
     streamed = app.streamed if app else True
     if streamed:
         fwd["Authorization"] = _auth()          # instance basic-auth (Selkies only)
@@ -119,7 +123,13 @@ def _fwd_headers(app, request: Request, user: str, role: str | None = None,
                                                  # not cookies — don't leak the Hub's
     # Web apps (Nextcloud) keep the browser Cookie header — their session lives in
     # it; stripping it caused an auth→login redirect loop.
-    if app and app.sso_header:
+    if app and app.sso_header and not keep_client_auth:
+        # Not on a path the app authenticates itself. Asserting an identity there
+        # is actively harmful: Forgejo sees a reverse-proxy user alongside
+        # Docker's credentials, cannot reconcile the two, and rejects the request
+        # with "authGroup.Verify" — an error about the CONFLICT that reads like a
+        # bad password. The header is still stripped from the client's copy
+        # below in every case, so this never trusts one that was sent to us.
         fwd.pop(app.sso_header.lower(), None)    # never trust a client-sent copy
         # Some apps refuse particular names outright (Forgejo reserves "admin"),
         # which would leave that person unable to sign in at all rather than
