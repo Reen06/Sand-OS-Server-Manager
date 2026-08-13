@@ -1370,6 +1370,45 @@ $SUDO chmod 600 "$ENV_FILE"
 $SUDO chown root:root "$ENV_FILE" 2>/dev/null || true
 ok "Wrote ${ENV_FILE} (0600 root — it holds the reverse-link credential)"
 
+# ── Registry name resolution ──────────────────────────────────────────────────
+# The fleet's container registry is served on its own hostname (git.<domain>),
+# because a registry only exists at the ROOT of a host — Docker builds the /v2/
+# URL itself from the image reference, so there is no registry under a path.
+#
+# That hostname resolves publicly to the WAN address, and the Hub deliberately
+# refuses off-mesh requests. A node sitting on the home LAN without a tunnel
+# therefore resolves it outward, hairpins back, and is turned away by that
+# guard — `docker pull` fails with a 404 that looks like a missing image.
+#
+# Nodes that reach the Hub through a tunnel get the right answer from the mesh
+# DNS and need none of this; the entry below is written anyway, because a
+# correct hosts entry costs nothing and one written now survives a node later
+# being moved onto or off a tunnel.
+if [ -n "${SM_HUB_URL:-}" ]; then
+  _hub_host=$(printf '%s' "$SM_HUB_URL" | sed -E 's#^[a-z]+://##; s#[:/].*$##')
+  _reg_host=""
+  case "$_hub_host" in
+    # Only derive a registry name from a real hostname. A Hub reached by IP has
+    # no domain to hang a subdomain off, and inventing one would write an entry
+    # that never resolves.
+    *[a-z]*.*) _reg_host="git.${_hub_host}" ;;
+  esac
+  if [ -n "$_reg_host" ] && ! grep -q "[[:space:]]${_reg_host}\([[:space:]]\|$\)" /etc/hosts 2>/dev/null; then
+    _hub_ip=$(getent ahostsv4 "$_hub_host" 2>/dev/null | awk 'NR==1{print $1}')
+    # Only a private address. Resolving the Hub to its public IP and pinning
+    # THAT would bake in the very hairpin this exists to avoid.
+    case "$_hub_ip" in
+      10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*)
+        printf '%s %s\n' "$_hub_ip" "$_reg_host" | $SUDO tee -a /etc/hosts > /dev/null
+        ok "Mapped ${_reg_host} → ${_hub_ip} in /etc/hosts (container registry)"
+        ;;
+      *)
+        info "Skipped the ${_reg_host} hosts entry — the Hub does not resolve to a private address here"
+        ;;
+    esac
+  fi
+fi
+
 # ── 2. Python venv ─────────────────────────────────────────────────────────────
 if [ ! -x "${VENV}/bin/uvicorn" ]; then
   info "Creating Python venv and installing dependencies…"
