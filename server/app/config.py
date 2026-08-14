@@ -3,6 +3,7 @@ import os
 import shutil
 import socket
 import subprocess
+import time
 
 
 def _detect_lan_ip() -> str:
@@ -70,6 +71,13 @@ NAS_ROOT = os.environ.get("SM_NAS_ROOT", "/home/control/sandos-nas")
 # single-server tree and this node's own state files.
 NAS_MESH_MOUNT = os.environ.get("SM_MESH_NAS_MOUNT", "/mnt/sandos-nas")
 
+# How long to wait for the mount to prove it is alive, and how long to trust
+# that answer. The probe is short because a healthy mount answers instantly and
+# a sick one never answers at all — waiting longer only delays the fallback.
+_MESH_MOUNT_PROBE_S = 3.0
+_MESH_MOUNT_TTL = 10.0
+_MESH_MOUNT_CACHE: dict[str, object] = {}
+
 
 def mesh_mounted() -> bool:
     """Is the mesh NAS actually mounted here?
@@ -83,19 +91,48 @@ def mesh_mounted() -> bool:
     stages a file — treating that as "not mounted" sent it down the retired NFS
     path and made an app refuse to start on a node whose mount was perfectly
     healthy. `ismount` already distinguishes a live mount from a plain local
-    directory, and a mount whose process died announces itself by raising on
-    read, so both real failures are still caught.
+    directory, so that failure is caught for free.
+
+    THE READ MUST BE BOUNDED, and this is the whole reason the check looks the
+    way it does. A dead FUSE mount does not always raise: it raises ENOTCONN
+    only when the FUSE *connection* is gone. When the server process is still
+    attached but never answers — a filer at an address that stopped serving is
+    the case seen — the kernel accepts the read and parks the caller in
+    `request_wait_answer` forever. Not slow: permanently.
+
+    That took a node off the fleet for two days. This function is called by
+    /api/sm/info, which is what the Hub polls, so every poll leaked another
+    thread that never came back. The node's whole API stopped answering while
+    the process still looked healthy: listening socket, no errors, no crash.
+    A plain `os.listdir` here cannot be made safe, because a thread blocked in
+    an uninterruptible-ish FUSE wait cannot be cancelled from Python.
+
+    So the read happens in a CHILD PROCESS that can be killed, and its answer
+    is cached: without the cache a busy node would fork this constantly.
     """
     if not os.path.ismount(NAS_MESH_MOUNT):
         return False
+
+    now = time.monotonic()
+    cached = _MESH_MOUNT_CACHE.get("at")
+    if cached is not None and (now - cached) < _MESH_MOUNT_TTL:
+        return bool(_MESH_MOUNT_CACHE.get("ok"))
+
     try:
-        os.listdir(NAS_MESH_MOUNT)
-    except OSError:
-        # A FUSE mount whose process died without unmounting: still a
-        # mountpoint, but every read fails (ENOTCONN). That is the case worth
-        # catching, and it announces itself by raising.
-        return False
-    return True
+        subprocess.run(["ls", NAS_MESH_MOUNT], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=_MESH_MOUNT_PROBE_S,
+                       check=True)
+        ok = True
+    except subprocess.TimeoutExpired:
+        # Hung, not broken. Reported as "not mounted" so callers fall back
+        # rather than inheriting the hang — and the timeout kills the child, so
+        # nothing accumulates.
+        ok = False
+    except (subprocess.SubprocessError, OSError):
+        ok = False
+
+    _MESH_MOUNT_CACHE.update({"at": now, "ok": ok})
+    return ok
 
 
 def nas_data_root() -> str:
