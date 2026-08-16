@@ -1393,6 +1393,15 @@ if [ -n "${SM_HUB_URL:-}" ]; then
     # that never resolves.
     *[a-z]*.*) _reg_host="git.${_hub_host}" ;;
   esac
+  # Installed against the Hub's IP there is no domain to derive from, so ask the
+  # Hub what it is called. Same unauthenticated probe used for NAS discovery,
+  # for the same reason: a brand-new node has no Hub session yet. Without this
+  # the entry is skipped and every later pull from the mesh registry hairpins
+  # into the off-mesh guard and fails as a 404 that looks like a missing image.
+  if [ -z "$_reg_host" ]; then
+    _reg_host=$(curl -fsSk --max-time 5 "${SM_HUB_URL%/}/api/fleet/nas-host" 2>/dev/null \
+      | sed -n 's/.*"registry_host"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  fi
   if [ -n "$_reg_host" ] && ! grep -q "[[:space:]]${_reg_host}\([[:space:]]\|$\)" /etc/hosts 2>/dev/null; then
     _hub_ip=$(getent ahostsv4 "$_hub_host" 2>/dev/null | awk 'NR==1{print $1}')
     # Only a private address. Resolving the Hub to its public IP and pinning
