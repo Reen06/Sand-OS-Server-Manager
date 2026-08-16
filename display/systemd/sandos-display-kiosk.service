@@ -1,0 +1,22 @@
+[Unit]
+# The browser half of a display panel. A USER service, not a system one: it has
+# to join the graphical session that lightdm already autologins, and a system
+# unit has no path into that session's compositor.
+Description=Sand-OS display panel (kiosk browser)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/lib/sandos-display/kiosk.sh
+# Always come back. A panel on a wall has nobody to restart it, so every exit —
+# a crash, an OOM kill, someone closing the window — must be self-healing.
+Restart=always
+RestartSec=3
+# Chromium on a Pi 3 with 905MB will occasionally be killed. Without this,
+# systemd's default start-limit gives up after a few restarts and the screen
+# stays black until a person intervenes, which is exactly what must not happen.
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=graphical-session.target

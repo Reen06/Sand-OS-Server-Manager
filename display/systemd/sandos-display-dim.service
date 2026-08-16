@@ -1,0 +1,25 @@
+[Unit]
+# The backlight half. Separate from the browser on purpose: dimming must keep
+# working when chromium is restarting, updating, or wedged. Merging them would
+# mean a browser crash also left the panel stuck at whatever brightness it had.
+Description=Sand-OS display panel (backlight dimming)
+After=multi-user.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/sandos-display.env
+ExecStart=/usr/bin/python3 /usr/local/lib/sandos-display/dim.py
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+# Reads /dev/input/event* and writes the backlight; needs no more than that.
+User=__DISPLAY_USER__
+SupplementaryGroups=video input
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/sys/class/backlight
+
+[Install]
+WantedBy=multi-user.target
