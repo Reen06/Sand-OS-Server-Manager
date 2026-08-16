@@ -23,14 +23,29 @@ URL="${SANDOS_HUB_URL%/}/display/login?token=${SANDOS_DISPLAY_TOKEN}"
 PROFILE="${SANDOS_PROFILE_DIR:-$HOME/.sandos-kiosk}"
 mkdir -p "$PROFILE"
 
-# Wait for the compositor. Starting before it is up is the single most common
-# way a kiosk ends as a black screen: chromium exits immediately, systemd
-# restarts it into the same emptiness, and the panel never recovers on its own.
+# Find the compositor and WAIT for it.
+#
+# A user service does NOT inherit the graphical session's environment, so
+# WAYLAND_DISPLAY is simply absent here even though the compositor is running
+# perfectly. Discover it from the socket instead of trusting the variable —
+# otherwise chromium starts with no display, exits, and systemd restarts it into
+# the same emptiness forever. That is the single most common way a kiosk ends up
+# as a permanently black screen.
+: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
+export XDG_RUNTIME_DIR
+
 for _ in $(seq 1 60); do
-  [ -n "${WAYLAND_DISPLAY:-}" ] && [ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/${WAYLAND_DISPLAY}" ] && break
+  if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    for s in "$XDG_RUNTIME_DIR"/wayland-*; do
+      case "$s" in *.lock) continue ;; esac
+      [ -S "$s" ] && { WAYLAND_DISPLAY=$(basename "$s"); export WAYLAND_DISPLAY; break; }
+    done
+  fi
+  [ -n "${WAYLAND_DISPLAY:-}" ] && [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] && break
   [ -n "${DISPLAY:-}" ] && command -v xset >/dev/null && xset q >/dev/null 2>&1 && break
   sleep 1
 done
+[ -n "${WAYLAND_DISPLAY:-}" ] && echo "kiosk: using WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
 
 # A crash that leaves these set makes chromium open a "didn't shut down
 # correctly" bubble over the app and wait for a click nobody will give it.

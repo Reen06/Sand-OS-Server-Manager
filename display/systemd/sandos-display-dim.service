@@ -5,13 +5,17 @@
 Description=Sand-OS display panel (backlight dimming)
 After=multi-user.target
 
+# Never stop retrying. In [Unit], not [Service] -- systemd ignores it in
+# [Service] with only a log line, so the protection silently does not exist and
+# a panel that crash-loops a few times stays black until a person walks over.
+StartLimitIntervalSec=0
+
 [Service]
 Type=simple
 EnvironmentFile=-/etc/sandos-display.env
 ExecStart=/usr/bin/python3 /usr/local/lib/sandos-display/dim.py
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=0
 # Reads /dev/input/event* and writes the backlight; needs no more than that.
 User=__DISPLAY_USER__
 SupplementaryGroups=video input

@@ -86,8 +86,13 @@ SANDOS_DISPLAY_TOKEN=$TOKEN
 SANDOS_DIM_AFTER=${SANDOS_DIM_AFTER:-90}
 SANDOS_DIM_LEVEL=${SANDOS_DIM_LEVEL:-12}
 EOF
-$SUDO chmod 600 "$CONF"
-ok "Wrote $CONF (0600)"
+# root:<display user> 0640, not 0600 root. The browser runs AS that user and
+# reads this file for the Hub URL and token, so 0600 root means the kiosk exits
+# instantly with an unset-variable error that looks nothing like a permissions
+# problem. Still unreadable to every other account on the box.
+$SUDO chown "root:$DISPLAY_USER" "$CONF"
+$SUDO chmod 640 "$CONF"
+ok "Wrote $CONF (0640 root:$DISPLAY_USER)"
 
 # The dimmer writes the backlight and reads input devices. Group membership is
 # the least-privilege way in; the alternative is running it as root, which is a

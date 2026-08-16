@@ -6,6 +6,11 @@ Description=Sand-OS display panel (kiosk browser)
 After=graphical-session.target
 PartOf=graphical-session.target
 
+# Never stop retrying. In [Unit], not [Service] -- systemd ignores it in
+# [Service] with only a log line, so the protection silently does not exist and
+# a panel that crash-loops a few times stays black until a person walks over.
+StartLimitIntervalSec=0
+
 [Service]
 Type=simple
 ExecStart=/usr/local/lib/sandos-display/kiosk.sh
@@ -14,9 +19,6 @@ ExecStart=/usr/local/lib/sandos-display/kiosk.sh
 Restart=always
 RestartSec=3
 # Chromium on a Pi 3 with 905MB will occasionally be killed. Without this,
-# systemd's default start-limit gives up after a few restarts and the screen
-# stays black until a person intervenes, which is exactly what must not happen.
-StartLimitIntervalSec=0
 
 [Install]
 WantedBy=graphical-session.target
