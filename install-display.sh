@@ -84,6 +84,8 @@ SANDOS_HUB_URL=${HUB_URL%/}
 SANDOS_DISPLAY_TOKEN=$TOKEN
 # Dimming is local so the panel behaves the same when the Hub is unreachable.
 SANDOS_DIM_AFTER=${SANDOS_DIM_AFTER:-90}
+SANDOS_OFF_AFTER=${SANDOS_OFF_AFTER:-300}
+SANDOS_LOCK_OFF_AFTER=${SANDOS_LOCK_OFF_AFTER:-300}
 SANDOS_DIM_LEVEL=${SANDOS_DIM_LEVEL:-12}
 EOF
 # root:<display user> 0640, not 0600 root. The browser runs AS that user and
@@ -108,6 +110,9 @@ SUBSYSTEM=="backlight", ACTION=="add", \
 EOF
 $SUDO udevadm control --reload 2>/dev/null || true
 $SUDO udevadm trigger -s backlight 2>/dev/null || true
+# Timings changed from the lock screen are written here, so they survive a
+# reboot instead of silently reverting to the installed defaults.
+$SUDO install -d -o "$DISPLAY_USER" -g "$DISPLAY_USER" -m 755 /var/lib/sandos-display
 ok "Backlight permissions"
 
 # ── services ─────────────────────────────────────────────────────────────────

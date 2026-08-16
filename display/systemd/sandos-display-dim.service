@@ -2,7 +2,7 @@
 # The backlight half. Separate from the browser on purpose: dimming must keep
 # working when chromium is restarting, updating, or wedged. Merging them would
 # mean a browser crash also left the panel stuck at whatever brightness it had.
-Description=Sand-OS display panel (backlight dimming)
+Description=Sand-OS display panel (power + lock agent)
 After=multi-user.target
 
 # Never stop retrying. In [Unit], not [Service] -- systemd ignores it in
@@ -23,7 +23,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/sys/class/backlight
+ReadWritePaths=/sys/class/backlight /var/lib/sandos-display
 
 [Install]
 WantedBy=multi-user.target
