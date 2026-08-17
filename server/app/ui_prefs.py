@@ -38,6 +38,10 @@ _ALLOWED = {"scale", "app_scale"}
 _SCALE_CHOICES = ("1", "1.25", "1.5", "1.75", "2", "2.5", "3")
 # Goes higher than the desktop: Isaac is the one that needs turning way up.
 _APP_SCALE_CHOICES = ("1", "1.25", "1.5", "1.75", "2", "2.5", "3", "3.5", "4")
+# GDK_SCALE (GTK full-UI scaling) accepts whole numbers only, so an app scaled
+# that way gets a whole-number list instead — offering 1.5 there would show a
+# control that silently rounds to 1.
+_APP_SCALE_INTEGER_CHOICES = ("1", "2", "3")
 
 
 def _load() -> dict:
@@ -62,6 +66,8 @@ def set_prefs(app_id: str, user: str, prefs: dict) -> dict:
             continue
         if k in ("scale", "app_scale"):
             v = str(v)
+            # _APP_SCALE_CHOICES is a superset of the integer list, so one
+            # check covers both kinds of second slider.
             allowed = _APP_SCALE_CHOICES if k == "app_scale" else _SCALE_CHOICES
             if v not in allowed:
                 raise ValueError(f"{k} must be one of {', '.join(allowed)}")
@@ -85,48 +91,54 @@ def env_for(app_id: str, user: str) -> dict:
     env = {}
     if p.get("scale"):
         env["QT_SCALE_FACTOR"] = str(p["scale"])
-        # Same slider, same meaning, for a GTK/wxWidgets app — KiCad is the
-        # existing case. It ignores QT_SCALE_FACTOR completely, so before this
-        # the control was present and moved nothing.
-        #
-        # GTK splits what Qt does in one number across two variables, and they
-        # multiply, so setting both to the factor would scale text twice:
-        #   GDK_SCALE     integer only, scales the WHOLE UI (widgets + icons)
-        #   GDK_DPI_SCALE fractional, scales TEXT only
-        # A whole number therefore goes to GDK_SCALE (real, crisp scaling of
-        # everything) with GDK_DPI_SCALE pinned to 1 to cancel the double
-        # application. A fractional factor has no integer path — GDK_SCALE
-        # cannot express 1.5 — so it scales text alone, which is the honest
-        # best available and matches what Xft.dpi already does live in
-        # apply_live(). Icons stay put at fractional factors; that is a GTK
-        # limitation, not something this can work around from outside.
-        _s = str(p["scale"])
-        try:
-            _f = float(_s)
-        except ValueError:
-            _f = 1.0
-        if _f >= 2 and _f == int(_f):
-            env["GDK_SCALE"] = str(int(_f))
-            env["GDK_DPI_SCALE"] = "1"
-        elif _f != 1:
-            env["GDK_DPI_SCALE"] = _s
+        # GTK/wxWidgets (KiCad) ignores QT_SCALE_FACTOR entirely, and splits
+        # what Qt does in one number across two variables:
+        #   GDK_DPI_SCALE  fractional, scales TEXT only      <- the fine slider
+        #   GDK_SCALE      integer only, scales the WHOLE UI <- app_scale below
+        # So the fine slider drives text/DPI here, and the second (full-UI)
+        # slider drives GDK_SCALE. They MULTIPLY, which is the point of having
+        # both: full 2 + fine 1.25 gives 2x widgets and icons with text a
+        # further 1.25x on top, so text size is tunable independently of how
+        # big the chrome is.
+        if str(p["scale"]) != "1":
+            env["GDK_DPI_SCALE"] = str(p["scale"])
     # Kit ignores QT_SCALE_FACTOR and needs its own number (see the
     # isaac-launch wrapper). Falls back to the desktop scale when no separate
     # app scale is set, so the single-slider behaviour still holds.
     app_scale = p.get("app_scale") or p.get("scale")
     if app_scale:
         env["SM_UI_SCALE"] = str(app_scale)
+    # The full-UI slider, for GTK. Deliberately reads app_scale ONLY (no
+    # fallback to scale): the fine slider already drives GDK_DPI_SCALE, and
+    # since the two multiply, falling back would apply the same number twice
+    # the moment someone touched only the fine one. Integer-only because
+    # GDK_SCALE cannot express 1.5 — which is why choices() offers this app a
+    # different, whole-number list rather than the fractional one.
+    _as = p.get("app_scale")
+    if _as:
+        try:
+            _f = float(_as)
+        except ValueError:
+            _f = 1.0
+        if _f >= 2 and _f == int(_f):
+            env["GDK_SCALE"] = str(int(_f))
     return env
 
 
 # image id -> does it want its own app scale. Labels cannot change without a
 # rebuild, which produces a new id, so this never needs invalidating.
 _APP_SCALE_LABEL = "sandos.ui.app_scale"
-_label_cache: dict[str, bool] = {}
+_label_cache: dict[str, str] = {}
 
 
-def _image_wants_app_scale(app_id: str) -> bool:
-    """Does this app's IMAGE ask for a second, app-specific scale?
+def _image_app_scale_mode(app_id: str) -> str:
+    """Does this app's IMAGE ask for a second scale, and of which KIND?
+
+    Returns "" (none), "fractional" (Kit-style, any step) or "integer"
+    (GTK/GDK_SCALE, whole numbers only). The kind matters because the two are
+    not interchangeable: Kit takes any number, GDK_SCALE silently rounds, so
+    offering fractional steps to a GTK app would show a control that appears
+    to move and does nothing between whole numbers.
 
     Read from the image rather than decided here, because it is a fact about
     what is inside the container: a Qt app is scaled entirely by
@@ -139,12 +151,12 @@ def _image_wants_app_scale(app_id: str) -> bool:
     every app that has not been rebuilt, which is the failure this is fixing.
     """
     if not app_id:
-        return False
+        return ""
     try:
         from . import app_images, registry
         app = registry.CATALOG.get(app_id) or registry.APPS.get(app_id)
         if app is None:
-            return False
+            return ""
         tag = app_images._image_tag(app)
         host = app_images.active_docker_host(app_id)
         args = ["docker"] + (["-H", host] if host else []) + [
@@ -152,15 +164,17 @@ def _image_wants_app_scale(app_id: str) -> bool:
             "--format", "{{.Id}}|{{index .Config.Labels \"" + _APP_SCALE_LABEL + "\"}}"]
         r = subprocess.run(args, capture_output=True, text=True, timeout=15)
         if r.returncode != 0:
-            return False
+            return ""
         img_id, _, raw = (r.stdout or "").strip().partition("|")
         if img_id in _label_cache:
             return _label_cache[img_id]
-        want = raw.strip().lower() in ("1", "true", "yes")
-        _label_cache[img_id] = want
-        return want
+        raw = raw.strip().lower()
+        mode = "integer" if raw == "integer" else (
+            "fractional" if raw in ("1", "true", "yes") else "")
+        _label_cache[img_id] = mode
+        return mode
     except Exception:  # noqa: BLE001
-        return False
+        return ""
 
 
 def choices(app_id: str = "") -> dict:
@@ -172,7 +186,10 @@ def choices(app_id: str = "") -> dict:
     the control means anything, so the UI needs no list of app names.
     """
     out = {"scale": list(_SCALE_CHOICES)}
-    if _image_wants_app_scale(app_id):
+    mode = _image_app_scale_mode(app_id)
+    if mode == "integer":
+        out["app_scale"] = list(_APP_SCALE_INTEGER_CHOICES)
+    elif mode:
         out["app_scale"] = list(_APP_SCALE_CHOICES)
     return out
 

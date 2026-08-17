@@ -165,11 +165,11 @@ RUN set -eux; \
 
 # Inherit the base image's ENTRYPOINT/CMD (starts Selkies + KDE). Do not override.
 
-# No SECOND ("app scale") slider — that one exists only for a toolkit the
-# desktop's own scale cannot reach at all, i.e. Omniverse Kit, which needs its
-# own number written into its .kit files. KiCad is not that case: it is
-# wxWidgets/GTK, so the ordinary scale slider now drives it directly via
-# GDK_SCALE/GDK_DPI_SCALE (see ui_prefs.env_for) exactly as it drives FreeCAD
-# via QT_SCALE_FACTOR. One slider, same meaning, per-app value — a second one
-# here would move nothing.
-LABEL sandos.ui.app_scale="false"
+# TWO sliders, because GTK genuinely needs two numbers and they do different
+# things (see ui_prefs.env_for). The fine slider drives GDK_DPI_SCALE — text
+# only, any step. This second one drives GDK_SCALE — the whole UI, widgets and
+# icons — which accepts WHOLE NUMBERS ONLY, so "integer" (not "true") asks for
+# a whole-number list; a fractional step there would silently round to 1 and
+# look like a dead control. The two multiply, so text stays independently
+# tunable on top of however big the chrome is.
+LABEL sandos.ui.app_scale="integer"
