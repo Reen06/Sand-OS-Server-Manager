@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 
 import httpx
@@ -520,6 +521,18 @@ async def http(app_id: str, path: str, request: Request, user: str, role: str | 
 # this proxy), so everything tracked here is by definition a browser.
 _signalling_clients: dict[tuple[str, str, str], dict] = {}
 
+# How long a client that just won a takeover is protected from being bounced.
+#
+# Eviction alone turns a deadlock into a FIGHT: an evicted tab's Selkies client
+# auto-reconnects within a second or two, evicting whoever just took over,
+# which reconnects and evicts it back. Observed live (2026-08-17) as two tabs
+# "fighting for a minute" before one finally stuck. A newcomer that arrives
+# while the incumbent is still this fresh is refused instead of granted, so the
+# loser's retries bounce off and the takeover settles on the first attempt.
+# Long enough to outlast the client's retry backoff; short enough that a real
+# device switch a moment later still works.
+_TAKEOVER_COOLDOWN = 15.0
+
 
 def _hello_uid(text: str) -> str | None:
     """The peer id out of Selkies' 'HELLO <uid> [<b64 meta>]' handshake, or None
@@ -595,6 +608,14 @@ async def ws(app_id: str, path: str, client_ws: WebSocket, user: str) -> None:
         uid = _hello_uid(first_text) if first_text else None
         if uid:
             key = (app_id, user, uid)
+            prev = _signalling_clients.get(key)
+            if prev and (time.monotonic() - prev["since"]) < _TAKEOVER_COOLDOWN:
+                # The incumbent only just took over — this is almost certainly
+                # the tab it displaced, retrying. Refuse rather than evict, so
+                # the two don't bounce each other indefinitely.
+                log.info("WS /%s refusing takeover, incumbent is fresh (peer id %s)", path, uid)
+                await client_ws.close(code=1013)   # try again later
+                return
             await _evict_previous(key)
 
     conn_kw = {"subprotocols": subprotocols or None, "max_size": None}
@@ -609,7 +630,8 @@ async def ws(app_id: str, path: str, client_ws: WebSocket, user: str) -> None:
     log.info("WS /%s → upstream connected", path)
 
     if key is not None:
-        _signalling_clients[key] = {"client": client_ws, "upstream": upstream}
+        _signalling_clients[key] = {"client": client_ws, "upstream": upstream,
+                                    "since": time.monotonic()}
     if first_text is not None:
         await upstream.send(first_text)
 
