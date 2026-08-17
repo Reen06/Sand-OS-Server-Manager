@@ -33,13 +33,20 @@ export DISPLAY="${DISPLAY:-:0}"
 # application window, not auxiliary panels/dialogs the way FreeCAD's Ribbon/
 # Searchbar panels were.
 #
+# Unlike FreeCAD (one binary), KiCad's project manager, Schematic Editor, PCB
+# Editor, Gerber Viewer, PCB Calculator and Worksheet Editor are SEPARATE
+# binaries (verified inside the AppImage's own AppDir: bin/kicad, bin/
+# eeschema, bin/pcbnew, bin/gerbview, bin/pcb_calculator, bin/pl_editor), each
+# setting its own WM_CLASS to its own binary name — matching only "kicad"
+# would maximize the project manager and silently ignore every editor window.
+#
 # What changed: this used to re-force maximize on EVERY window EVERY second
 # forever, which fought the user — manually resizing or unmaximizing a KiCad
 # window snapped it back within a second. Each window ID is now maximized
 # once and then remembered, so a later manual resize sticks.
 ( declare -A seen
   while true; do
-    for wid in $(xdotool search --class '^kicad' 2>/dev/null); do
+    for wid in $(xdotool search --class '^(kicad|eeschema|pcbnew|gerbview|pcb_calculator|pl_editor|bitmap2component)$' 2>/dev/null); do
       [ -n "${seen[$wid]:-}" ] && continue
       wmctrl -ir "$wid" -b remove,fullscreen 2>/dev/null
       wmctrl -ir "$wid" -b add,maximized_vert,maximized_horz 2>/dev/null

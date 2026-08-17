@@ -11,13 +11,17 @@
 # Tier 3 becomes 020 once a third machine joins, which is why it is generated
 # rather than fixed.
 set -euo pipefail
-MASTER=10.0.0.177:9333
+# Loopback: this only ever runs on the Hub, where the master lives. A literal
+# mesh address here silently breaks the next time the Hub's addressing
+# changes — exactly what happened to sandos-mesh-heal (see its own comment)
+# with this same 10.0.0.177 default, which then failed silently for 6 days.
+MASTER="${SM_SEAWEED_MASTER:-127.0.0.1:9333}"
 NASROOT=/nas
 USERS="${*:-braeden admin}"
 
 TIER2_REPL=010     # Protected: a second copy on another machine
 TIER1_REPL=000     # Bulk: one copy, may be lost — that is the deal
-TIER3_REPL=010     # Critical: max meaningful with 2 machines; 020 with 3
+TIER3_REPL=020     # Critical: three copies, one per machine — now that three exist
 
 {
   echo "fs.configure -locationPrefix=${NASROOT}/users/ -replication=${TIER2_REPL} -apply"

@@ -549,7 +549,7 @@ def _mesh_path_trusted(user: str, m) -> str | None:
     return os.path.join(MESH_MOUNT, config.NAS_USERS_SUBPATH, _safe(user))
 
 
-def _mesh_target(user: str, m, app_id: str = "") -> str | None:
+def _mesh_target(user: str, m, app_id: str = "", host: str | None = None) -> str | None:
     """Create and return the host path to bind-mount, or None if unavailable.
 
     The mesh-mounted check cannot come first. A brokered node that cannot reach
@@ -564,11 +564,72 @@ def _mesh_target(user: str, m, app_id: str = "") -> str | None:
         return None
     if path.startswith(MESH_MOUNT) and not _mesh_available():
         return None
+    # A named per-user mount (m.name != "home") is this app's OWN settings for
+    # this user — e.g. a streamed app's .config, which is where its baked-in
+    # KDE autostart entry (the thing that actually launches the app) lives.
+    # Bind mounts, unlike Docker named volumes, never get Docker's own
+    # populate-from-image behaviour: the first time this directory is created
+    # for a brand-new user/app pairing it is genuinely empty, permanently
+    # shadowing whatever defaults the image shipped at that path — with no
+    # error anywhere. This bit KiCad's very first launch (2026-08-17): the
+    # container came up, nginx and the desktop were healthy, but KiCad itself
+    # never started and login 500'd, because the fix-up script that also
+    # repairs nginx's basic-auth permissions only runs from inside the
+    # autostart entry that was silently missing. FreeCAD never hit this only
+    # because its per-user directories already had months of accumulated
+    # state from before this gap was understood. `was_empty` is checked
+    # BEFORE makedirs so an already-populated directory (the normal case,
+    # every launch after the first) is never touched.
+    was_empty = m.scope == "per-user" and m.name != "home" and (
+        not os.path.isdir(path) or not os.listdir(path))
     try:
         os.makedirs(path, exist_ok=True)
     except OSError:
         return None
+    if was_empty:
+        _seed_from_image(app_id, m.path, path, host=host)
     return path
+
+
+def _seed_from_image(app_id: str, container_path: str, host_path: str,
+                      host: str | None = None) -> None:
+    """Best-effort: copy the image's own baked-in defaults at `container_path`
+    into a just-created, empty per-user settings directory before anything
+    binds over it. See _mesh_target's comment for why this exists.
+
+    Never raises — a brand-new, empty directory is the pre-existing (buggy
+    but non-fatal) fallback, so any failure here just leaves that in place
+    rather than blocking the launch over a settings seed.
+    """
+    try:
+        from . import registry, app_variants
+        app = registry.APPS.get(app_id)
+        if app is None:
+            return
+        image = app_variants.active_image(app)
+        if not image:
+            return
+        tmp = f"sm-seed-{_safe(app_id)}-{os.getpid()}-{int(time.time() * 1000) % 100000}"
+        created = _docker(["create", "--name", tmp, image], timeout=60, host=host)
+        if created.returncode != 0:
+            return
+        try:
+            # Trailing "/." copies the CONTENTS of container_path, not the
+            # directory itself — host_path already exists (created above) and
+            # must end up holding what was AT that path, not a path nested
+            # one level too deep inside it.
+            _docker(["cp", f"{tmp}:{container_path.rstrip('/')}/.", host_path],
+                    timeout=60, host=host)
+        finally:
+            _docker(["rm", "-f", tmp], timeout=30, host=host)
+        # Match the NFS export's anonuid (all_squash -> 1000) the same way
+        # every streamed app's own Dockerfile already chowns its baked-in
+        # config for — otherwise the copied files are root-owned and the
+        # container's own uid-1000 processes can create new files beside them
+        # but can never rewrite the seeded ones.
+        subprocess.run(["chown", "-R", "1000:1000", host_path], check=False)
+    except Exception:
+        pass
 
 
 def _nfs_target(user: str, m, app_id: str = "") -> tuple[str, str]:
@@ -779,13 +840,15 @@ def _mount_args(app_id: str, user: str, mounts, host: str | None = None) -> list
         # is about where the APP'S IMAGE runs (app_images.py) — independent of
         # this, but the volume must be created in that SAME daemon's storage.
         mode, usb_uuid = app_storage.effective_storage(app_id, user, m)
+        _mesh = (_mesh_target(user, m, app_id, host=host)
+                 if mode == "nfs" and config.NAS_ENABLED else None)
         if mode == "usb" and usb_uuid:
             vol = ensure_usb_volume(usb_uuid, app_id, user, m, host=host)
-        elif mode == "nfs" and config.NAS_ENABLED and _mesh_target(user, m, app_id):
+        elif mode == "nfs" and config.NAS_ENABLED and _mesh:
             # Mesh NAS: bind the local mount. Preferred over NFS wherever it is
             # present, so apps read from the whole cluster rather than through
             # one server.
-            vol = _mesh_target(user, m, app_id)
+            vol = _mesh
             if m.scope == "user-view":
                 # The view root is this user's top level, so it is the one place
                 # a plain text file is unmissable. Rewritten every launch so a

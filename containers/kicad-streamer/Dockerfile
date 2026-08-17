@@ -64,9 +64,17 @@ RUN set -eux; \
 ENV SELKIES_ENABLE_RESIZE=true
 
 # PWA branding: install as "KiCad" (not "Selkies WebRTC"), with the KiCad icon.
+#
+# /opt/kicad is ITSELF a symlink (-> ./AppDir, the AppImage runtime's own
+# layout) rather than a real directory, so `find` needs -L to descend into
+# it at all — without it, find treats the symlink as a leaf and matches
+# nothing, silently. The real icon is share/icons/hicolor/scalable/apps/
+# kicad.svg (verified inside the extracted image; the FreeCAD-style
+# "org.kicad_pcb.KiCad.svg" guess does not exist in KiCad's own AppDir).
 COPY kicad-pwa-manifest.json /opt/gst-web/manifest.json
 RUN set -eux; \
-    icon="$(find /opt/kicad -name 'org.kicad_pcb.KiCad.svg' -o -name 'kicad.svg' | head -1)"; \
+    icon="$(find -L /opt/kicad -name 'kicad.svg' -path '*hicolor/scalable/apps*' | head -1)"; \
+    test -n "$icon"; \
     cp "$icon" /opt/gst-web/kicad.svg
 
 # Patch 1 (MANDATORY — absolute proxy paths). Without this the stream never
