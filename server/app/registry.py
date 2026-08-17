@@ -392,7 +392,7 @@ CATALOG: dict[str, AppDef] = {
     "ledger": AppDef(
         id="ledger",
         label="Ledger",
-        icon="ledger",
+        icon="logs",
         color="slate",
         desc="Track accounts, income, expenses and recurring bills — personal and business.",
         image=config.LEDGER_IMAGE,

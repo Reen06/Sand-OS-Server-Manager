@@ -7,6 +7,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 REGISTRY = REPO / "server" / "app" / "registry.py"
 ICON_DIR = REPO / "server" / "app" / "appicons"
+OWNER_APPROVED_ICON_EXCEPTIONS = {"ledger": "logs"}
 
 
 def _catalog_identities() -> dict[str, str]:
@@ -28,23 +29,30 @@ def _catalog_identities() -> dict[str, str]:
 
 
 class AppIconTest(unittest.TestCase):
-    def test_every_catalog_app_uses_its_canonical_identity(self):
+    def test_catalog_apps_use_canonical_identity_except_owner_approved_fallbacks(self):
         identities = _catalog_identities()
         self.assertGreater(len(identities), 0)
         self.assertEqual(
             {app_id: icon for app_id, icon in identities.items() if icon != app_id},
-            {},
-            "AppDef.icon must be the app id once a canonical asset exists",
+            OWNER_APPROVED_ICON_EXCEPTIONS,
+            "Non-canonical AppDef.icon values must be explicit owner-approved exceptions",
         )
 
     def test_every_catalog_app_has_a_valid_svg_for_pwa_and_ios_rendering(self):
         for app_id in _catalog_identities():
+            if app_id in OWNER_APPROVED_ICON_EXCEPTIONS:
+                continue
             with self.subTest(app=app_id):
                 path = ICON_DIR / f"{app_id}.svg"
                 self.assertTrue(path.is_file(), f"missing {path.relative_to(REPO)}")
                 root = ET.parse(path).getroot()
                 self.assertTrue(root.tag.endswith("svg"))
                 self.assertIn("viewBox", root.attrib)
+
+    def test_owner_approved_fallbacks_do_not_ship_a_canonical_asset(self):
+        for app_id in OWNER_APPROVED_ICON_EXCEPTIONS:
+            with self.subTest(app=app_id):
+                self.assertFalse((ICON_DIR / f"{app_id}.svg").exists())
 
 
 if __name__ == "__main__":
