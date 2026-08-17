@@ -38,13 +38,27 @@ export DISPLAY="${DISPLAY:-:0}"
         'LookAndFeelPackage=org.kde.breezedark.desktop' 'widgetStyle=Breeze' >> "$f"
     fi
   done
+  # The PLASMA SHELL (panel, desktop, widgets) is themed separately from the
+  # colour scheme. Setting only the colour scheme styles application windows
+  # and leaves the shell light — which is exactly what happened:
+  # plasma-apply-colorscheme reported "BreezeDark is already set" while the
+  # desktop still rendered light, because the shell reads [Theme] name from
+  # plasmarc and that was still the default.
+  if ! grep -q 'name=breeze-dark' "$HOME/.config/plasmarc" 2>/dev/null; then
+    printf '%s\n' '[Theme]' 'name=breeze-dark' >> "$HOME/.config/plasmarc"
+  fi
   # Wait for plasma before applying live — this runs from a KDE autostart entry,
   # so the shell is usually up, but not guaranteed to be ready to take a call.
   for _ in $(seq 1 30); do
     pgrep -x plasmashell >/dev/null && break
     sleep 1
   done
-  plasma-apply-colorscheme BreezeDark >/tmp/sm-darkmode.log 2>&1 || true
+  # look-and-feel sets colour scheme, plasma theme and widget style together,
+  # so it covers the shell as well as the apps. Colour scheme is applied after
+  # it too: the look-and-feel package can carry its own, and we want ours to
+  # win if they ever disagree.
+  plasma-apply-lookandfeel -a org.kde.breezedark.desktop >/tmp/sm-darkmode.log 2>&1 || true
+  plasma-apply-colorscheme BreezeDark >>/tmp/sm-darkmode.log 2>&1 || true
 ) &
 
 # No auto-maximize: KiCad's own window placement is left alone, so its

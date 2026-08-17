@@ -216,6 +216,17 @@ def apply_live(app_id: str, user: str, container: str) -> dict:
     app_scale = prefs.get("app_scale") or scale
     if not scale and not app_scale:
         return {"applied": False, "reason": "no scale set"}
+    # A GTK/wx app (KiCad) reads GDK_SCALE/GDK_DPI_SCALE from its ENVIRONMENT,
+    # which is fixed when the container is created — there is nothing to
+    # re-apply to a process that is already running, unlike Kit (rewrites its
+    # .kit files) or Qt (restarting the shell picks up QT_SCALE_FACTOR).
+    #
+    # Restarting the desktop below still helps: the panel and window
+    # decorations rescale. But claiming the whole change applied "now" was
+    # wrong and actively misleading — it is what made a slider look broken
+    # when the desktop chrome resized and the app did not. Say so instead, so
+    # the UI can tell the user the app needs restarting.
+    _gtk = "GDK_SCALE" in env_for(app_id, user) or "GDK_DPI_SCALE" in env_for(app_id, user)
     scale = scale or "1"
     # Isaac (Kit) reads its scale at startup and ignores QT_SCALE_FACTOR, so
     # the app itself has to be relaunched for the two to match. Done inside the
@@ -285,5 +296,12 @@ def apply_live(app_id: str, user: str, container: str) -> dict:
     res = docker_backend._docker(
         ["exec", "-u", uid, container, "sh", "-c", script], timeout=40)
     ok = res.returncode == 0
+    if ok and _gtk:
+        # Desktop rescaled, but the app's own scale rides on container env and
+        # cannot change under a running process — report NOT fully applied so
+        # the caller says "next start" rather than "now".
+        return {"applied": False, "scale": scale, "app_scale": app_scale,
+                "desktop_applied": True,
+                "reason": "desktop rescaled; restart the app for its own scale"}
     return {"applied": ok, "scale": scale, "app_scale": app_scale,
             "reason": "" if ok else "the desktop shell did not come back"}
