@@ -85,6 +85,31 @@ def env_for(app_id: str, user: str) -> dict:
     env = {}
     if p.get("scale"):
         env["QT_SCALE_FACTOR"] = str(p["scale"])
+        # Same slider, same meaning, for a GTK/wxWidgets app — KiCad is the
+        # existing case. It ignores QT_SCALE_FACTOR completely, so before this
+        # the control was present and moved nothing.
+        #
+        # GTK splits what Qt does in one number across two variables, and they
+        # multiply, so setting both to the factor would scale text twice:
+        #   GDK_SCALE     integer only, scales the WHOLE UI (widgets + icons)
+        #   GDK_DPI_SCALE fractional, scales TEXT only
+        # A whole number therefore goes to GDK_SCALE (real, crisp scaling of
+        # everything) with GDK_DPI_SCALE pinned to 1 to cancel the double
+        # application. A fractional factor has no integer path — GDK_SCALE
+        # cannot express 1.5 — so it scales text alone, which is the honest
+        # best available and matches what Xft.dpi already does live in
+        # apply_live(). Icons stay put at fractional factors; that is a GTK
+        # limitation, not something this can work around from outside.
+        _s = str(p["scale"])
+        try:
+            _f = float(_s)
+        except ValueError:
+            _f = 1.0
+        if _f >= 2 and _f == int(_f):
+            env["GDK_SCALE"] = str(int(_f))
+            env["GDK_DPI_SCALE"] = "1"
+        elif _f != 1:
+            env["GDK_DPI_SCALE"] = _s
     # Kit ignores QT_SCALE_FACTOR and needs its own number (see the
     # isaac-launch wrapper). Falls back to the desktop scale when no separate
     # app scale is set, so the single-slider behaviour still holds.

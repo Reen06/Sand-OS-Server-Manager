@@ -165,7 +165,11 @@ RUN set -eux; \
 
 # Inherit the base image's ENTRYPOINT/CMD (starts Selkies + KDE). Do not override.
 
-# KiCad is wxWidgets, not Qt — there is no single QT_SCALE_FACTOR-style knob
-# that scales the whole application the way FreeCAD's does, so this app does
-# not offer an "app scale" slider in its settings panel.
+# No SECOND ("app scale") slider — that one exists only for a toolkit the
+# desktop's own scale cannot reach at all, i.e. Omniverse Kit, which needs its
+# own number written into its .kit files. KiCad is not that case: it is
+# wxWidgets/GTK, so the ordinary scale slider now drives it directly via
+# GDK_SCALE/GDK_DPI_SCALE (see ui_prefs.env_for) exactly as it drives FreeCAD
+# via QT_SCALE_FACTOR. One slider, same meaning, per-app value — a second one
+# here would move nothing.
 LABEL sandos.ui.app_scale="false"
