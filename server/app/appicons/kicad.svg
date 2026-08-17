@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>KiCad</title>
+  <rect width="512" height="512" rx="104" fill="#101724"/>
+  <path d="M112 102h288v308H112z" fill="#2674d9" stroke="#70b7ff" stroke-width="18" stroke-linejoin="round"/>
+  <path d="M192 152v208M192 256h60l88-104M252 256l92 104" fill="none" stroke="#f8fbff" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M112 176H72M112 256H72M112 336H72M440 176h-40M440 256h-40M440 336h-40" stroke="#f6b84a" stroke-width="22" stroke-linecap="round"/>
+  <g fill="#55d6c2">
+    <circle cx="192" cy="152" r="17"/><circle cx="192" cy="256" r="17"/>
+    <circle cx="192" cy="360" r="17"/><circle cx="340" cy="152" r="17"/>
+    <circle cx="344" cy="360" r="17"/>
+  </g>
+</svg>
