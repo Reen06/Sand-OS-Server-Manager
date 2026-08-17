@@ -95,6 +95,39 @@ def _internal() -> dict | None:
     }
 
 
+def _dedupe_by_filesystem(usage: list[dict]) -> list[dict]:
+    """Keep one `usage` entry per underlying filesystem, dropping the rest.
+
+    A seaweed volume server can be configured with several data directories
+    for different purposes (general volumes, a "pinned"/replicated-critical
+    set, ...) that legitimately live on the SAME physical disk. `used_bytes`/
+    `avail_bytes` per entry come from a whole-filesystem statfs, not from
+    what's actually IN that one directory — so two entries on the same disk
+    report the IDENTICAL number, byte for byte, no matter how much data sits
+    in each. Summing them counts that disk's capacity twice (or three times:
+    confirmed live, UbuntuNAS reports the SAME used/avail across all of
+    `.cluster`/`.cluster-bulk`/`.cluster-pinned`, tripling its real ~2 TB
+    into a phantom ~5.9 TB). Identified by `st_dev` (the actual device a path
+    resolves to), not by string-matching directory names, since the naming
+    convention isn't guaranteed to stay the same. A directory that can't be
+    stat'd (already gone) is dropped rather than kept — an entry for space
+    that isn't there is worse than one fewer entry.
+    """
+    seen_devs: set[int] = set()
+    out: list[dict] = []
+    for u in usage:
+        path = u.get("dir") or ""
+        try:
+            dev = os.stat(path).st_dev
+        except OSError:
+            continue
+        if dev in seen_devs:
+            continue
+        seen_devs.add(dev)
+        out.append(u)
+    return out
+
+
 def _cluster() -> dict | None:
     """This node's SeaweedFS cluster contribution — a THIRD kind of source,
     alongside the image-backed internal reservation and assigned USB drives.
@@ -130,7 +163,7 @@ def _cluster() -> dict | None:
         return None
     if not d.get("running"):
         return None
-    usage = d.get("usage") or []
+    usage = _dedupe_by_filesystem(d.get("usage") or [])
     used = sum(int(u.get("used_bytes") or 0) for u in usage)
     free = sum(int(u.get("avail_bytes") or 0) for u in usage)
     if not usage:
