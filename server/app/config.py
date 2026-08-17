@@ -422,11 +422,29 @@ RELAY_BASE = int(os.environ.get("SM_RELAY_BASE", "40000"))
 # retry loop just keeps failing until enough allocations time out on their
 # own. 32 gives real headroom to absorb that burst instead of amplifying it.
 RELAY_PER_SLOT = int(os.environ.get("SM_RELAY_PER_SLOT", "32"))
-# Extra TURN host injected alongside the LAN IP in the /turn ICE-server response.
-# Set to the WireGuard IP (e.g. 10.79.114.1) so VPN/mobile clients — who can't
-# reach the LAN IP directly — also get a TURN candidate they can use.
-# The TURN port is published on 0.0.0.0 so it already listens on the WG interface.
+# Extra TURN host for VPN/remote clients who can't reach this node's LAN IP
+# directly — set to the Hub's WireGuard tunnel address (e.g. 10.79.114.1),
+# reachable via a Hub-side DNAT rule covering this node's whole port band.
+#
+# NOT just an env var read by the container: the relay candidate a browser
+# actually gets is generated SERVER-SIDE by selkies-gstreamer performing its
+# OWN TURN allocation, which means the CONTAINER must be able to reach
+# whatever host this names. A node that isn't itself a WireGuard peer of the
+# Hub's mesh has no route to it at all — confirmed live 2026-08-17, the
+# allocation attempt just failed silently and no second candidate ever
+# appeared. write-rtc-config.sh (containers/kicad-streamer, copy for any
+# other streamed app) works around that with a second, LOCAL-only turnserver
+# process the container can always reach over loopback, configured to REPORT
+# this address as its external one regardless — see that script for the
+# full mechanism. This value only decides WHAT address gets reported, not
+# how it's reached.
 TURN_EXTRA_HOST = os.environ.get("SM_TURN_EXTRA_HOST", "")
+# Port-range offset for that second, local-only turnserver's relay range,
+# added to this instance's normal relay_min/relay_max so it can never
+# collide with any slot's own primary range (there are only SLOT_COUNT of
+# those, each RELAY_PER_SLOT wide, so shifting by the whole span guarantees
+# it lands past every one of them).
+EXTRA_RELAY_OFFSET = SLOT_COUNT * RELAY_PER_SLOT
 
 # Instance basic-auth (internal; the Hub proxy will own real auth later).
 INSTANCE_USER = os.environ.get("SM_INSTANCE_USER", "user")

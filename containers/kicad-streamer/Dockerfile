@@ -96,6 +96,23 @@ RUN set -eux; \
 # stale cached client shell.
 COPY kicad-sw.js /opt/gst-web/sw.js
 
+# Patch 5 — a SECOND TURN candidate for remote/VPN clients, written into
+# Selkies' own multi-server RTC config file (see write-rtc-config.sh for the
+# full why: the /turn HTTP response is NOT what decides the relay candidate
+# baked into the WebRTC offer — the container's own selkies-gstreamer process
+# fetches that itself, locally, bypassing SM's proxy and its extra-host
+# rewrite entirely). Hooked in right before the turnserver env block ends and
+# start-turnserver.sh launches, so SELKIES_TURN_HOST/PORT/USERNAME/PASSWORD
+# are already set when it runs. A no-op whenever SELKIES_TURN_EXTRA_HOST
+# isn't set, so this is a pure addition — no risk to any existing behavior.
+COPY write-rtc-config.sh /usr/local/bin/write-rtc-config.sh
+RUN set -eux; \
+    chmod +x /usr/local/bin/write-rtc-config.sh; \
+    f=/etc/selkies-gstreamer-entrypoint.sh; \
+    grep -q '  /etc/start-turnserver.sh &' "$f"; \
+    sed -i 's#  /etc/start-turnserver.sh \&#  /usr/local/bin/write-rtc-config.sh\n  /etc/start-turnserver.sh \&#' "$f"; \
+    grep -q 'write-rtc-config.sh' "$f"
+
 # Breeze Dark by default — same as every other streamed app in this fleet, so
 # the desktop chrome is consistent even though KiCad's own canvas colours are
 # set separately inside its own preferences.

@@ -1014,6 +1014,41 @@ def spawn(inst: Instance, app: AppDef) -> subprocess.CompletedProcess:
             "-e", f"PASSWD={config.INSTANCE_PASSWD}",
             "-e", f"SELKIES_BASIC_AUTH_PASSWORD={config.INSTANCE_PASSWD}",
         ]
+        if config.TURN_EXTRA_HOST:
+            # SM_TURN_EXTRA_HOST also rewrites the /turn HTTP response for
+            # browser-side JS (proxy.py's _inject_extra_turn) — but that never
+            # reaches the SERVER-SIDE relay candidate baked into the WebRTC
+            # offer, because selkies-gstreamer fetches /turn from its own
+            # local nginx directly, bypassing SM's proxy entirely. Passing the
+            # same host in here lets write-rtc-config.sh (containers/
+            # kicad-streamer, and any other streamed app that copies it) feed
+            # it to Selkies' own multi-TURN-server config file instead, which
+            # is what the offer actually reads from. Confirmed live
+            # 2026-08-17: without this, a remote/VPN client's SDP offer only
+            # ever contained the LAN relay candidate, unreachable off-LAN.
+            #
+            # write-rtc-config.sh runs a SECOND, local-only turnserver rather
+            # than pointing selkies-gstreamer straight at TURN_EXTRA_HOST,
+            # because that address is only reachable via the Hub's WireGuard
+            # tunnel — a node that isn't itself a WG mesh peer (Vortex-
+            # Eclipse, CortexPC today) has no route to it, and the allocation
+            # attempt just fails silently with no second candidate ever
+            # appearing (also confirmed live). The second turnserver is
+            # reached over loopback instead (always works, no routing needed)
+            # and reports TURN_EXTRA_HOST as ITS external address regardless
+            # — standard TURN NAT-traversal behavior. It needs its own
+            # control port and its own relay range, offset past every slot's
+            # own primary range so the two can never collide.
+            extra_port = inst.turn_port + 1
+            extra_relay_min = inst.relay_min + config.EXTRA_RELAY_OFFSET
+            extra_relay_max = inst.relay_max + config.EXTRA_RELAY_OFFSET
+            args += [
+                "-p", f"{extra_relay_min}-{extra_relay_max}:{extra_relay_min}-{extra_relay_max}/udp",
+                "-e", f"SELKIES_TURN_EXTRA_HOST={config.TURN_EXTRA_HOST}",
+                "-e", f"SELKIES_TURN_EXTRA_PORT={extra_port}",
+                "-e", f"TURN_EXTRA_RELAY_MIN={extra_relay_min}",
+                "-e", f"TURN_EXTRA_RELAY_MAX={extra_relay_max}",
+            ]
 
     # Data volumes — the NAS layer. Per-user volumes are private; shared volumes
     # are one library many apps/users mount (optionally read-only).
