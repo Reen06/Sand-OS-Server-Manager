@@ -310,6 +310,114 @@ CATALOG: dict[str, AppDef] = {
         # page (the exact window the comment above already named).
         strict_ready=True,
     ),
+    # Ledger — one container per person, their data on their own NAS directory.
+    #
+    # mode="per-user" is doing real work here: finances are the clearest case in
+    # this catalogue where two people must never see the same instance, and the
+    # per-user mount means the records follow the person across nodes rather
+    # than living on whichever machine happened to run the app.
+    "ledger": AppDef(
+        id="ledger",
+        label="Ledger",
+        icon="logs",           # a ledger is a log of entries
+        color="slate",
+        desc="Track accounts, income, expenses and recurring bills — personal and business.",
+        image=config.LEDGER_IMAGE,
+        packaged_image=config.LEDGER_PACKAGED_IMAGE,
+        packaged_build_context="/home/control/ledger",
+        packaged_dockerfile="containers/ledger/Dockerfile.packaged",
+        build_context="/home/control/ledger/containers/ledger",
+        dockerhub_repo="reen16/ledger",
+        kind="web",
+        mode="per-user",
+        internal_port=8099,
+        gpu=False,
+        mem_limit="256m",
+        # Relative asset URLs, so the proxy strips the app prefix — same as webcad.
+        proxy_subpath="root",
+        # Identity for the greeting and for stamping entries. NOT a permission
+        # boundary: isolation comes from each person getting their own container
+        # and their own mount, so there is nothing here belonging to anyone else.
+        sso_header="X-Forwarded-User",
+        # DEV: run live from the bind-mounted checkout, same shape as sketchref
+        # and webcad. uvicorn --reload restarts the worker on a server edit, and
+        # web/ is read from disk per request — so a change is visible on a
+        # refresh without rebuilding or restarting the container.
+        #
+        # A node WITHOUT this checkout falls back to packaged_image, which has
+        # the source copied in, so the app still runs anywhere.
+        binds=[("/home/control/ledger", "/app")],
+        mounts=[
+            Mount(name="ledger-data", path="/data", scope="per-user",
+                  storage="nfs", nas_path="Ledger"),
+        ],
+    ),
+    "sketchref": AppDef(
+        id="sketchref",
+        multi_node=True,   # stateless tool, no shared server-side state
+        label="SketchRef",
+        icon="scan",        # whitelisted; its corner-bracket glyph matches the corner-picking UI
+        color="violet",
+        desc="Undo perspective and scale a photo into a dimensionally-accurate CAD sketch reference.",
+        image=config.SKETCHREF_IMAGE,
+        packaged_image=config.SKETCHREF_PACKAGED_IMAGE,
+        packaged_build_context="/home/control/sketchref",
+        packaged_dockerfile="containers/sketchref/Dockerfile.packaged",
+        dockerhub_repo="reen16/sketchref",
+        # Dockerfile lives INSIDE the sibling source repo, same shape as webcad/helix.
+        build_context="/home/control/sketchref/containers/sketchref",
+        kind="web",
+        mode="shared",              # one host; stateless, nothing to isolate per-user
+        internal_port=5183,         # vite preview serves the rebuilt dist/ here
+        gpu=False,
+        mem_limit="512m",
+        # The built index.html uses relative asset URLs (vite base "./"), so the proxy strips
+        # the /apps/stream/sketchref prefix — same reasoning as webcad.
+        proxy_subpath="root",
+        # DEV: run live from the bind-mounted source tree so edits on the host rebuild
+        # (vite build --watch) without a container restart; vite preview re-serves dist/ from
+        # disk on every request, so a rebuild is visible on the next reload.
+        binds=[("/home/control/sketchref", "/app")],
+        # Persistent npm cache: node_modules itself is an anonymous VOLUME (dies with the --rm
+        # container, deliberately — see the Dockerfile), but a warm npm cache still makes a
+        # cold reinstall a fast relink instead of a from-scratch download.
+        mounts=[Mount(name="sketchref-npm-cache", path="/npm-cache", scope="shared")],
+        # vite build --watch binds the port instantly but preview's own startup blocks until
+        # dist/index.html exists — see the entrypoint — so a plain "responded at all" check
+        # would still be accurate here, but strict_ready matches webcad/helix's same shape of
+        # live-dev app for consistency and because a future change to the entrypoint's ordering
+        # shouldn't silently need this flipped back on.
+        strict_ready=True,
+    ),
+    "gears": AppDef(
+        id="gears",
+        multi_node=True,   # stateless tool, no shared server-side state
+        label="Gears",
+        icon="wrench",      # whitelisted; closest mechanical/tool glyph the Hub ships
+        color="amber",
+        desc="Parametric spur/internal/rack/planetary gear generator — export SVG or DXF.",
+        image=config.GEARS_IMAGE,
+        packaged_image=config.GEARS_PACKAGED_IMAGE,
+        packaged_build_context="/home/control/Gears",
+        packaged_dockerfile="containers/gears/Dockerfile.packaged",
+        dockerhub_repo="reen16/gears",
+        # Dockerfile lives INSIDE the sibling source repo, same shape as sketchref/webcad.
+        build_context="/home/control/Gears/containers/gears",
+        kind="web",
+        mode="shared",              # one static site for everyone; nothing server-side to isolate
+        internal_port=80,           # nginx's own default docroot port
+        gpu=False,
+        mem_limit="128m",
+        # Plain relative asset URLs already (no bundler, no base-href assumptions), so the proxy
+        # strips to root the same way it does for sketchref/webcad.
+        proxy_subpath="root",
+        # DEV: bind the "SVG Gear Maker V2" directory straight onto nginx's docroot — there is no
+        # build step to run, so unlike sketchref/webcad's /app + watcher shape, an edit on the
+        # host is simply the next file nginx reads on the next request. No strict_ready needed:
+        # nginx answers correctly (200 or 404) from the moment it starts, there is no "watcher
+        # hasn't finished its first pass yet" window to wait out.
+        binds=[("/home/control/Gears/SVG Gear Maker V2", "/usr/share/nginx/html")],
+    ),
     "helix": AppDef(
         id="helix",
         multi_node=True,   # stateless editor

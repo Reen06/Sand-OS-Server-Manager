@@ -203,6 +203,31 @@ WEBCAD_IMAGE = os.environ.get("SM_WEBCAD_IMAGE", "sm-webcad:dev")
 # automatically on any node that doesn't have the live checkout.
 WEBCAD_PACKAGED_IMAGE = os.environ.get("SM_WEBCAD_PACKAGED_IMAGE", "sm-webcad:packaged")
 
+# Ledger — personal + business finance tracking. Manual entry only: it is never
+# connected to a bank, so no third party is handed credentials and the record
+# reflects what its owner knows rather than what a scraper managed to read.
+LEDGER_IMAGE = os.environ.get("SM_LEDGER_IMAGE", "sm-ledger:dev")
+LEDGER_PACKAGED_IMAGE = os.environ.get("SM_LEDGER_PACKAGED_IMAGE", "sm-ledger:packaged")
+
+# SketchRef — perspective/scale correction for CAD sketch reference photos (a 'web' app). Pure
+# client-side (no backend process, unlike webcad); dev image runs live from a bind-mounted
+# source tree via `vite build --watch` + `vite preview`. Build from containers/sketchref.
+SKETCHREF_IMAGE = os.environ.get("SM_SKETCHREF_IMAGE", "sm-sketchref:dev")
+# Self-contained build (source COPYed + built in, static nginx serve) — built from
+# containers/sketchref/Dockerfile.packaged, repo root as context. Used automatically on any
+# node that doesn't have the live checkout.
+SKETCHREF_PACKAGED_IMAGE = os.environ.get("SM_SKETCHREF_PACKAGED_IMAGE", "sm-sketchref:packaged")
+
+# Gears (SVG Gear Maker V2) — parametric gear/gearset SVG+DXF generator (a 'web' app). Plain
+# static HTML/CSS/JS, no build step at all — the dev image is bare nginx bind-mounted onto the
+# source tree, so a host-side edit is live on the next browser reload with nothing to rebuild.
+# Build from containers/gears.
+GEARS_IMAGE = os.environ.get("SM_GEARS_IMAGE", "sm-gears:dev")
+# Self-contained build (source COPYed in at image-build time, no bind mount needed) — built from
+# containers/gears/Dockerfile.packaged, repo root as context. Used automatically on any node
+# that doesn't have the live checkout.
+GEARS_PACKAGED_IMAGE = os.environ.get("SM_GEARS_PACKAGED_IMAGE", "sm-gears:packaged")
+
 # HeliX Motion — CNC controller for the Carvera Air (a 'web' app). Dev image runs
 # live from the bind-mounted /home/control/CNC_Controller tree; build from its
 # containers/helix. SCAN_SUBNETS: comma-separated CIDRs the app's machine
