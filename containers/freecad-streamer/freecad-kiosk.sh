@@ -83,34 +83,10 @@ ensure_freecad_config_files() {
   ensure_freecad_config_files
   restore_freecad_prefs
   ensure_freecad_config_files
-  # Make FreeCAD truly fullscreen (fills the display, no decorations/margin) so
-  # it looks native — no black border. Re-applied for a while since the window
-  # appears late and the display may resize (SELKIES_ENABLE_RESIZE) on client
-  # connect. ~120s window so a slow first-run (FreeCAD builds caches, main
-  # window can take 40-60s) is always caught.
-  #
-  # Match by window NAME, anchored to "FreeCAD <version>" — NOT `--class
-  # FreeCAD`. A workbench/UI addon (e.g. a Ribbon-style toolbar) can add its
-  # own auxiliary panel windows that ALSO report WM_CLASS containing
-  # "FreeCAD" (seen live: extra windows literally named "Searchbar" and
-  # "FreeCAD Ribbon") — the old class-based match fullscreened THOSE too,
-  # stretching a small helper panel to fill the whole screen. When that
-  # happened to a window hosting a modal Yes/No dialog (e.g. FreeCAD's
-  # first-run "a data file must be generated" prompt), the dialog's buttons
-  # ended up stranded off in a corner of a screen-sized blank canvas —
-  # unclickable, looking like the app had hung. The real main window's title
-  # is reliably "FreeCAD X.Y.Z" and nothing else in practice matches that.
-  ( for _ in $(seq 1 120); do
-      for wid in $(xdotool search --name '^FreeCAD [0-9]' 2>/dev/null); do
-        # Maximised, not fullscreen: fullscreen covers the panel, which
-        # defeats the point of keeping the desktop. This fills the usable
-        # area and leaves KDE reachable. F11 inside FreeCAD still gives a
-        # true fullscreen when it is wanted.
-        wmctrl -ir "$wid" -b remove,fullscreen 2>/dev/null
-        wmctrl -ir "$wid" -b add,maximized_vert,maximized_horz 2>/dev/null
-      done
-      sleep 1
-    done ) &
+  # No auto-maximize: the window manager's own placement is left alone, so
+  # FreeCAD opens where KDE puts it and any size the user sets afterwards
+  # sticks. (Previously a background loop re-applied maximize for ~120s,
+  # which fought manual resizing during startup.) Removed 2026-08-17.
 
 
 /opt/freecad/AppRun "$@"

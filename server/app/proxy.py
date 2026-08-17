@@ -500,6 +500,57 @@ async def http(app_id: str, path: str, request: Request, user: str, role: str | 
     return resp
 
 
+# Live client signalling sockets, keyed (app_id, user, selkies_peer_id).
+#
+# A streamed instance serves exactly ONE browser: Selkies' signalling assigns
+# FIXED peer ids — 0/2 for the server's own video/audio pipelines, 1/3 for the
+# browser's — and its hello_peer() refuses any uid already registered. So a
+# second browser (another device, a forgotten tab, a left-open PWA window)
+# permanently holds 1/3, and every later client is closed the instant it says
+# HELLO, retrying forever. Browser-side that reads as "Registering with server,
+# peer ID: 1" / "Server closed connection" on a loop, which the UI shows as
+# flickering between "waiting for stream" and "registering" — with a perfectly
+# healthy container, healthy signalling and correct SDP. Cost most of a day to
+# find (2026-08-17); the only recovery was restarting the container by hand.
+#
+# Latest client wins: opening the app somewhere new takes over the session,
+# which is what a single-user streamed desktop should do — reconnecting from
+# another device should never deadlock your own app. Only the SERVER's
+# pipelines talk to the signalling server directly (in-container, never through
+# this proxy), so everything tracked here is by definition a browser.
+_signalling_clients: dict[tuple[str, str, str], dict] = {}
+
+
+def _hello_uid(text: str) -> str | None:
+    """The peer id out of Selkies' 'HELLO <uid> [<b64 meta>]' handshake, or None
+    if this isn't that handshake (any other ws traffic passes through untouched)."""
+    toks = text.split(maxsplit=2)
+    return toks[1] if len(toks) >= 2 and toks[0] == "HELLO" else None
+
+
+async def _evict_previous(key: tuple[str, str, str]) -> None:
+    """Close the client currently holding this peer id, so the id is free
+    upstream before the new client's HELLO arrives.
+
+    Closing its client socket is what unwinds it: the old handler's receive()
+    returns a disconnect, which breaks its pump loop and closes its upstream in
+    its own `finally`. The upstream is closed here too, because the peer id is
+    only released when the SIGNALLING connection drops — waiting on the old
+    handler to notice would race the new HELLO.
+    """
+    prev = _signalling_clients.pop(key, None)
+    if not prev:
+        return
+    log.info("WS evicting previous client for %s (peer id %s)", key[0], key[2])
+    for closer in (prev.get("client"), prev.get("upstream")):
+        if closer is None:
+            continue
+        try:
+            await closer.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 async def ws(app_id: str, path: str, client_ws: WebSocket, user: str) -> None:
     port = _instance_port(app_id, user)
     if port is None:
@@ -526,6 +577,26 @@ async def ws(app_id: str, path: str, client_ws: WebSocket, user: str) -> None:
     if app and app.sso_header:
         hdrs.append((app.sso_header, user))
     # `websockets` renamed extra_headers → additional_headers across versions.
+    # Take the client's first frame BEFORE opening upstream, so a Selkies HELLO
+    # can be read and any previous holder of that peer id evicted while the id
+    # is still free. Doing it after would race: the old client still holds the
+    # id when the new HELLO lands, which is the deadlock this exists to prevent.
+    # The frame is replayed upstream below, so nothing is swallowed.
+    first_text: str | None = None
+    key: tuple[str, str, str] | None = None
+    if streamed and "signalling" in path:
+        try:
+            first = await client_ws.receive()
+        except Exception:  # noqa: BLE001
+            return
+        if first["type"] == "websocket.disconnect":
+            return
+        first_text = first.get("text")
+        uid = _hello_uid(first_text) if first_text else None
+        if uid:
+            key = (app_id, user, uid)
+            await _evict_previous(key)
+
     conn_kw = {"subprotocols": subprotocols or None, "max_size": None}
     try:
         upstream = await websockets.connect(target, additional_headers=hdrs, **conn_kw)
@@ -536,6 +607,11 @@ async def ws(app_id: str, path: str, client_ws: WebSocket, user: str) -> None:
         await client_ws.close(code=1011)
         return
     log.info("WS /%s → upstream connected", path)
+
+    if key is not None:
+        _signalling_clients[key] = {"client": client_ws, "upstream": upstream}
+    if first_text is not None:
+        await upstream.send(first_text)
 
     async def c2u() -> None:
         try:
@@ -571,6 +647,11 @@ async def ws(app_id: str, path: str, client_ws: WebSocket, user: str) -> None:
             t.cancel()
     finally:
         log.info("WS /%s closing (freeing instance session)", path)
+        # Only clear the registry if we are still the CURRENT holder — an
+        # eviction already replaced the entry with the new client, and removing
+        # it here would drop that live client's own bookkeeping instead.
+        if key is not None and _signalling_clients.get(key, {}).get("client") is client_ws:
+            _signalling_clients.pop(key, None)
         await upstream.close()
         try:
             await client_ws.close()
