@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Wall Panel
+Comment=Open the Sand-OS display panel
+Icon=video-display
+Exec=systemctl --user start sandos-display-kiosk.service
+Terminal=false
+Categories=Utility;

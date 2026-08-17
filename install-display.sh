@@ -72,7 +72,31 @@ ok "Browser present"
 $SUDO install -d -m 755 "$LIB"
 $SUDO install -m 755 "$SRC/kiosk.sh" "$LIB/kiosk.sh"
 $SUDO install -m 755 "$SRC/dim.py"   "$LIB/dim.py"
+$SUDO install -m 755 "$SRC/exit-kiosk.sh" "$LIB/exit-kiosk.sh"
 ok "Installed to $LIB"
+
+# Desktop launchers, so the panel is a thing you start and stop rather than a
+# state the machine is stuck in. Without these the only way back to the desktop
+# is killing chromium over SSH — and Restart=always brings it straight back,
+# which reads as the panel refusing to close.
+for _d in "/home/$DISPLAY_USER/Desktop" "/home/$DISPLAY_USER/.local/share/applications"; do
+  $SUDO install -d -o "$DISPLAY_USER" -g "$DISPLAY_USER" -m 755 "$_d"
+  $SUDO install -o "$DISPLAY_USER" -g "$DISPLAY_USER" -m 755 \
+    "$SRC/sandos-display.desktop" "$_d/sandos-display.desktop"
+  $SUDO tee "$_d/sandos-display-exit.desktop" >/dev/null <<EOF
+[Desktop Entry]
+Type=Application
+Name=Exit Wall Panel
+Comment=Close the panel and return to the desktop
+Icon=application-exit
+Exec=$LIB/exit-kiosk.sh
+Terminal=false
+Categories=Utility;
+EOF
+  $SUDO chown "$DISPLAY_USER:$DISPLAY_USER" "$_d/sandos-display-exit.desktop"
+  $SUDO chmod 755 "$_d/sandos-display-exit.desktop"
+done
+ok "Desktop launchers (start + exit)"
 
 # 0600 root: the token is the screen's entire credential. Anyone who can read
 # it can be this screen — which is a limited identity by design, but still one.
