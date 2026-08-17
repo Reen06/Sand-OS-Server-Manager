@@ -2346,6 +2346,50 @@ async def ollama_v1_proxy(path: str, request: Request):
     return StreamingResponse(gen, media_type=ct)
 
 
+@app.get("/api/apps/ollama/api/tags")
+async def ollama_native_tags(request: Request):
+    """Ollama's own native model listing (distinct shape from /v1/models —
+    Open WebUI's Ollama-connection frontend calls THIS, not the OpenAI one).
+    Live, not from the Hub poller's cache: this is a same-node call, so
+    there's no reason to serve anything but the current answer."""
+    _require_identity(request)
+    return {"models": ollama_mgr.list_models()}
+
+
+@app.get("/api/apps/ollama/api/ps")
+async def ollama_native_ps(request: Request):
+    """Models currently resident in this node's Ollama memory, in Ollama's
+    own native /api/ps shape. This is what feeds Open WebUI's "loaded model"
+    green dot and its unload button once Open WebUI is pointed at the Hub
+    router as an Ollama-type connection — see llm.py's /api/ps, which fans
+    this out across every online node live rather than reading the Hub's
+    own (up to 15s stale) poller cache, since staleness here would show a
+    model as loaded/unloaded a few seconds after it actually changed."""
+    _require_identity(request)
+    return {"models": ollama_mgr.running_models()}
+
+
+@app.post("/api/apps/ollama/api/{path:path}")
+async def ollama_native_proxy(path: str, request: Request):
+    """Streaming proxy to Ollama's OWN native API (/api/chat, /api/generate,
+    /api/show, ...) — same shape as the /v1/{path:path} proxy above, just
+    against Ollama's native paths instead of its OpenAI-compatible ones.
+    The request body already arrives in Ollama's native shape (Open WebUI's
+    Ollama-connection frontend built it that way), so nothing here needs to
+    reshape it — this only has to find the right node and get out of the way."""
+    _require_identity(request)
+    body = await request.json()
+    try:
+        gen = ollama_mgr.stream_to_ollama(f"/api/{path}", body)
+    except RuntimeError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=503)
+    # Ollama's native streaming responses are newline-delimited JSON, not SSE —
+    # a real Content-Type, not the OpenAI proxy's "whatever Accept said" guess,
+    # since Open WebUI's Ollama-connection client specifically expects this.
+    ct = "application/x-ndjson" if body.get("stream", True) else "application/json"
+    return StreamingResponse(gen, media_type=ct)
+
+
 # ── Session-gated reverse proxy to the user's instance (the secure viewer) ─────
 def _ws_identity(ws: WebSocket) -> dict | None:
     if hub_auth.enabled():

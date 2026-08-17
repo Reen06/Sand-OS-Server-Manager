@@ -270,6 +270,14 @@ def apply_live(app_id: str, user: str, container: str) -> dict:
         'sleep 6; pgrep -x kwin_x11 >/dev/null || echo "kwin did not return"; '
         # Relaunch a Kit app at the new scale if one is running. Guarded on it
         # already running, so this never STARTS an app that was closed.
+        # Publish the live value where an app-side helper can read it, and
+        # apply it now. Container env is frozen at create, so this file is the
+        # only way a scale change reaches a RUNNING container — without it the
+        # helper re-applies the stale env value on the next app launch and the
+        # change appears to need a container restart.
+        f'printf "%s" "{app_scale}" > /tmp/sm-ui-scale 2>/dev/null || true; '
+        '[ -x /usr/local/bin/apply-kicad-scale.py ] '
+        '&& /usr/local/bin/apply-kicad-scale.py >/tmp/sm-kicad-scale.log 2>&1 || true; '
         'if pgrep -x kit >/dev/null && [ -x /usr/local/bin/isaac-launch ]; then '
         # Wait for it to actually exit. A fixed sleep was not enough -- Kit
         # takes several seconds to shut down, so the replacement started while

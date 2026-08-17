@@ -23,7 +23,23 @@ import os
 # on every launch, so 2x would become 4x, then 8x.
 BASE_ICON_PX = 24
 
-scale = float(os.environ.get("SM_UI_SCALE") or 1)
+# Where the scale comes from, freshest first:
+#
+#   /tmp/sm-ui-scale  written by ui_prefs.apply_live when the slider moves
+#   SM_UI_SCALE       container env, FROZEN when the container was created
+#
+# The file has to win. Container env cannot change under a running container,
+# so after moving the slider the env still holds the OLD number — and since
+# this script runs on every app launch, reopening KiCad would faithfully write
+# the stale value back and undo the change. That is exactly the "works, but
+# only after a container restart" behaviour this ordering fixes.
+_raw = ""
+try:
+    with open("/tmp/sm-ui-scale") as fh:
+        _raw = fh.read().strip()
+except OSError:
+    pass
+scale = float(_raw or os.environ.get("SM_UI_SCALE") or 1)
 size = max(16, int(round(BASE_ICON_PX * scale)))
 
 for f in glob.glob("/home/ubuntu/.config/kicad/*/kicad_common.json"):
