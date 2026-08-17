@@ -83,7 +83,34 @@ ensure_freecad_config_files() {
   ensure_freecad_config_files
   restore_freecad_prefs
   ensure_freecad_config_files
-  # No auto-maximize: the window manager's own placement is left alone, so
+  # Force Breeze Dark on the LIVE session.
+#
+# The image bakes a dark kdeglobals into /home/ubuntu/.config, but that path is
+# a per-user NAS bind mount at runtime — the mount MASKS whatever the image put
+# there, so the session reads the NAS copy instead and comes up light. Seeding
+# only fills that directory when it is empty on first launch, so an already-
+# populated one keeps whatever it had and never picks the theme up.
+#
+# Writing the files here fixes the config for next boot; plasma-apply-colorscheme
+# fixes the session that is already running, so it goes dark now rather than on
+# the next relaunch. Both, because either alone leaves one of the two wrong.
+( mkdir -p "$HOME/.config/kdedefaults"
+  for f in "$HOME/.config/kdeglobals" "$HOME/.config/kdedefaults/kdeglobals"; do
+    if ! grep -q '^ColorScheme=BreezeDark' "$f" 2>/dev/null; then
+      printf '%s\n' '[General]' 'ColorScheme=BreezeDark' \
+        'LookAndFeelPackage=org.kde.breezedark.desktop' 'widgetStyle=Breeze' >> "$f"
+    fi
+  done
+  # Wait for plasma before applying live — this runs from a KDE autostart entry,
+  # so the shell is usually up, but not guaranteed to be ready to take a call.
+  for _ in $(seq 1 30); do
+    pgrep -x plasmashell >/dev/null && break
+    sleep 1
+  done
+  plasma-apply-colorscheme BreezeDark >/tmp/sm-darkmode.log 2>&1 || true
+) &
+
+# No auto-maximize: the window manager's own placement is left alone, so
   # FreeCAD opens where KDE puts it and any size the user sets afterwards
   # sticks. (Previously a background loop re-applied maximize for ~120s,
   # which fought manual resizing during startup.) Removed 2026-08-17.
