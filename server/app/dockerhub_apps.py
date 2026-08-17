@@ -191,6 +191,7 @@ def _validate_manifest(m: dict) -> dict:
         "desc": _s("desc", 200),
         "kind": kind, "mode": mode, "internal_port": port,
         "gpu": bool(m.get("gpu", False)),
+        "multi_node": bool(m.get("multi_node", False)),
         "mem_limit": mem, "proxy_subpath": proxy_subpath,
         "keepalive_seconds": keepalive,
         "own_subdomain": bool(m.get("own_subdomain", False)),
@@ -203,9 +204,10 @@ def _validate_manifest(m: dict) -> dict:
     }
 
 
-def _manifest_to_appdef(man: dict, image_ref: str, env_values: dict[str, str]) -> AppDef:
-    return AppDef(
-        id=ID_PREFIX + man["id"],
+def _manifest_to_appdef(man: dict, image_ref: str, env_values: dict[str, str],
+                        app_id: str | None = None, built_in: AppDef | None = None) -> AppDef:
+    app = AppDef(
+        id=app_id or ID_PREFIX + man["id"],
         label=man["label"], icon=man["icon"], color=man["color"], desc=man["desc"],
         image=image_ref, kind=man["kind"], mode=man["mode"],
         internal_port=man["internal_port"], gpu=man["gpu"],
@@ -222,7 +224,23 @@ def _manifest_to_appdef(man: dict, image_ref: str, env_values: dict[str, str]) -
         mounts=[Mount(name=mt["name"], path=mt["path"], scope=mt["scope"], ro=mt["ro"])
                 for mt in man["mounts"]],
         env=dict(env_values),
+        multi_node=bool(man.get("multi_node", False)),
     )
+    if built_in is not None:
+        # A published build of an app this SM already knows is another DELIVERY of the same
+        # product, not a second product. Keep the local catalogue's canonical identity and the
+        # deployment facts that are intentionally absent from the portable manifest, while the
+        # pulled image supplies the portable runtime contract above.
+        app.label = built_in.label
+        app.icon = built_in.icon
+        app.color = built_in.color
+        app.desc = built_in.desc
+        app.multi_node = built_in.multi_node
+        app.strict_ready = built_in.strict_ready
+        app.ready_path = built_in.ready_path
+        app.ready_bad_status = built_in.ready_bad_status
+        app.dockerhub_repo = built_in.dockerhub_repo
+    return app
 
 
 # ── persistence ──────────────────────────────────────────────────────────────
@@ -235,7 +253,7 @@ def _save_state() -> None:
     os.replace(tmp, STATE_FILE)
 
 
-def load_installed() -> dict[str, AppDef]:
+def load_installed(builtins: dict[str, AppDef] | None = None) -> dict[str, AppDef]:
     """Rebuild AppDefs for every hub-installed app from the state file —
     called from registry.py at import time, BEFORE reconcile_from_docker(),
     so running hub-app containers get re-adopted across SM restarts exactly
@@ -245,15 +263,29 @@ def load_installed() -> dict[str, AppDef]:
     try:
         with open(STATE_FILE) as f:
             data = json.load(f)
-        for app_id, rec in data.items():
+        migrated = False
+        loaded_state: dict[str, dict] = {}
+        for stored_id, rec in data.items():
             try:
                 man = _validate_manifest(rec["manifest"])      # defensive re-validate
                 env = {k: str(v) for k, v in (rec.get("env") or {}).items()
                        if _ENVKEY_RE.match(k)}
-                out[app_id] = _manifest_to_appdef(man, rec["image_ref"], env)
-                _state[app_id] = rec
+                built_in = (builtins or {}).get(man["id"])
+                app_id = man["id"] if built_in is not None else stored_id
+                out[app_id] = _manifest_to_appdef(
+                    man, rec["image_ref"], env, app_id=app_id, built_in=built_in,
+                )
+                loaded_state[app_id] = rec
+                migrated = migrated or app_id != stored_id
             except Exception as e:  # noqa: BLE001
-                print(f"[dockerhub_apps] skipping bad state entry {app_id}: {e}")
+                print(f"[dockerhub_apps] skipping bad state entry {stored_id}: {e}")
+        _state.clear()
+        _state.update(loaded_state)
+        if migrated:
+            # Older releases deliberately registered published built-ins as `hub-<id>`, which
+            # produced two identical cards. Rewrite just the registration key; the image and all
+            # data volumes stay untouched.
+            _save_state()
     except FileNotFoundError:
         pass
     except Exception as e:  # noqa: BLE001
@@ -427,14 +459,26 @@ def _run_install(repo: str, tag: str, env: dict[str, str],
             job["error"] = f"invalid env key(s): {', '.join(sorted(bad_keys))}"
             return
 
-        app_id = ID_PREFIX + man["id"]
+        built_in = registry.CATALOG.get(man["id"])
+        app_id = man["id"] if built_in is not None else ID_PREFIX + man["id"]
         if app_id in registry.APPS and not is_hub_app(app_id):
-            job["error"] = f"app id {app_id!r} already exists on this node"
-            return
+            if built_in is None:
+                job["error"] = f"app id {app_id!r} already exists on this node"
+                return
+            if any(i["app_id"] == app_id and i["running"] for i in registry.instances_summary()):
+                job["error"] = f"stop {built_in.label} before replacing its installed build"
+                return
 
         digest = _local_digest(repo, image_ref)
-        app = _manifest_to_appdef(man, image_ref, env)
+        app = _manifest_to_appdef(
+            man, image_ref, env, app_id=app_id, built_in=built_in,
+        )
         with _lock:
+            if built_in is not None:
+                # Make the canonical built-in durable in this node's enabled library, then replace
+                # its runtime AppDef with the pulled, self-contained build. There is still ONE id
+                # across the fleet, so the Hub produces one card and all launch/proxy routes agree.
+                registry.enable_app(app_id)
             registry.APPS[app_id] = app
             _state[app_id] = {"repo": repo, "tag": tag, "image_ref": image_ref,
                               "manifest": man, "env": env, "generic": generic,
@@ -463,7 +507,12 @@ def uninstall(app_id: str) -> dict:
     if running:
         raise ValueError("stop the app before uninstalling it")
     with _lock:
-        registry.APPS.pop(app_id, None)
+        if app_id in registry.CATALOG:
+            # Removing the pulled build reveals the built-in library entry again. Its image may be
+            # absent, in which case the card truthfully returns to Install rather than vanishing.
+            registry.APPS[app_id] = registry.CATALOG[app_id]
+        else:
+            registry.APPS.pop(app_id, None)
         _state.pop(app_id, None)
         _save_state()
     r = subprocess.run(["docker", "rmi", rec["image_ref"]],

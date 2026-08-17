@@ -66,4 +66,10 @@ export DISPLAY="${DISPLAY:-:0}"
 # and any size the user sets sticks. (Earlier versions maximized new windows
 # from a background loop; KiCad handles this itself.) Removed 2026-08-17.
 
+# Size KiCad's own chrome from the full-UI slider. KiCad ignores GDK_SCALE
+# (verified live), so this writes toolbar_icon_size where KiCad reads it —
+# see apply-kicad-scale.py. Runs every launch, so reopening the app inside
+# the streamed desktop picks up a new value with no container restart.
+/usr/local/bin/apply-kicad-scale.py || true
+
 /opt/kicad/AppRun "$@"

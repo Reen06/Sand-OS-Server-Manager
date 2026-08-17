@@ -144,7 +144,8 @@ RUN set -eux; \
 # Kiosk launcher: starts KiCad's project manager on the full KDE desktop
 # (panel/wallpaper kept, same reasoning as FreeCAD's launcher).
 COPY kicad-kiosk.sh /usr/local/bin/kicad-kiosk.sh
-RUN chmod +x /usr/local/bin/kicad-kiosk.sh
+COPY apply-kicad-scale.py /usr/local/bin/apply-kicad-scale.py
+RUN chmod +x /usr/local/bin/kicad-kiosk.sh /usr/local/bin/apply-kicad-scale.py
 
 # App-menu entry + KDE autostart so the session boots straight into KiCad.
 # The base image's KDE session runs as ROOT with HOME=/home/ubuntu (root

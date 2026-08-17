@@ -364,6 +364,7 @@ def build_manifest(app: AppDef) -> dict:
         "mode": app.mode,
         "internal_port": app.internal_port,
         "gpu": app.gpu,
+        "multi_node": app.multi_node,
         "mem_limit": app.mem_limit,
         "proxy_subpath": app.proxy_subpath,
         "keepalive_seconds": app.keepalive_seconds,

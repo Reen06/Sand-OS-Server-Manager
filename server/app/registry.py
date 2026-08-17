@@ -1414,7 +1414,7 @@ def disable_app(app_id: str) -> dict:
 # level (it defers via `from . import registry` inside functions) or this
 # would be a circular import.
 from . import dockerhub_apps as _dockerhub_apps  # noqa: E402
-APPS.update(_dockerhub_apps.load_installed())
+APPS.update(_dockerhub_apps.load_installed(CATALOG))
 
 
 def resolve_volume(app_id: str, user: str, m: Mount) -> str:
