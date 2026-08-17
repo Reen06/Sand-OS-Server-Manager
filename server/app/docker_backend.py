@@ -5,6 +5,7 @@ from __future__ import annotations
 import calendar
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.error
@@ -973,7 +974,26 @@ def spawn(inst: Instance, app: AppDef) -> subprocess.CompletedProcess:
                     args=[], returncode=1, stdout="",
                     stderr=f"service '{svc.name}' not ready in time")
 
-    args = ["run", "--name", inst.name, "-d", "--rm", "-e", "TZ=UTC"]
+    # Stable hostname, per (app, user, NODE).
+    #
+    # Containers run --rm and Docker otherwise hands out the container ID as the
+    # hostname, so every relaunch looks like a DIFFERENT machine. An app that
+    # records who holds a file then strands a lock naming a host that no longer
+    # exists — KiCad: "Project … is already open by 'root' at 'd9be3f3844ba'",
+    # seen after any recreate (idle reap, or remount_heal clearing a dead FUSE
+    # handle). The app cannot tell a stale lock from a live one on another
+    # machine, so it refuses rather than reclaiming.
+    #
+    # A hostname that is stable across relaunches lets the app recognise its own
+    # previous lock and reclaim it. The NODE has to be in there too: a per-user
+    # app can be multi_node, so two nodes may hold the same user's NAS home at
+    # once — naming them identically would make each one mistake the OTHER's
+    # LIVE lock for its own stale one and steal a project that is genuinely
+    # open elsewhere. Same name on the same box, different across boxes, which
+    # is exactly what a hostname is supposed to mean.
+    _host = re.sub(r"[^a-z0-9-]+", "-", f"{inst.name}-{config.NODE_NAME}".lower()).strip("-")
+    args = ["run", "--name", inst.name, "--hostname", _host[:63],
+            "-d", "--rm", "-e", "TZ=UTC"]
     if getattr(app, "mem_limit", ""):
         args += ["--memory", app.mem_limit]
     if net:
