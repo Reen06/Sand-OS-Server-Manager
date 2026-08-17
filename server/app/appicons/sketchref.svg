@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>SketchRef</title>
+  <rect width="512" height="512" rx="104" fill="#16121f"/>
+  <path d="m114 139 283-35 29 295-323 16 11-276Z" fill="#222a38" stroke="#9e7cff" stroke-width="18" stroke-linejoin="round"/>
+  <path d="m130 354 90-104 57 55 57-89 72 155" fill="none" stroke="#e9e7f4" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="319" cy="179" r="27" fill="#f6b84a"/>
+  <path d="M256 124v276M111 278h306" stroke="#62d5e8" stroke-width="10" stroke-dasharray="20 18" opacity=".75"/>
+  <g fill="#f8fbff" stroke="#9e7cff" stroke-width="12">
+    <circle cx="114" cy="139" r="23"/><circle cx="397" cy="104" r="23"/>
+    <circle cx="426" cy="399" r="23"/><circle cx="103" cy="415" r="23"/>
+  </g>
+</svg>

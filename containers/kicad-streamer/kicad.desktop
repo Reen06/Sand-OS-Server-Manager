@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=KiCad
+GenericName=Schematic & PCB Design
+Comment=Full KiCad, streamed
+Exec=/usr/local/bin/kicad-kiosk.sh %F
+Icon=/opt/kicad/usr/share/icons/hicolor/scalable/apps/org.kicad_pcb.KiCad.svg
+Terminal=false
+Categories=Graphics;Science;Engineering;Electronics;
+X-KDE-autostart-after=panel
+X-GNOME-Autostart-enabled=true

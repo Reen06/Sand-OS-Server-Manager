@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=flow5
+GenericName=Potential Flow Solver
+Comment=flow5, streamed — successor to xflr5
+Exec=/usr/local/bin/flow5-kiosk.sh %F
+Icon=/opt/flow5/flow5.png
+Terminal=false
+Categories=Graphics;Science;Engineering;
+X-KDE-autostart-after=panel
+X-GNOME-Autostart-enabled=true

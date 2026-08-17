@@ -182,6 +182,15 @@ EXTERNAL_BASE = os.environ.get("SM_EXTERNAL_BASE", "/apps").rstrip("/")
 
 # Default image for the FreeCAD app.
 FREECAD_IMAGE = os.environ.get("SM_FREECAD_IMAGE", "freecad-streamer:dev")
+# Default image for the KiCad app (schematic capture + PCB layout), streamed
+# the same way as FreeCAD. Build from containers/kicad-streamer.
+KICAD_IMAGE = os.environ.get("SM_KICAD_IMAGE", "kicad-streamer:dev")
+# flow5 — potential-flow aero/hydro design tool (successor to xflr5), streamed like FreeCAD.
+# Unlike FreeCAD there is no upstream Linux binary at all; this image builds flow5 from source
+# at image-build time against a fork (Reen06/flow5, branch ubuntu24.04-linux-build) carrying the
+# patches needed to build/run on Ubuntu 24.04's own Qt6/OpenCascade/Gmsh versions. Build from
+# containers/flow5.
+FLOW5_IMAGE = os.environ.get("SM_FLOW5_IMAGE", "sm-flow5:dev")
 # Isaac Sim wrapped in the Selkies desktop (containers/isaac-sim/Dockerfile).
 # Isaac's own livestream needs a native client and a direct UDP peer path, so
 # it can never be a browser app; this is the streamed-desktop equivalent.

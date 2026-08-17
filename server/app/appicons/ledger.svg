@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>Ledger</title>
+  <rect width="512" height="512" rx="104" fill="#12171b"/>
+  <path d="M103 101h260c26 0 46 20 46 46v264H149c-26 0-46-20-46-46V101Z" fill="#edf4f3"/>
+  <path d="M149 101v310M363 101v310" stroke="#91a5aa" stroke-width="18"/>
+  <path d="M195 176h122M195 238h122M195 300h76" stroke="#26343b" stroke-width="20" stroke-linecap="round"/>
+  <path d="m283 328 31 31 67-76" fill="none" stroke="#38b889" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M103 365c0-26 20-46 46-46h12v92h-12c-26 0-46-20-46-46Z" fill="#5b8cff"/>
+</svg>

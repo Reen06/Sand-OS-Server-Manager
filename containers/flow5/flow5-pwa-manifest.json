@@ -1,0 +1,15 @@
+{
+  "name": "flow5",
+  "short_name": "flow5",
+  "description": "flow5 — streamed potential-flow aero/hydro design tool",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    { "src": "flow5.png", "type": "image/png", "sizes": "any", "purpose": "any" },
+    { "src": "flow5.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" }
+  ]
+}

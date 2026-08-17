@@ -162,7 +162,7 @@ CATALOG: dict[str, AppDef] = {
         id="freecad",
         multi_node=True,   # per-user; opens the user's own NAS home, same as any two of their apps already do
         label="FreeCAD",
-        icon="cpu",
+        icon="freecad",
         color="blue",
         desc="Full FreeCAD 1.1.1, streamed — your own GPU instance.",
         image=config.FREECAD_IMAGE,
@@ -215,11 +215,84 @@ CATALOG: dict[str, AppDef] = {
             ),
         ],
     ),
+    # KiCad — schematic capture + PCB layout + 3D viewer, streamed exactly like
+    # FreeCAD (per-user Selkies desktop, own NAS home). See containers/
+    # kicad-streamer/Dockerfile and vault "Streamed Apps — The Selkies Base
+    # Patches" for why the four base-image patches are copied, not inherited.
+    "kicad": AppDef(
+        id="kicad",
+        multi_node=True,   # per-user; opens the user's own NAS home, same as FreeCAD
+        label="KiCad",
+        icon="pencil",
+        color="green",
+        desc="Full KiCad 10, streamed — schematic capture, PCB layout, 3D viewer.",
+        image=config.KICAD_IMAGE,
+        dockerhub_repo="reen16/kicad-streamer",   # §11 publish target (fork of an upstream app, SM-tailored)
+        kind="streamed",
+        mode="per-user",
+        internal_port=8080,
+        gpu=True,
+        mem_limit="3g",
+        encoder="nvh264enc",
+        # Follow the browser window instead of letterboxing a fixed frame —
+        # same trade as FreeCAD: Selkies' client-rendered cursor can misbehave
+        # at odd sizes.
+        resize=True,
+        keepalive_seconds=600,
+        # The user's NAS home over NFS — the SAME files they see in Nextcloud
+        # and FreeCAD, network-mounted here (no duplication) so projects
+        # persist on the NAS even when KiCad runs on a different node.
+        mounts=[
+            Mount(name="home", path="/home/ubuntu/NAS", scope="per-user", storage="nfs"),
+            # Persistent per-user app settings (NAS .appdata/*): preferences,
+            # symbol/footprint library tables, recent-files list survive
+            # relaunches and follow the user across nodes.
+            Mount(name="kicad-config", path="/home/ubuntu/.config", scope="per-user", storage="nfs"),
+            Mount(name="kicad-share", path="/home/ubuntu/.local/share", scope="per-user", storage="nfs"),
+        ],
+        build_context="containers/kicad-streamer",
+        image_family="kicad-streamer",
+        variants=[
+            AppVariant(
+                id="stable", label="Stable 10.0.5", channel="stable",
+                image_tag="kicad-streamer:dev",
+                build_args={"KICAD_APPIMAGE_TAR_URL":
+                    "https://mirrors.mit.edu/kicad/appimage/stable/"
+                    "kicad-10.0.5-x86_64.AppImage.tar"},
+            ),
+        ],
+    ),
+    "flow5": AppDef(
+        id="flow5",
+        multi_node=True,   # per-user; opens the user's own NAS home, same shape as freecad
+        label="flow5",
+        icon="flow5",
+        color="orange",
+        desc="Potential-flow aero/hydro design tool (successor to xflr5), streamed — your own GPU instance.",
+        image=config.FLOW5_IMAGE,
+        dockerhub_repo="reen16/flow5-streamer",   # §11 publish target
+        kind="streamed",
+        mode="per-user",
+        internal_port=8080,
+        gpu=True,
+        mem_limit="2g",
+        encoder="nvh264enc",
+        resize=True,
+        env={"QT_SCALE_FACTOR": "1.5"},  # flow5 is Qt all the way down, same as FreeCAD
+        keepalive_seconds=600,
+        # Same NAS-home shape as freecad: saved flow5 projects land in the user's own NAS
+        # home (visible in Nextcloud too), not lost with the container.
+        mounts=[
+            Mount(name="home", path="/home/ubuntu/NAS", scope="per-user", storage="nfs"),
+        ],
+        build_context="containers/flow5",
+        image_family="flow5",
+    ),
     "filebrowser": AppDef(
         id="filebrowser",
         multi_node=True,   # a file manager; its shared media mount is a network share and its index is node-local
         label="Files",
-        icon="database",   # whitelisted NAS/storage glyph in the dashboard
+        icon="filebrowser",
         color="amber",
         desc="Browse & manage your files — private home + the shared library.",
         image=config.FILEBROWSER_IMAGE,
@@ -275,7 +348,7 @@ CATALOG: dict[str, AppDef] = {
         id="webcad",
         multi_node=True,   # stateless tool
         label="WebCAD/CAM",
-        icon="cpu",         # whitelisted CAD/compute glyph in the dashboard
+        icon="webcad",
         color="blue",
         desc="Browser CAD/CAM for the Carvera — model right in your dashboard.",
         image=config.WEBCAD_IMAGE,
@@ -319,7 +392,7 @@ CATALOG: dict[str, AppDef] = {
     "ledger": AppDef(
         id="ledger",
         label="Ledger",
-        icon="logs",           # a ledger is a log of entries
+        icon="ledger",
         color="slate",
         desc="Track accounts, income, expenses and recurring bills — personal and business.",
         image=config.LEDGER_IMAGE,
@@ -356,7 +429,7 @@ CATALOG: dict[str, AppDef] = {
         id="sketchref",
         multi_node=True,   # stateless tool, no shared server-side state
         label="SketchRef",
-        icon="scan",        # whitelisted; its corner-bracket glyph matches the corner-picking UI
+        icon="sketchref",
         color="violet",
         desc="Undo perspective and scale a photo into a dimensionally-accurate CAD sketch reference.",
         image=config.SKETCHREF_IMAGE,
@@ -393,7 +466,7 @@ CATALOG: dict[str, AppDef] = {
         id="gears",
         multi_node=True,   # stateless tool, no shared server-side state
         label="Gears",
-        icon="wrench",      # whitelisted; closest mechanical/tool glyph the Hub ships
+        icon="gears",
         color="amber",
         desc="Parametric spur/internal/rack/planetary gear generator — export SVG or DXF.",
         image=config.GEARS_IMAGE,
@@ -422,7 +495,7 @@ CATALOG: dict[str, AppDef] = {
         id="helix",
         multi_node=True,   # stateless editor
         label="HeliX Motion",
-        icon="cpu",         # whitelisted CAD/compute glyph in the dashboard
+        icon="helix",
         color="green",
         desc="CNC control for the Carvera Air — jog, run jobs, resume, 3D view.",
         image=config.HELIX_IMAGE,
@@ -460,7 +533,7 @@ CATALOG: dict[str, AppDef] = {
     "openmapper": AppDef(
         id="openmapper",
         label="OpenMapper",
-        icon="zap",
+        icon="openmapper",
         color="cyan",
         desc="Touch-first lighting and projection controller with simulated lights.",
         # Build from /home/control/OpenMapper/app/Dockerfile (source is COPYed
@@ -480,7 +553,7 @@ CATALOG: dict[str, AppDef] = {
         id="rayoptics",
         multi_node=True,   # stateless tool
         label="Ray Optics",
-        icon="cpu",          # whitelisted; closest sim/compute glyph the Hub ships
+        icon="rayoptics",
         color="cyan",
         desc="2D geometric optics simulator — draw rays, lenses and mirrors.",
         image=config.RAYOPTICS_IMAGE,
@@ -507,7 +580,7 @@ CATALOG: dict[str, AppDef] = {
     "renode": AppDef(
         id="renode",
         label="Renode",
-        icon="cpu",
+        icon="renode",
         color="green",
         desc="Open-source microcontroller simulator — a real terminal onto "
              "Renode's monitor console (load .resc scripts, simulate boards, "
@@ -530,7 +603,7 @@ CATALOG: dict[str, AppDef] = {
         id="engineeringpaper",
         multi_node=True,   # per-user sheets in the user's own home
         label="EngineeringPaper.xyz",
-        icon="cpu",          # whitelisted; closest sim/compute glyph the Hub ships
+        icon="engineeringpaper",
         color="cyan",
         desc="Browser math-sheet editor — live SymPy/numeric calculation as you type.",
         # `docker build -f containers/engineeringpaper/Dockerfile -t
@@ -569,7 +642,7 @@ CATALOG: dict[str, AppDef] = {
         id="openfoamgui",
         multi_node=True,   # stateless solver UI
         label="OpenFOAM GUI",
-        icon="cpu",
+        icon="openfoamgui",
         color="blue",
         desc="Case manager + web UI for OpenFOAM CFD simulations (propeller, wind tunnel).",
         # `docker build -f containers/openfoam-gui/Dockerfile -t
@@ -620,7 +693,7 @@ CATALOG: dict[str, AppDef] = {
         mode="shared",
         multi_node=False,   # a git forge is stateful; two instances = two truths
         label="Forgejo",
-        icon="database",      # whitelisted; closest to "a store of repositories"
+        icon="forgejo",
         color="orange",
         desc="Git forge and container registry — your own GitHub, on the mesh.",
         image=config.FORGEJO_IMAGE,
@@ -718,7 +791,7 @@ CATALOG: dict[str, AppDef] = {
         id="paraview-desktop",
         multi_node=True,   # per-user; reads the user's own NAS home, no shared state
         label="ParaView Desktop",
-        icon="cpu",           # whitelisted; matches the other streamed desktop apps
+        icon="paraview-desktop",
         color="green",        # same family as the ParaViewWeb app
         desc="Full ParaView desktop, streamed — GPU rendering, full filter library.",
         image=config.PARAVIEW_DESKTOP_IMAGE,
@@ -754,7 +827,7 @@ CATALOG: dict[str, AppDef] = {
         id="paraview",
         multi_node=True,   # per-user; reads datasets, no shared mutable state
         label="ParaView",
-        icon="globe",         # whitelisted; visualizer glyph
+        icon="paraview",
         color="green",
         desc="Scientific data visualizer (ParaViewWeb) — view and analyze simulation results.",
         # `docker build -t sandos-paraview:latest containers/paraview` once,
@@ -821,7 +894,7 @@ CATALOG: dict[str, AppDef] = {
         id="stirlingpdf",
         multi_node=True,   # stateless PDF tooling; config and logs are node-local volumes
         label="Stirling PDF",
-        icon="pencil",       # whitelisted; closest "edit a document" glyph the Hub ships
+        icon="stirlingpdf",
         color="amber",
         desc="FOSS PDF toolkit — merge, split, convert, OCR, sign, and more.",
         image=config.STIRLINGPDF_IMAGE,
@@ -868,7 +941,7 @@ CATALOG: dict[str, AppDef] = {
         stop_grace=30,
         id="nextcloud",
         label="Nextcloud",
-        icon="globe",       # whitelisted; the closest "cloud" glyph the Hub ships
+        icon="nextcloud",
         color="blue",
         desc="Your private cloud — files, Photos, sharing. One account, SSO'd.",
         image=config.NEXTCLOUD_IMAGE,
@@ -945,7 +1018,7 @@ CATALOG: dict[str, AppDef] = {
         id="ollama",
         multi_node=True,   # already ran fleet-wide; models are node-local
         label="Ollama",
-        icon="cpu",
+        icon="ollama",
         color="violet",
         desc="Local LLM runner — pull and serve models via OpenAI-compatible API.",
         image=config.OLLAMA_IMAGE,
@@ -988,7 +1061,7 @@ CATALOG: dict[str, AppDef] = {
         # than pretending an instance can hop nodes for free.
         multi_node=True,
         label="ComfyUI",
-        icon="cpu",
+        icon="comfyui",
         color="violet",
         desc="Node-graph image generation — download models and run them on the GPU.",
         image=config.COMFYUI_IMAGE,
@@ -1071,7 +1144,7 @@ CATALOG: dict[str, AppDef] = {
     "open-webui": AppDef(
         id="open-webui",
         label="Open WebUI",
-        icon="globe",
+        icon="open-webui",
         color="purple",
         desc="Browser chat interface for your local AI models — SSO'd, auto-connects to Ollama.",
         # `docker build -t sandos-open-webui:latest containers/open-webui`
@@ -1196,7 +1269,7 @@ CATALOG: dict[str, AppDef] = {
         stop_grace=30,
         id="onlyoffice",
         label="OnlyOffice",
-        icon="globe",
+        icon="onlyoffice",
         color="blue",
         desc="Docs/Sheets/Slides alternative to Collabora — needs ~4GB+ free "
              "RAM; verify headroom before starting.",

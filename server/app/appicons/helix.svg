@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>HeliX Motion</title>
+  <rect width="512" height="512" rx="104" fill="#0f1819"/>
+  <path d="M256 76v76" stroke="#eaf1f5" stroke-width="28" stroke-linecap="round"/>
+  <path d="m204 140 52 38 52-38v70l-52 35-52-35v-70Z" fill="#eaf1f5"/>
+  <path d="M146 203c0 62 220 56 220 118s-220 56-220 118" fill="none" stroke="#55d6c2" stroke-width="24" stroke-linecap="round"/>
+  <path d="M366 203c0 62-220 56-220 118s220 56 220 118" fill="none" stroke="#5b8cff" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="366" cy="439" r="23" fill="#f6b84a"/>
+  <path d="M108 439h296" stroke="#53666b" stroke-width="16" stroke-linecap="round"/>
+</svg>

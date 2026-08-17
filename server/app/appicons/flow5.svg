@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>flow5</title>
+  <rect width="512" height="512" rx="104" fill="#111820"/>
+  <path d="M72 156c80 0 111-46 185-46 58 0 95 29 183 29" fill="none" stroke="#62d5e8" stroke-width="24" stroke-linecap="round"/>
+  <path d="M72 256h368" fill="none" stroke="#eaf1f5" stroke-width="24" stroke-linecap="round"/>
+  <path d="M72 356c80 0 111 46 185 46 58 0 95-29 183-29" fill="none" stroke="#5b8cff" stroke-width="24" stroke-linecap="round"/>
+  <path d="M198 256c61-61 140-75 198-50-52 8-89 25-126 50 37 25 74 42 126 50-58 25-137 11-198-50Z" fill="#f6b84a"/>
+  <circle cx="414" cy="256" r="18" fill="#111820"/>
+</svg>

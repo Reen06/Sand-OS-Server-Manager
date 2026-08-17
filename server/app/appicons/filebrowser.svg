@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>Files</title>
+  <rect width="512" height="512" rx="104" fill="#101820"/>
+  <path d="M72 154c0-24 20-44 44-44h105l42 48h133c24 0 44 20 44 44v190c0 24-20 44-44 44H116c-24 0-44-20-44-44V154Z" fill="#3986f7"/>
+  <path d="M72 210h368v182c0 24-20 44-44 44H116c-24 0-44-20-44-44V210Z" fill="#5bb8ff"/>
+  <path d="M132 276h248M132 332h166" stroke="#f8fbff" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="356" cy="334" r="34" fill="#f6b84a"/>
+  <path d="m379 359 35 35" stroke="#f8fbff" stroke-width="20" stroke-linecap="round"/>
+</svg>

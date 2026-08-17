@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>Ray Optics</title>
+  <rect width="512" height="512" rx="104" fill="#101724"/>
+  <path d="M72 256h158" stroke="#f6cf4a" stroke-width="28" stroke-linecap="round"/>
+  <path d="M230 256 80 164M230 256 80 348" stroke="#f6cf4a" stroke-width="16" stroke-linecap="round" opacity=".65"/>
+  <path d="M256 94c-54 52-54 272 0 324 54-52 54-272 0-324Z" fill="#eaf4ff" stroke="#75aef8" stroke-width="18"/>
+  <path d="M282 256h158" stroke="#62d5e8" stroke-width="28" stroke-linecap="round"/>
+  <path d="M282 256 432 184M282 256l150 72" stroke="#9e7cff" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="440" cy="256" r="18" fill="#f8fbff"/>
+</svg>
