@@ -1230,12 +1230,21 @@ CATALOG: dict[str, AppDef] = {
             # DNS resolution outright, then (worse) still routed some chat
             # requests through that broken connection instead of the working
             # OpenAI one below — "Model 'x' was not found" even though the
-            # Hub's own /v1/models correctly listed it. Disabling the native
-            # Ollama integration entirely removes the ambiguity — the OpenAI
-            # connection to the Hub's router is fleet-aware (any node, not
-            # just this one) and already does everything the native
-            # connection would, correctly.
-            "ENABLE_OLLAMA_API": "false",
+            # Hub's own /v1/models correctly listed it.
+            #
+            # Re-enabled (llm.py now speaks Ollama's own native API, not just
+            # OpenAI's): pointed at the HUB ROUTER, not at any one node, so
+            # the DNS-resolution/wrong-node failure above cannot recur — every
+            # /api/* call still goes through the same fleet-aware pick_node()
+            # logic as the OpenAI connection below, just answered in Ollama's
+            # native shape. This is what gives Open WebUI back its "model
+            # loaded" green dot and inline unload button, which only exist in
+            # its UI for Ollama-type connections (they call /api/ps, which
+            # has no OpenAI equivalent).
+            "ENABLE_OLLAMA_API": "true",
+            **({"OLLAMA_BASE_URL": f"{config.HUB_URL_FOR_CONTAINERS}/api/fleet/llm",
+                "OLLAMA_API_CONFIGS": json.dumps({"0": {"key": config.LLM_API_KEY}})}
+               if config.HUB_URL and config.LLM_API_KEY else {}),
             "WEBUI_AUTH_TRUSTED_EMAIL_HEADER": "X-Forwarded-User",
             # Auto-activates every trusted-header account as role=user (never
             # left "pending") — see sso_role_header above.
