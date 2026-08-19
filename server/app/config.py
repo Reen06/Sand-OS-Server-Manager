@@ -233,11 +233,6 @@ WEBCAD_IMAGE = os.environ.get("SM_WEBCAD_IMAGE", "sm-webcad:dev")
 # automatically on any node that doesn't have the live checkout.
 WEBCAD_PACKAGED_IMAGE = os.environ.get("SM_WEBCAD_PACKAGED_IMAGE", "sm-webcad:packaged")
 
-# Ledger — personal + business finance tracking. Manual entry only: it is never
-# connected to a bank, so no third party is handed credentials and the record
-# reflects what its owner knows rather than what a scraper managed to read.
-LEDGER_IMAGE = os.environ.get("SM_LEDGER_IMAGE", "sm-ledger:dev")
-LEDGER_PACKAGED_IMAGE = os.environ.get("SM_LEDGER_PACKAGED_IMAGE", "sm-ledger:packaged")
 
 # SketchRef — perspective/scale correction for CAD sketch reference photos (a 'web' app). Pure
 # client-side (no backend process, unlike webcad); dev image runs live from a bind-mounted

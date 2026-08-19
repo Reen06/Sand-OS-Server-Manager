@@ -300,8 +300,11 @@ CATALOG: dict[str, AppDef] = {
     "finlynq": AppDef(
         id="finlynq",
         label="Finance",
-        icon="logs",           # whitelisted; a ledger is a log of entries
-        color="green",
+        icon="logs",           # a ledger is a log of entries
+        # Inherits the retired Ledger app's identity deliberately: this replaces
+        # it, so keeping the same glyph and colour means the card people already
+        # look for stays where it was rather than becoming a new thing to find.
+        color="slate",
         desc="Personal and business finance — accounts, budgets, portfolio, imports.",
         image=config.FINLYNQ_IMAGE,
         auto_pull=True,
@@ -440,48 +443,6 @@ CATALOG: dict[str, AppDef] = {
         # this ready mid-build, dropping the dashboard into that "not found"
         # page (the exact window the comment above already named).
         strict_ready=True,
-    ),
-    # Ledger — one container per person, their data on their own NAS directory.
-    #
-    # mode="per-user" is doing real work here: finances are the clearest case in
-    # this catalogue where two people must never see the same instance, and the
-    # per-user mount means the records follow the person across nodes rather
-    # than living on whichever machine happened to run the app.
-    "ledger": AppDef(
-        id="ledger",
-        label="Ledger",
-        icon="logs",
-        color="slate",
-        desc="Track accounts, income, expenses and recurring bills — personal and business.",
-        image=config.LEDGER_IMAGE,
-        packaged_image=config.LEDGER_PACKAGED_IMAGE,
-        packaged_build_context="/home/control/ledger",
-        packaged_dockerfile="containers/ledger/Dockerfile.packaged",
-        build_context="/home/control/ledger/containers/ledger",
-        dockerhub_repo="reen16/ledger",
-        kind="web",
-        mode="per-user",
-        internal_port=8099,
-        gpu=False,
-        mem_limit="256m",
-        # Relative asset URLs, so the proxy strips the app prefix — same as webcad.
-        proxy_subpath="root",
-        # Identity for the greeting and for stamping entries. NOT a permission
-        # boundary: isolation comes from each person getting their own container
-        # and their own mount, so there is nothing here belonging to anyone else.
-        sso_header="X-Forwarded-User",
-        # DEV: run live from the bind-mounted checkout, same shape as sketchref
-        # and webcad. uvicorn --reload restarts the worker on a server edit, and
-        # web/ is read from disk per request — so a change is visible on a
-        # refresh without rebuilding or restarting the container.
-        #
-        # A node WITHOUT this checkout falls back to packaged_image, which has
-        # the source copied in, so the app still runs anywhere.
-        binds=[("/home/control/ledger", "/app")],
-        mounts=[
-            Mount(name="ledger-data", path="/data", scope="per-user",
-                  storage="nfs", nas_path="Ledger"),
-        ],
     ),
     "sketchref": AppDef(
         id="sketchref",
