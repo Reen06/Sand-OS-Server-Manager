@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Finance (Finlynq). Deliberately the SAME identity as the Apps page card:
+       the `logs` glyph from the Hub's icons.js on the slate accent (#64748b),
+       so the browser tab, the iOS home-screen tile and the dashboard card are
+       recognisably one thing rather than three. Without this file pwa.py falls
+       back to a generated initials tile, which is why the tab looked generic. -->
+  <rect width="512" height="512" rx="112" fill="#64748b"/>
+  <!-- icons.js draws on a 24x24 grid with a 2px stroke; scale 24 -> 512 is
+       ~21.33, centred, and the stroke is scaled to match so the weight looks
+       the same as the card rather than hairline at tile size. -->
+  <g transform="translate(256,256) scale(14.2) translate(-12,-12)"
+     fill="none" stroke="#ffffff" stroke-width="1.7"
+     stroke-linecap="round" stroke-linejoin="round">
+    <rect x="4.5" y="3" width="13" height="18" rx="1.7"/>
+    <path d="M8 8h6M8 12h6M8 16h3.5"/>
+    <path d="M17.5 7v11.5a2 2 0 0 0 2 2"/>
+  </g>
+</svg>
