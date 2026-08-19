@@ -317,6 +317,12 @@ CATALOG: dict[str, AppDef] = {
         internal_port=3000,
         gpu=False,
         mem_limit="2g",
+        # Serve at container root. The default "forward" prepends
+        # {EXTERNAL_BASE}/stream/finlynq/ to every upstream path, which Next.js
+        # has no route for — every request 404s. Every other own_subdomain web
+        # app (forgejo, stirlingpdf) sets this for the same reason: once the app
+        # has its own hostname there is no prefix left for it to strip.
+        proxy_subpath="root",
         # Its own hostname, not a proxy subpath. The MCP server speaks OAuth 2.1
         # with Dynamic Client Registration, which needs stable absolute URLs —
         # issuer/callback under /apps/stream/... would not survive the rewrite.
