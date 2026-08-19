@@ -307,7 +307,9 @@ CATALOG: dict[str, AppDef] = {
         color="slate",
         desc="Personal and business finance — accounts, budgets, portfolio, imports.",
         image=config.FINLYNQ_IMAGE,
-        auto_pull=True,
+        # Built locally from /mnt/devwork/finlynq (branch `sandos`), so there is
+        # nothing to pull — auto_pull here would chase a tag no registry has.
+        build_context="/mnt/devwork/finlynq",
         kind="web",
         # Finlynq owns its own identity (register/login/MFA) and encrypts each
         # user's data under a key derived from THEIR password, so one shared

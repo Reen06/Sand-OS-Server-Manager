@@ -184,7 +184,10 @@ EXTERNAL_BASE = os.environ.get("SM_EXTERNAL_BASE", "/apps").rstrip("/")
 # Upstream ships a prebuilt image, so this runs stock until we fork it for
 # books/receipts/OCR. AGPL-3.0: publishing a MODIFIED image obliges publishing
 # the modified source — relevant because SM can push to Docker Hub.
-FINLYNQ_IMAGE = os.environ.get("SM_FINLYNQ_IMAGE", "ghcr.io/finlynq/finlynq:latest")
+# Our fork (/mnt/devwork/finlynq, branch `sandos`), not upstream's image:
+# P1 adds books, which is a schema change, plus a hardcoded analytics deny.
+# Upstream stays as a git remote there so our commits rebase onto new releases.
+FINLYNQ_IMAGE = os.environ.get("SM_FINLYNQ_IMAGE", "sm-finlynq:dev")
 FINLYNQ_POSTGRES_IMAGE = os.environ.get("SM_FINLYNQ_POSTGRES_IMAGE", "postgres:16-alpine")
 
 # The three PF_* secrets are REQUIRED — the app throws at module load in
