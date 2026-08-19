@@ -32,6 +32,20 @@ Description=Sand-OS per-drive Docker daemon (USB app hosting) for drive %i
 # Renode/OpenFOAM-GUI/ParaView launches, even after the separate ufw-
 # ordering and nfsdcld fixes.
 #
+# --config-file is NOT optional: dockerd reads /etc/docker/daemon.json by
+# DEFAULT, and that file belongs to the host's MAIN docker.service. Any key
+# set there which this unit also passes as a flag makes dockerd refuse to
+# start outright ("the following directives are specified both as a flag and
+# in the configuration file"). Hit live 2026-08-18: moving the main daemon's
+# storage to /mnt/devwork wrote {"data-root": "/mnt/devwork/docker"} into
+# daemon.json, and every per-drive daemon on the node instantly began
+# crash-looping — they pass --data-root themselves. Nothing about the USB
+# drives had changed; a config file for a DIFFERENT daemon killed them.
+# Pointing this unit at its own (empty) config file makes the two daemons
+# genuinely independent, so future edits to the host's daemon.json — data-root,
+# DNS, registry-mirrors, log driver, anything — can never take the app-hosting
+# daemons down again.
+#
 # dockerd's `-b/--bridge` and `--bip` are mutually exclusive, so the custom
 # bridge device (docker-usb0, 172.30.0.1/24 — unused by the main daemon's
 # networks: docker0=172.17, sm-llm-net and other custom bridges sit at
@@ -48,6 +62,7 @@ Type=notify
 EnvironmentFile=/run/sandos-usb-docker-%i.env
 ExecStartPre=/bin/sh -c 'ip link show docker-usb0 >/dev/null 2>&1 || (ip link add name docker-usb0 type bridge && ip addr add 172.30.0.1/24 dev docker-usb0); ip link set dev docker-usb0 up'
 ExecStart=/usr/bin/dockerd \
+    --config-file /etc/docker/sandos-usb-daemon.json \
     --data-root ${SANDOS_USB_MOUNTPOINT}/SandOS/app-hosting/docker-data \
     --containerd ${SANDOS_USB_MOUNTPOINT}/SandOS/app-hosting/containerd.sock \
     --host unix:///run/sandos-usb-docker-%i.sock \

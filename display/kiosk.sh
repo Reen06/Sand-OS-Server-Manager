@@ -70,6 +70,31 @@ exec "$BROWSER" \
   `# A wall panel has no keyboard and nobody to answer a certificate prompt.` \
   `# The Hub uses its own CA on the mesh; a prompt here is a dead screen.` \
   --ignore-certificate-errors \
+  `# WebGL by software rasterisation, deliberately.` \
+  `# The Pi 3's Broadcom VC4 is OpenGL ES 2.0, which can only ever back WebGL 1.` \
+  `# three.js dropped WebGL 1 in r163, so the toolpath viewer (r171) asks for a` \
+  `# WebGL 2 context, the GPU cannot give one, and three THROWS from the` \
+  `# WebGLRenderer constructor — which, being inside a React effect, took down` \
+  `# the entire app and left a blank screen until Viewer3D learned to catch it.` \
+  `#` \
+  `# --enable-unsafe-swiftshader is NOT sufficient on its own, which is the` \
+  `# non-obvious part: it only PERMITS the software fallback, and the fallback` \
+  `# is reached only when GPU init fails outright. Here it succeeds — ANGLE` \
+  `# comes up on the real VC4 as --use-angle=gles — so WebGL 2 kept being` \
+  `# refused with the flag present and doing nothing. ANGLE has to be pointed` \
+  `# at SwiftShader explicitly. Measured on this panel: no flags -> webgl and` \
+  `# webgl2 both unavailable; --ignore-gpu-blocklist --enable-gpu -> unchanged` \
+  `# (a hardware limit, not a blocklist); --enable-unsafe-swiftshader alone ->` \
+  `# still no webgl2 in the real browser; the pair below -> a genuine` \
+  `# "WebGL 2.0 (OpenGL ES 3.0 Chromium)" context and a working 3D viewer.` \
+  `#` \
+  `# This puts ALL compositing on the CPU, not just WebGL. That is affordable` \
+  `# only because the viewer renders on demand instead of running a` \
+  `# requestAnimationFrame loop: measured idle after load, every chromium` \
+  `# process sits at ~0% CPU with a load average of 0.2. If the viewer ever` \
+  `# goes back to a continuous render loop, this flag will hold a core at 100%` \
+  `# forever on a fanless board.` \
+  --use-gl=angle --use-angle=swiftshader \
   `# 905MB of RAM on a Pi 3. These keep chromium from ballooning into swap,` \
   `# which on an SD card is the difference between slow and unusable.` \
   --disable-dev-shm-usage \

@@ -288,6 +288,64 @@ CATALOG: dict[str, AppDef] = {
         build_context="containers/flow5",
         image_family="flow5",
     ),
+    # Finlynq — personal + business finance. Replaces the homegrown `ledger`
+    # prototype. See vault "Finance — Finlynq Adoption Plan" for why this one
+    # was chosen over Sure/Actual/Ghostfolio/Beancount and what still has to be
+    # built on top (books, receipts, OCR trainer).
+    #
+    # Runs the STOCK upstream image for now — auto_pull, no fork — so the
+    # baseline is proven before any schema change. AGPL-3.0: if this is ever
+    # forked and the image published, the modified source has to be published
+    # too (§11 of App Definition Standard covers the publish flow).
+    "finlynq": AppDef(
+        id="finlynq",
+        label="Finance",
+        icon="logs",           # whitelisted; a ledger is a log of entries
+        color="green",
+        desc="Personal and business finance — accounts, budgets, portfolio, imports.",
+        image=config.FINLYNQ_IMAGE,
+        auto_pull=True,
+        kind="web",
+        # Finlynq owns its own identity (register/login/MFA) and encrypts each
+        # user's data under a key derived from THEIR password, so one shared
+        # instance holds every user separately. per-user containers would give
+        # each person a private database and defeat the point.
+        mode="shared",
+        internal_port=3000,
+        gpu=False,
+        mem_limit="2g",
+        # Its own hostname, not a proxy subpath. The MCP server speaks OAuth 2.1
+        # with Dynamic Client Registration, which needs stable absolute URLs —
+        # issuer/callback under /apps/stream/... would not survive the rewrite.
+        # Needs a matching prefix in the Hub's _SUBDOMAIN_APPS and a Caddy block.
+        own_subdomain=True,
+        env={
+            "NODE_ENV": "production",
+            "DATABASE_URL": f"postgresql://pf:{config.FINLYNQ_DB_PASSWORD}@db:5432/pf",
+            "PF_JWT_SECRET": config.FINLYNQ_JWT_SECRET,
+            # Mixed into the scrypt KEK. Lose or change it and every user's data
+            # is unrecoverable — see config.py.
+            "PF_PEPPER": config.FINLYNQ_PEPPER,
+            "PF_STAGING_KEY": config.FINLYNQ_STAGING_KEY,
+        },
+        services=[
+            Service(
+                name="db",
+                image=config.FINLYNQ_POSTGRES_IMAGE,
+                env={
+                    "POSTGRES_DB": "pf",
+                    "POSTGRES_USER": "pf",
+                    "POSTGRES_PASSWORD": config.FINLYNQ_DB_PASSWORD,
+                },
+                mounts=[Mount(name="finlynq-db", path="/var/lib/postgresql/data",
+                              scope="shared")],
+                # Postgres accepts connections briefly before it is really ready
+                # during first-run initdb; the app runs migrations at boot and
+                # would fail against a half-open server.
+                ready_cmd=["sh", "-c", "pg_isready -U pf -d pf"],
+            ),
+        ],
+    ),
     "filebrowser": AppDef(
         id="filebrowser",
         multi_node=True,   # a file manager; its shared media mount is a network share and its index is node-local

@@ -25,6 +25,17 @@ if ! command -v mkfs.exfat >/dev/null || ! command -v mkfs.ext4 >/dev/null; then
 fi
 
 install -m 0755 "$HERE/sandos-usb-dockerd" /usr/local/bin/sandos-usb-dockerd
+# Private, deliberately-empty config file for the per-drive daemons, so they
+# never read the main docker.service's /etc/docker/daemon.json (a key set
+# there that these units also pass as a flag makes dockerd refuse to start —
+# see the header of sandos-usb-dockerd@.service). Never overwrite an existing
+# one: a node may have added its own per-drive settings here.
+[ -f /etc/docker/sandos-usb-daemon.json ] || {
+  mkdir -p /etc/docker
+  echo '{}' > /etc/docker/sandos-usb-daemon.json
+  chmod 0644 /etc/docker/sandos-usb-daemon.json
+}
+
 install -m 0644 "$HERE/sandos-usb-dockerd@.service" /etc/systemd/system/sandos-usb-dockerd@.service
 install -m 0644 "$HERE/sandos-usb-containerd@.service" /etc/systemd/system/sandos-usb-containerd@.service
 install -m 0755 "$HERE/sandos-usb-provision" /usr/local/bin/sandos-usb-provision

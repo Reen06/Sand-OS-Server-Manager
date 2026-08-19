@@ -180,6 +180,27 @@ SSH_PORT = int(os.environ.get("SM_SSH_PORT", "22"))
 # Selkies apps don't need it — their client uses path-relative URLs.)
 EXTERNAL_BASE = os.environ.get("SM_EXTERNAL_BASE", "/apps").rstrip("/")
 
+# ── Finlynq (personal + business finance) ─────────────────────────────────────
+# Upstream ships a prebuilt image, so this runs stock until we fork it for
+# books/receipts/OCR. AGPL-3.0: publishing a MODIFIED image obliges publishing
+# the modified source — relevant because SM can push to Docker Hub.
+FINLYNQ_IMAGE = os.environ.get("SM_FINLYNQ_IMAGE", "ghcr.io/finlynq/finlynq:latest")
+FINLYNQ_POSTGRES_IMAGE = os.environ.get("SM_FINLYNQ_POSTGRES_IMAGE", "postgres:16-alpine")
+
+# The three PF_* secrets are REQUIRED — the app throws at module load in
+# production without them, and each must be >=32 chars.
+#
+# PF_PEPPER is the one that matters most: it is mixed into the scrypt KEK
+# derivation, so a stolen database alone cannot be cracked offline — but by the
+# same token, LOSING OR CHANGING IT MAKES EVERY USER'S DATA UNRECOVERABLE.
+# There is deliberately NO usable default: a placeholder here would silently
+# encrypt real data under a value that is identical on every install, which is
+# worse than refusing to start. Set these in /etc/sandos-server-manager.env.
+FINLYNQ_JWT_SECRET = os.environ.get("SM_FINLYNQ_JWT_SECRET", "")
+FINLYNQ_PEPPER = os.environ.get("SM_FINLYNQ_PEPPER", "")
+FINLYNQ_STAGING_KEY = os.environ.get("SM_FINLYNQ_STAGING_KEY", "")
+FINLYNQ_DB_PASSWORD = os.environ.get("SM_FINLYNQ_DB_PASSWORD", "")
+
 # Default image for the FreeCAD app.
 FREECAD_IMAGE = os.environ.get("SM_FREECAD_IMAGE", "freecad-streamer:dev")
 # Default image for the KiCad app (schematic capture + PCB layout), streamed
