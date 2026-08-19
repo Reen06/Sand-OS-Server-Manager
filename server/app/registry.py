@@ -336,6 +336,10 @@ CATALOG: dict[str, AppDef] = {
             # is unrecoverable — see config.py.
             "PF_PEPPER": config.FINLYNQ_PEPPER,
             "PF_STAGING_KEY": config.FINLYNQ_STAGING_KEY,
+            # Only set when configured — an empty APP_URL is better than a wrong
+            # one, which would mint OAuth/MCP issuer URLs pointing somewhere the
+            # browser never visited.
+            **({"APP_URL": config.FINLYNQ_APP_URL} if config.FINLYNQ_APP_URL else {}),
         },
         services=[
             Service(

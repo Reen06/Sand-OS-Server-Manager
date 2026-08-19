@@ -200,6 +200,12 @@ FINLYNQ_JWT_SECRET = os.environ.get("SM_FINLYNQ_JWT_SECRET", "")
 FINLYNQ_PEPPER = os.environ.get("SM_FINLYNQ_PEPPER", "")
 FINLYNQ_STAGING_KEY = os.environ.get("SM_FINLYNQ_STAGING_KEY", "")
 FINLYNQ_DB_PASSWORD = os.environ.get("SM_FINLYNQ_DB_PASSWORD", "")
+# Public origin this instance is reached on, e.g. https://money.<domain>. Used
+# for OAuth 2.1 / MCP issuer + callback URLs, which must be absolute and must
+# match what the browser actually used. Deliberately NOT defaulted to a literal
+# hostname — shipping one mesh's address is the mistake that left
+# sandos-mesh-heal silently dead for six days. Unset simply omits it.
+FINLYNQ_APP_URL = os.environ.get("SM_FINLYNQ_APP_URL", "")
 
 # Default image for the FreeCAD app.
 FREECAD_IMAGE = os.environ.get("SM_FREECAD_IMAGE", "freecad-streamer:dev")
