@@ -22,7 +22,7 @@ from fastapi import Request, WebSocket
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from starlette.websockets import WebSocketDisconnect
 
-from . import app_images, config, docker_backend, pwa, registry
+from . import app_images, config, docker_backend, nas_shares, pwa, registry
 
 log = logging.getLogger("sm.proxy")
 if not log.handlers:
@@ -69,6 +69,11 @@ _STRIP_RESP = {"etag", "last-modified", "cache-control", "expires", "age"}
 def _auth() -> str:
     raw = f"{config.INSTANCE_USER}:{config.INSTANCE_PASSWD}".encode()
     return "Basic " + base64.b64encode(raw).decode()
+
+
+def _webcad_shared_roots(user: str) -> str:
+    """Comma-safe root ids (share slugs cannot contain commas; see nas_shares._SLUG_OK)."""
+    return ",".join(f"shared:{share['slug']}" for share in nas_shares.shares_for(user))
 
 
 def _instance_port(app_id: str, user: str) -> int | None:
@@ -589,6 +594,11 @@ async def ws(app_id: str, path: str, client_ws: WebSocket, user: str) -> None:
             hdrs.append(("Cookie", cookie))
     if app and app.sso_header:
         hdrs.append((app.sso_header, user))
+    if app_id == "webcad":
+        # WebCAD accepts collaboration joins only for roots in this trusted header. Membership
+        # comes from the NAS-side share index; a browser command can select a granted root but
+        # cannot invent one or impersonate another Hub user.
+        hdrs.append(("X-SandOS-Shared-Roots", _webcad_shared_roots(user)))
     # `websockets` renamed extra_headers → additional_headers across versions.
     # Take the client's first frame BEFORE opening upstream, so a Selkies HELLO
     # can be read and any previous holder of that peer id evicted while the id

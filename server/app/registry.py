@@ -437,6 +437,9 @@ CATALOG: dict[str, AppDef] = {
         kind="web",
         mode="shared",              # one host; per-connection sessions isolate users
         internal_port=8137,         # the Node host serves client + WebSocket here
+        # WebCAD uses this trusted identity for shared-project presence. The proxy strips any
+        # browser-supplied copy before injecting the authenticated Hub username.
+        sso_header="X-Forwarded-User",
         gpu=False,
         mem_limit="2g",
         # The host serves the client bundle at root and the client uses relative asset
